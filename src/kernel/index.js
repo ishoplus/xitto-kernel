@@ -2,8 +2,8 @@
 // 確定性那半部：pack 載入、工具註冊、mutatingTools 推導、固定順序守衛鏈、systemPrompt 組裝、
 // 單一工具呼叫（runTool）。LLM 那半部：runTurn 驅動移植自 xitto-code 的 Agent loop
 // （串流 + 多步工具循環 + 守衛接線）。壓縮/TUI 仍為後續接縫。
-import { existsSync, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { join, dirname, isAbsolute } from 'node:path';
 import { loadPack } from './pack-loader.js';
 import { createToolRegistry, deriveMutatingTools, isSandboxable } from './tool-registry.js';
 import { composeGuards } from './guard-chain.js';
@@ -52,6 +52,26 @@ function wrapSandboxable(tool, { cwd, getSandbox, getSandboxConfig }) {
   };
 }
 
+// undo 快照：mutating 且帶 args.path 的工具（檔案編輯類），執行前記錄檔案原狀，供 kernel.undo() 還原。
+// 「以 path 指涉被改檔案」是常見約定；非檔案型 mutating 工具（bash/sql_exec 無 path）不受影響。
+function wrapUndo(tool, { cwd, undoStack }) {
+  if (tool.mutating !== true || typeof tool.execute !== 'function') return tool;
+  const orig = tool.execute.bind(tool);
+  return {
+    ...tool,
+    execute: (id, params, ...rest) => {
+      if (params?.path) {
+        const p = isAbsolute(params.path) ? params.path : join(cwd, params.path);
+        try {
+          undoStack.push({ path: p, rel: params.path, before: existsSync(p) ? readFileSync(p, 'utf8') : null });
+          if (undoStack.length > 50) undoStack.shift();
+        } catch { /* 略 */ }
+      }
+      return orig(id, params, ...rest);
+    },
+  };
+}
+
 /**
  * 建立 kernel 執行期。
  * @param {import('../types.js').DomainPack} pack
@@ -81,9 +101,10 @@ export function createKernel(pack, config = {}) {
   const getSandbox = config.getSandbox || (() => !!sandboxCfg.enabled);
   const getSandboxConfig = () => sandboxCfg;
 
-  // 工具：pack 工具（sandboxable 的包 Seatbelt）+ kernel 內建記憶工具（任何 pack 都有）。
+  // 工具：pack 工具（sandboxable 包 Seatbelt、mutating+path 加 undo 快照）+ kernel 內建記憶工具。
+  const undoStack = [];
   const tools = [
-    ...pack.tools().map((t) => wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig })),
+    ...pack.tools().map((t) => wrapUndo(wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }), { cwd, undoStack })),
     ...memory.tools,
   ];
   const registry = createToolRegistry(tools);
@@ -131,6 +152,16 @@ export function createKernel(pack, config = {}) {
     permissionPolicy: pack.permissionPolicy || {},
     sandbox: { isOn: () => getSandbox(), config: () => getSandboxConfig() },
     memory,
+    /** 撤銷上一次檔案改動（write/edit）：還原內容，新建的檔則刪除。 */
+    undo: () => {
+      const snap = undoStack.pop();
+      if (!snap) return { undone: false, reason: '沒有可撤銷的改動' };
+      try {
+        if (snap.before === null) { if (existsSync(snap.path)) unlinkSync(snap.path); }
+        else writeFileSync(snap.path, snap.before, 'utf8');
+        return { undone: true, path: snap.rel, created: snap.before === null };
+      } catch (e) { return { undone: false, reason: e.message }; }
+    },
     // session 持久化 / resume（按 pack 分目錄）。CLI 用它存檔與續接。
     session: {
       dir: sessionsDir,

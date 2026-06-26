@@ -28,10 +28,12 @@ const preview = (result) => {
 export function runCli({ pack, model, getApiKey, sandbox = false, resume = null, auto = false }) {
   let sandboxOn = !!sandbox;
   let autoApprove = !!auto;
+  let planMode = false;
   const kernel = createKernel(pack, {
     model, getApiKey,
     sandbox: { enabled: sandboxOn },        // 提供策略（blockNetwork/allowWritePrefixes）
     getSandbox: () => sandboxOn,            // on/off 由 CLI 即時切換
+    getPlanMode: () => planMode,            // 計劃模式：守衛擋 mutating 工具
     confirm: askConfirm,                    // 互動權限確認（mutating/危險工具執行前）
   });
 
@@ -108,6 +110,8 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
           '  /help            說明',
           '  /sandbox [on|off] 切換沙箱（macOS=Seatbelt 真隔離）',
           '  /auto [on|off]    自動核准 mutating 工具（危險命令仍把關）',
+          '  /plan [on|off]    計劃模式（只規劃、擋下實際改動）',
+          '  /undo            撤銷上一次檔案改動（write/edit）',
           '  /tools           列出此 pack 的工具',
           '  /memory          顯示跨 session 記憶',
           '  /sessions        列出已保存的對話',
@@ -149,6 +153,15 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
         autoApprove = arg ? arg === 'on' : !autoApprove;
         out(autoApprove ? c.yellow('⚡ 自動核准開（mutating 工具不再逐一確認；危險命令仍把關）\n') : c.gray('自動核准關（mutating 工具會逐一確認）\n'));
         return true;
+      case '/plan':
+        planMode = arg ? arg === 'on' : !planMode;
+        out(planMode ? c.cyan('📋 計劃模式開（只規劃、擋下 write/edit/bash）\n') : c.gray('計劃模式關\n'));
+        return true;
+      case '/undo': {
+        const r = kernel.undo();
+        out(r.undone ? c.gray(`↩ 已撤銷 ${r.path}${r.created ? '（刪除新建檔）' : ''}\n`) : c.yellow(`${r.reason}\n`));
+        return true;
+      }
       case '/tools':
         out(c.gray(kernel.registry.all().map((t) =>
           `  ${t.name}${t.readOnly ? c.gray(' [唯讀]') : ''}${t.mutating ? c.yellow(' [mutating]') : ''}${t.sandboxable ? c.cyan(' [sandboxable]') : ''}`,
@@ -188,7 +201,10 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
       if (!input) return loop();
       if (handleSlash(input)) return loop();
       try {
-        const r = await kernel.runTurn(input, {
+        const text = planMode
+          ? `[計劃模式：只制定計劃，列出你打算做的步驟與會改動的檔案，不要實際寫檔或執行命令]\n\n${input}`
+          : input;
+        const r = await kernel.runTurn(text, {
           history, onEvent, onAgent: (a) => { currentAgent = a; },
         });
         endStream();
