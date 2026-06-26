@@ -1,0 +1,32 @@
+// __NAME__ 領域 agent 的 DomainPack —— 你只需要寫「會什麼、守什麼、像什麼」。
+// runtime（多步循環/串流/權限/沙箱/CLI）由 xitto-kernel 提供，不用碰。
+import { defineDomainPack } from 'xitto-kernel';
+
+export function createPack({ cwd = process.cwd() } = {}) {
+  return defineDomainPack({
+    name: '__NAME__',
+    systemPrompt: '你是 __NAME__ 領域的 agent。在這裡寫行為準則、口吻、流程規矩。',
+
+    // 工具 = 這個 agent 能對世界做的動作。metadata 決定安全行為：
+    //   readOnly:true → 自動放行 ｜ mutating:true → 計劃模式擋、算進 mutatingTools
+    //   sandboxable:true → 走 shell，沙箱開時自動包 Seatbelt（需 params.command）
+    tools: () => [
+      {
+        name: 'example',
+        label: '範例工具',
+        description: '把這個換成你的領域動作（描述要清楚，模型靠它決定何時呼叫）',
+        readOnly: true,
+        parameters: { type: 'object', properties: { input: { type: 'string' } }, required: ['input'] },
+        execute: async (_id, { input }) => ({ content: [{ type: 'text', text: `（範例）收到：${input}` }] }),
+      },
+    ],
+
+    // ── 選填插槽（要更專業時才填；完整說明見 xitto-kernel docs/06）──
+    // contextFiles: ['__NAME__.md'],                  // 啟動載入的領域規範檔
+    // preToolPolicy: {                                // 領域硬規矩（程式擋，不靠模型自律）
+    //   check: (ctx) => { /* 例：做 X 前必先 Y，回 { block:true, reason } 擋下 */ },
+    // },
+    // verify: { run: async () => ({ ok: true }) },    // 每輪收尾自我驗收
+    // permissionPolicy: { sandbox: { enabled: false } },
+  });
+}

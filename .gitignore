@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.DS_Store
+# 本機 provider 設定（含 API key）— 永不進版控
+providers.json
+.xitto-code/

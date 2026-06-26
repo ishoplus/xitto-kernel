@@ -1,0 +1,7 @@
+// 啟動：xitto-kernel 當依賴。這份專案只擁有「你的 pack + 幾行啟動」。
+// kernel 升級（npm update xitto-kernel）不影響這裡——不會固化。
+import { runCli, loadModel } from 'xitto-kernel/app';
+import { createPack } from './pack.js';
+
+const { model, getApiKey } = loadModel(); // 讀 ~/.xitto-code/providers.json
+runCli({ pack: createPack({ cwd: process.cwd() }), model, getApiKey });

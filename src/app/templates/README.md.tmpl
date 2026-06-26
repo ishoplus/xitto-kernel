@@ -1,0 +1,32 @@
+# __NAME__
+
+用 **xitto-kernel** 底座做的 `__NAME__` 領域 agent。
+這份專案只擁有自己的 pack；runtime 由 xitto-kernel 提供，可獨立升級（不固化）。
+
+## 跑
+
+```bash
+npm install
+npm start                # 互動 CLI
+npm start -- --sandbox   # 開沙箱（macOS=Seatbelt 真隔離）
+```
+
+需要 `~/.xitto-code/providers.json`（與 xitto-code / xitto-kernel 共用）。
+
+## 改成你的領域
+
+編輯 `pack.js`：
+
+- `tools` — 加你的領域工具（`readOnly` / `mutating` / `sandboxable` 決定安全行為）
+- `systemPrompt` — 行為準則
+- `preToolPolicy` — 領域硬規矩（選填，例如「做 X 前必先 Y」）
+
+完整指南見 xitto-kernel 的 `docs/06-authoring-a-pack.md`。
+
+## 升級 kernel
+
+```bash
+npm update xitto-kernel
+```
+
+kernel 修 bug / 加功能都從這裡拿，**這份 agent 不會被固化**。
