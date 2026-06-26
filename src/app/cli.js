@@ -97,6 +97,9 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
       case 'verify_end':
         out(ev.ok ? c.gray('  ✓ 驗收通過\n') : c.yellow('  ✗ 驗收失敗，請 agent 修正…\n'));
         break;
+      case 'hook_fail':
+        out(c.yellow(`  ✗ hook 失敗 ${ev.command}，回灌讓 agent 修正…\n`));
+        break;
     }
   };
 

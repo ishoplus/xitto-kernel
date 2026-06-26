@@ -11,6 +11,8 @@ import { createPermissionStep } from './security/permission-step.js';
 import { normalizeSandbox, wrapWithSeatbelt } from './security/sandbox.js';
 import { createMemory } from './memory.js';
 import { createSpawnTool } from './subagent.js';
+import { createSkills } from './skills.js';
+import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
 import { newSessionId, saveSession, loadSession, listSessions, latestSession } from './session.js';
 
 // 載入 pack.contextFiles：從 cwd 逐層往上找每個檔名，找到就讀入並注入 system prompt（領域規範）。
@@ -96,6 +98,8 @@ export function createKernel(pack, config = {}) {
   const dataDir = join(cwd, '.xitto-kernel', pack.name);
   const memory = createMemory(join(dataDir, 'memory.md'));
   const sessionsDir = join(dataDir, 'sessions');
+  const hooks = loadHooks(join(dataDir, 'settings.json')); // PreToolUse/PostToolUse
+  const skills = createSkills(join(dataDir, 'skills'));     // 漸進揭露技能
 
   // 沙箱策略：config.sandbox > pack.permissionPolicy.sandbox > 預設（關）。
   const sandboxCfg = normalizeSandbox(config.sandbox ?? pack.permissionPolicy?.sandbox);
@@ -107,6 +111,7 @@ export function createKernel(pack, config = {}) {
   const baseTools = [
     ...pack.tools().map((t) => wrapUndo(wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }), { cwd, undoStack })),
     ...memory.tools,
+    ...(skills.tool ? [skills.tool] : []),
   ];
   // spawn_agent：派唯讀子 agent。其可用工具 = 所有唯讀工具（不含 spawn_agent 自己，避免遞迴）。
   let allTools = baseTools;
@@ -131,7 +136,8 @@ export function createKernel(pack, config = {}) {
     pack.systemPrompt +
     loadContextFiles(cwd, pack.contextFiles) +          // 注入領域規範檔（CLAUDE.md 等）
     '\n\n# 記憶\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) +
-    (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '');
+    (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '') +
+    skills.promptSection();
 
   const getPlanMode = config.getPlanMode || (() => false);
 
@@ -148,7 +154,7 @@ export function createKernel(pack, config = {}) {
       : undefined),
     circuitBreaker: config.circuitBreaker || (() => undefined),
     packPreTool: pack.preToolPolicy,
-    preToolHooks: config.preToolHooks || (() => undefined),
+    preToolHooks: config.preToolHooks || ((ctx) => runPreToolHooks(hooks, ctx.name, cwd)), // 第 4 格：PreToolUse
     permission,
     services,
   });
@@ -229,10 +235,15 @@ export function createKernel(pack, config = {}) {
         }),
         toolExecution: 'sequential',
       });
-      // 追蹤本輪是否有成功的「會改動」工具（供 verify.shouldRun 判斷）
+      // 追蹤本輪改動 + PostToolUse hooks（成功工具後跑命令，失敗回灌讓 agent 修正）
       let turnModified = false;
       agent.subscribe((e) => {
-        if (e.type === 'tool_execution_end' && !e.isError && mutatingTools.has(e.toolName)) turnModified = true;
+        if (e.type !== 'tool_execution_end' || e.isError) return;
+        if (mutatingTools.has(e.toolName)) turnModified = true;
+        for (const f of runPostToolHooks(hooks, e.toolName, cwd)) {
+          opts.onEvent?.({ type: 'hook_fail', command: f.command, output: f.output });
+          agent.steer({ role: 'user', content: `[PostToolUse] \`${f.command}\` 失敗：\n${(f.output || '').slice(0, 2000)}\n請修正後再繼續。` });
+        }
       });
       if (opts.onEvent) agent.subscribe((e) => opts.onEvent(e));
       opts.onAgent?.(agent); // 讓呼叫端拿到 agent（Ctrl+C → agent.abort()）
