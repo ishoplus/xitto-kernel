@@ -1,5 +1,9 @@
 # xitto-kernel
 
+[![CI](https://github.com/ishoplus/xitto-kernel/actions/workflows/ci.yml/badge.svg)](https://github.com/ishoplus/xitto-kernel/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+
 > 領域無關的 agent 底座（**可當依賴套件** — 你的領域 agent 是獨立專案，import kernel 而非 clone，升級不固化）
 
 把 [`xitto-code`](../xitto-code) 這個完整的編碼智能體，抽象成一個**領域無關的 agent kernel** + 可插拔的 **DomainPack**。
@@ -124,3 +128,11 @@ xitto-kernel/
 （CLI 目前 headless 放行 mutating、危險命令仍擋）、發佈到 npm（讓 `file:` 依賴變正式版本）。
 
 **設計取向**：沿用 Node ESM + pi-ai provider 抽象；不重寫 xitto-code（kernel 是抽象，xitto-code 仍可獨立存在）。
+
+## 貢獻
+
+見 [CONTRIBUTING.md](CONTRIBUTING.md)。核心原則：kernel 必須領域無關（安全行為靠工具 metadata，不寫死領域名單）；新領域 = 新增一個 pack，kernel 零改動。
+
+## 授權
+
+[MIT](LICENSE) © ishoplus

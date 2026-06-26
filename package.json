@@ -3,12 +3,39 @@
   "version": "0.0.1",
   "type": "module",
   "description": "領域無關的 agent 底座（kernel + 可插拔 DomainPack），從 xitto-code 抽象而來",
+  "keywords": [
+    "agent",
+    "llm",
+    "ai-agent",
+    "agent-framework",
+    "domain-pack",
+    "sandbox",
+    "seatbelt",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "ishoplus",
+  "homepage": "https://github.com/ishoplus/xitto-kernel#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ishoplus/xitto-kernel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ishoplus/xitto-kernel/issues"
+  },
   "engines": {
     "node": ">=20"
   },
   "bin": {
     "xitto-kernel": "bin/xitto-kernel.js"
   },
+  "files": [
+    "src",
+    "bin",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test \"test/*.test.js\"",
     "demo": "node examples/demo.js",
