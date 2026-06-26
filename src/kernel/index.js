@@ -9,6 +9,8 @@ import { createToolRegistry, deriveMutatingTools, isSandboxable } from './tool-r
 import { composeGuards } from './guard-chain.js';
 import { createPermissionStep } from './security/permission-step.js';
 import { normalizeSandbox, wrapWithSeatbelt } from './security/sandbox.js';
+import { createMemory } from './memory.js';
+import { newSessionId, saveSession, loadSession, listSessions, latestSession } from './session.js';
 
 // 載入 pack.contextFiles：從 cwd 逐層往上找每個檔名，找到就讀入並注入 system prompt（領域規範）。
 // 對標 xitto-code 的 CLAUDE.md/AGENTS.md 載入；但檔名由 pack 決定（kernel 不認識具體檔名）。
@@ -69,25 +71,36 @@ export function createKernel(pack, config = {}) {
   loadPack(pack);
   const cwd = config.cwd || process.cwd();
 
+  // 每個 pack 在 cwd 下有獨立資料夾（記憶、session 分領域存放，互不混）
+  const dataDir = join(cwd, '.xitto-kernel', pack.name);
+  const memory = createMemory(join(dataDir, 'memory.md'));
+  const sessionsDir = join(dataDir, 'sessions');
+
   // 沙箱策略：config.sandbox > pack.permissionPolicy.sandbox > 預設（關）。
   const sandboxCfg = normalizeSandbox(config.sandbox ?? pack.permissionPolicy?.sandbox);
   const getSandbox = config.getSandbox || (() => !!sandboxCfg.enabled);
   const getSandboxConfig = () => sandboxCfg;
 
-  // 工具：sandboxable 的在執行期包進 Seatbelt（OS 級隔離，B 半部）；其餘原樣。
-  const tools = pack.tools().map((t) => wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }));
+  // 工具：pack 工具（sandboxable 的包 Seatbelt）+ kernel 內建記憶工具（任何 pack 都有）。
+  const tools = [
+    ...pack.tools().map((t) => wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig })),
+    ...memory.tools,
+  ];
   const registry = createToolRegistry(tools);
   const mutatingTools = new Set(deriveMutatingTools(pack, tools));
   const services = {
     cwd,
+    memory: { save: memory.save, list: memory.list },
     sandbox: { isOn: () => getSandbox(), config: () => getSandboxConfig() },
     ...(config.services || {}),
   };
 
+  const memText = memory.load();
   const systemPrompt =
     pack.systemPrompt +
     loadContextFiles(cwd, pack.contextFiles) +          // 注入領域規範檔（CLAUDE.md 等）
-    '\n\n# 記憶\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE);
+    '\n\n# 記憶\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) +
+    (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '');
 
   const getPlanMode = config.getPlanMode || (() => false);
 
@@ -117,6 +130,16 @@ export function createKernel(pack, config = {}) {
     services,
     permissionPolicy: pack.permissionPolicy || {},
     sandbox: { isOn: () => getSandbox(), config: () => getSandboxConfig() },
+    memory,
+    // session 持久化 / resume（按 pack 分目錄）。CLI 用它存檔與續接。
+    session: {
+      dir: sessionsDir,
+      newId: () => newSessionId(),
+      save: (id, messages) => saveSession(sessionsDir, id, { messages, model: config.model }),
+      load: (id) => loadSession(sessionsDir, id),
+      list: () => listSessions(sessionsDir),
+      latest: () => latestSession(sessionsDir),
+    },
     /** 對一次工具呼叫跑守衛鏈，回傳決策（不執行）。 */
     guardToolCall: (toolCall) => guard(toolCall),
     /**

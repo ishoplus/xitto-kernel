@@ -10,7 +10,7 @@ import { createNotesPack } from '../src/packs/notes/index.js';
 test('notes pack：同一個 createKernel，第三個領域', () => {
   const k = createKernel(createNotesPack());
   assert.deepEqual([...k.mutatingTools], ['add_note']);           // 從 metadata 推導
-  assert.deepEqual(k.registry.readOnlyNames().sort(), ['list_notes', 'read_note', 'search_notes']);
+  for (const n of ['list_notes', 'read_note', 'search_notes']) assert.ok(k.registry.readOnlyNames().includes(n));
 });
 
 test('notes pack：search-before-add 守衛真實生效 + 工具真的存檔', async () => {

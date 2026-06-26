@@ -25,7 +25,7 @@ const preview = (result) => {
  * @param {() => string} o.getApiKey
  * @param {boolean} [o.sandbox]   初始沙箱狀態（預設關）
  */
-export function runCli({ pack, model, getApiKey, sandbox = false }) {
+export function runCli({ pack, model, getApiKey, sandbox = false, resume = null }) {
   let sandboxOn = !!sandbox;
   const kernel = createKernel(pack, {
     model, getApiKey,
@@ -36,6 +36,16 @@ export function runCli({ pack, model, getApiKey, sandbox = false }) {
   let history = [];
   let currentAgent = null;
   let streaming = false;
+
+  // session：續接（--resume [id]）或開新；每輪結束自動存檔
+  let sessionId = kernel.session.newId();
+  let resumedNote = '';
+  if (resume) {
+    const data = resume === true ? (kernel.session.latest() && kernel.session.load(kernel.session.latest().id)) : kernel.session.load(resume);
+    if (data?.messages?.length) { history = data.messages; sessionId = data.id; resumedNote = `（續接 ${data.id}，${data.messages.length} 則）`; }
+    else resumedNote = resume === true ? '（找不到可續的對話，開新）' : `（找不到 session "${resume}"，開新）`;
+  }
+  const persist = () => { try { kernel.session.save(sessionId, history); } catch { /* 略 */ } };
 
   const out = (s) => process.stdout.write(s);
   const endStream = () => { if (streaming) { out('\n'); streaming = false; } };
@@ -77,10 +87,34 @@ export function runCli({ pack, model, getApiKey, sandbox = false }) {
           '  /help            說明',
           '  /sandbox [on|off] 切換沙箱（macOS=Seatbelt 真隔離）',
           '  /tools           列出此 pack 的工具',
-          '  /clear           清除對話歷史',
+          '  /memory          顯示跨 session 記憶',
+          '  /sessions        列出已保存的對話',
+          '  /resume [id]     續接對話（不給 id=最近一次）',
+          '  /clear           清除歷史（開新 session）',
           '  /exit            離開',
         ].join('\n') + '\n'));
         return true;
+      case '/memory': {
+        const mems = kernel.memory.list();
+        out(mems.length ? c.gray(mems.map((m) => '  • ' + m).join('\n') + '\n') : c.gray('（尚無記憶）\n'));
+        return true;
+      }
+      case '/sessions': {
+        const ss = kernel.session.list();
+        out(ss.length
+          ? c.gray(ss.map((s) => `  ${s.id}  [${s.count} 則${s.model ? ' ' + s.model : ''}]`).join('\n') + '\n')
+          : c.gray('（尚無保存的對話）\n'));
+        return true;
+      }
+      case '/resume': {
+        const target = arg || (kernel.session.latest()?.id);
+        const data = target ? kernel.session.load(target) : null;
+        if (data?.messages?.length) {
+          history = data.messages; sessionId = data.id;
+          out(c.gray(`（已續接 ${data.id}，${data.messages.length} 則）\n`));
+        } else out(c.yellow(`找不到可續接的 session${arg ? ` "${arg}"` : ''}\n`));
+        return true;
+      }
       case '/sandbox': {
         sandboxOn = arg ? arg === 'on' : !sandboxOn;
         const real = seatbeltAvailable();
@@ -94,7 +128,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false }) {
           `  ${t.name}${t.readOnly ? c.gray(' [唯讀]') : ''}${t.mutating ? c.yellow(' [mutating]') : ''}${t.sandboxable ? c.cyan(' [sandboxable]') : ''}`,
         ).join('\n') + '\n'));
         return true;
-      case '/clear': history = []; out(c.gray('（已清除對話歷史）\n')); return true;
+      case '/clear': history = []; sessionId = kernel.session.newId(); out(c.gray('（已清除歷史，開新 session）\n')); return true;
       default:
         if (cmd.startsWith('/')) { out(c.red(`未知指令 ${cmd}（/help）\n`)); return true; }
         return false;
@@ -115,7 +149,9 @@ export function runCli({ pack, model, getApiKey, sandbox = false }) {
 
   // 橫幅
   out('\n' + c.cyan('✻ ') + c.bold('xitto-kernel') + c.gray(`  ·  ${pack.name} pack  ·  ${model.id}`) + '\n');
-  out(c.gray(`  沙箱 ${sandboxOn ? '開' : '關'}${seatbeltAvailable() ? '（Seatbelt 可用）' : ''}  ·  /help 看指令  ·  Ctrl+C 中斷/離開`) + '\n\n');
+  out(c.gray(`  沙箱 ${sandboxOn ? '開' : '關'}${seatbeltAvailable() ? '（Seatbelt 可用）' : ''}  ·  /help 看指令  ·  Ctrl+C 中斷/離開`) + '\n');
+  if (resumedNote) out(c.gray('  ' + resumedNote) + '\n');
+  out('\n');
 
   const loop = () => {
     if (closed) return finish();
@@ -131,6 +167,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false }) {
         });
         endStream();
         history = r.messages;
+        persist();                 // 每輪結束自動存檔（可 /resume 續接）
       } catch (err) {
         endStream();
         out(c.red('錯誤：' + err.message) + '\n');

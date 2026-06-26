@@ -41,17 +41,18 @@ export function main(argv = process.argv.slice(2)) {
   try { ({ model, getApiKey } = loadModel(opts.model)); }
   catch (err) { console.error('\x1b[31m' + err.message + '\x1b[0m'); process.exit(1); }
 
-  runCli({ pack: make({ cwd: process.cwd() }), model, getApiKey, sandbox: opts.sandbox });
+  runCli({ pack: make({ cwd: process.cwd() }), model, getApiKey, sandbox: opts.sandbox, resume: opts.resume });
 }
 
 function parse(argv) {
-  const o = { pack: 'coding', model: undefined, sandbox: false, help: false };
+  const o = { pack: 'coding', model: undefined, sandbox: false, help: false, resume: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--pack') o.pack = argv[++i];
     else if (a === '--model') o.model = argv[++i];
     else if (a === '--sandbox') o.sandbox = true;
+    else if (a === '--resume') { const nxt = argv[i + 1]; if (nxt && !nxt.startsWith('--')) { o.resume = nxt; i++; } else o.resume = true; }
   }
   return o;
 }
@@ -61,7 +62,7 @@ function printHelp() {
     'xitto-kernel — 領域無關 agent 底座',
     '',
     '用法:',
-    '  xitto-kernel [--pack <name>] [--model <id>] [--sandbox]   互動跑內建 pack',
+    '  xitto-kernel [--pack <name>] [--model <id>] [--sandbox] [--resume [id]]   互動跑內建 pack',
     '  xitto-kernel new-agent <name>                            產出依賴 kernel 的獨立 agent 專案',
     '',
     '  --pack <name>   選擇內建 DomainPack（coding | data-query | notes；預設 coding）',
