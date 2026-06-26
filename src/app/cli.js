@@ -57,6 +57,13 @@ export function runCli({ pack, model, getApiKey, sandbox = false }) {
       case 'tool_execution_end':
         out((ev.isError ? c.red('  ⎿ ✗') : c.gray('  ⎿ ✓')) + c.gray(' ' + preview(ev.result)) + '\n');
         break;
+      case 'verify_start':
+        endStream();
+        out(c.gray('  🔎 自動驗收…\n'));
+        break;
+      case 'verify_end':
+        out(ev.ok ? c.gray('  ✓ 驗收通過\n') : c.yellow('  ✗ 驗收失敗，請 agent 修正…\n'));
+        break;
     }
   };
 

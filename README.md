@@ -122,10 +122,11 @@ xitto-kernel/
 ## 現況與後續
 
 **已完成**：pack 系統、工具 metadata 驅動、固定順序守衛鏈、agent loop（真實 LLM 多步循環）、
-真實 sandbox（靜態策略 + macOS Seatbelt）、互動 CLI、腳手架（`new-agent` 產出獨立專案）。41 測試全綠。
+真實 sandbox（靜態策略 + macOS Seatbelt）、**pack.verify 自我驗收回灌**、**pack.contextFiles 載入注入**、
+互動 CLI、腳手架（`new-agent` 產出獨立專案）。46 測試全綠。
 
-**仍為接縫（後續）**：回合內壓縮、hooks/skills/MCP/subagent、contextFiles 載入、互動權限確認
-（CLI 目前 headless 放行 mutating、危險命令仍擋）、發佈到 npm（讓 `file:` 依賴變正式版本）。
+**仍為接縫（後續）**：記憶 / session resume、回合內壓縮、hooks/skills/MCP/subagent、git 指令、
+互動權限確認（CLI 目前 headless 放行 mutating、危險命令仍擋）、發佈到 npm（讓 `file:` 依賴變正式版本）。
 
 **設計取向**：沿用 Node ESM + pi-ai provider 抽象；不重寫 xitto-code（kernel 是抽象，xitto-code 仍可獨立存在）。
 

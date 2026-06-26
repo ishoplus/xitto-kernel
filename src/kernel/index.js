@@ -2,11 +2,33 @@
 // 確定性那半部：pack 載入、工具註冊、mutatingTools 推導、固定順序守衛鏈、systemPrompt 組裝、
 // 單一工具呼叫（runTool）。LLM 那半部：runTurn 驅動移植自 xitto-code 的 Agent loop
 // （串流 + 多步工具循環 + 守衛接線）。壓縮/TUI 仍為後續接縫。
+import { existsSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { loadPack } from './pack-loader.js';
 import { createToolRegistry, deriveMutatingTools, isSandboxable } from './tool-registry.js';
 import { composeGuards } from './guard-chain.js';
 import { createPermissionStep } from './security/permission-step.js';
 import { normalizeSandbox, wrapWithSeatbelt } from './security/sandbox.js';
+
+// 載入 pack.contextFiles：從 cwd 逐層往上找每個檔名，找到就讀入並注入 system prompt（領域規範）。
+// 對標 xitto-code 的 CLAUDE.md/AGENTS.md 載入；但檔名由 pack 決定（kernel 不認識具體檔名）。
+function loadContextFiles(cwd, names) {
+  if (!Array.isArray(names) || !names.length) return '';
+  const found = [];
+  for (const name of names) {
+    let dir = cwd;
+    for (;;) {
+      const p = join(dir, name);
+      if (existsSync(p)) { try { found.push({ name, text: readFileSync(p, 'utf8') }); } catch { /* 略 */ } break; }
+      const parent = dirname(dir);
+      if (parent === dir) break; // 到根目錄
+      dir = parent;
+    }
+  }
+  if (!found.length) return '';
+  return '\n\n# 專案規範（讀自下列檔案，請遵守）\n' +
+    found.map((f) => `## ${f.name}\n${f.text.trim()}`).join('\n\n');
+}
 
 const DEFAULT_MEMORY_GUIDE =
   '遇到值得跨 session 記住的事實（使用者偏好、建置/測試指令、踩過的坑、專案決策）時，當下就存一條。';
@@ -64,6 +86,7 @@ export function createKernel(pack, config = {}) {
 
   const systemPrompt =
     pack.systemPrompt +
+    loadContextFiles(cwd, pack.contextFiles) +          // 注入領域規範檔（CLAUDE.md 等）
     '\n\n# 記憶\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE);
 
   const getPlanMode = config.getPlanMode || (() => false);
@@ -142,10 +165,35 @@ export function createKernel(pack, config = {}) {
         }),
         toolExecution: 'sequential',
       });
+      // 追蹤本輪是否有成功的「會改動」工具（供 verify.shouldRun 判斷）
+      let turnModified = false;
+      agent.subscribe((e) => {
+        if (e.type === 'tool_execution_end' && !e.isError && mutatingTools.has(e.toolName)) turnModified = true;
+      });
       if (opts.onEvent) agent.subscribe((e) => opts.onEvent(e));
       opts.onAgent?.(agent); // 讓呼叫端拿到 agent（Ctrl+C → agent.abort()）
 
       await agent.prompt(input);
+      const wasAborted = () => [...agent.state.messages].reverse().find((m) => m.role === 'assistant')?.stopReason === 'aborted';
+
+      // 收尾自我驗收（pack.verify）：失敗則把輸出回灌讓 agent 修正，最多 maxRounds 輪。
+      // 對標 xitto-code 的 runAutoVerify；機制在 kernel、「跑什麼/何時跑」由 pack 決定。
+      if (pack.verify && !wasAborted()) {
+        const maxRounds = Number.isInteger(pack.verify.maxRounds) ? pack.verify.maxRounds : 2;
+        for (let round = 0; round < maxRounds; round++) {
+          const vctx = { turnModified, cwd };
+          const shouldRun = pack.verify.shouldRun ? pack.verify.shouldRun(vctx) : turnModified;
+          if (!shouldRun) break;
+          opts.onEvent?.({ type: 'verify_start' });
+          let v;
+          try { v = await pack.verify.run(vctx); } catch (e) { v = { ok: false, output: e?.message || String(e) }; }
+          opts.onEvent?.({ type: 'verify_end', ok: !!v?.ok, output: v?.output });
+          if (v?.ok) break;
+          turnModified = false;
+          await agent.prompt(`[自動驗收] 驗證失敗，輸出如下：\n${String(v?.output || '').slice(0, 4000)}\n請修正使其通過。`);
+          if (wasAborted() || !turnModified) break; // 中斷或 agent 沒再改 → 停止避免空轉
+        }
+      }
 
       const messages = agent.state.messages;
       const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
