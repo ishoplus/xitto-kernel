@@ -13,6 +13,7 @@ import { createMemory } from './memory.js';
 import { createSpawnTool } from './subagent.js';
 import { createSkills } from './skills.js';
 import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
+import { maybeCompact, resolveCompactionSettings } from './compaction.js';
 import { newSessionId, saveSession, loadSession, listSessions, latestSession } from './session.js';
 
 // 載入 pack.contextFiles：從 cwd 逐層往上找每個檔名，找到就讀入並注入 system prompt（領域規範）。
@@ -234,6 +235,15 @@ export function createKernel(pack, config = {}) {
           args: ctx.args,
           assistantMessage: ctx.assistantMessage,
         }),
+        // 回合內壓縮：每次串流前若逼近視窗，就地摘要較舊對話、保留最近，繼續同回合
+        maybeCompactInTurn: async () => {
+          const s = resolveCompactionSettings(config.compaction, model.contextWindow);
+          if (!s.enabled) return null;
+          let apiKey; try { apiKey = await config.getApiKey(model.provider); } catch { return null; }
+          const info = await maybeCompact(agent, model, apiKey, s);
+          if (info && !info.error) opts.onEvent?.({ type: 'compact', ...info });
+          return info;
+        },
         toolExecution: 'sequential',
       });
       // 追蹤本輪改動 + PostToolUse hooks（成功工具後跑命令，失敗回灌讓 agent 修正）

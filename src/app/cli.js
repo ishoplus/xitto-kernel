@@ -100,6 +100,10 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
       case 'hook_fail':
         out(c.yellow(`  ✗ hook 失敗 ${ev.command}，回灌讓 agent 修正…\n`));
         break;
+      case 'compact':
+        endStream();
+        out(c.gray(`  ⊙ 已壓縮上下文：${ev.tokensBefore}→${ev.tokensAfter} tokens（摘要 ${ev.summarized} 則，保留 ${ev.kept} 則）\n`));
+        break;
     }
   };
 
