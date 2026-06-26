@@ -13,6 +13,7 @@ const SYSTEM_PROMPT = [
   '- 編輯既有檔案前必先 read 它的當前內容，不基於臆測修改。',
   '- 一次做一件事，改動後說明你做了什麼、如何驗證。',
   '- 破壞性操作先確認。',
+  '- 要提交時：先 git_diff 看變更，再用 git_commit 寫一則簡潔、說明「為何」的 commit 訊息。',
 ].join('\n');
 
 /**
@@ -79,9 +80,40 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     },
   };
 
+  // ── git 工具（編碼領域）：kernel 不認識 git，這些是 coding pack 提供的領域能力 ──
+  const git = (a) => { try { return execSync(`git ${a}`, { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }); } catch { return null; } };
+  const isRepo = () => { try { execSync('git rev-parse --is-inside-work-tree', { cwd, stdio: 'ignore' }); return true; } catch { return false; } };
+
+  const gitStatus = {
+    name: 'git_status', label: 'git 狀態', readOnly: true, description: '顯示目前分支與工作區變更（git status）',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => { if (!isRepo()) return txt({ error: '非 git 倉庫' }); return txt({ branch: (git('rev-parse --abbrev-ref HEAD') || '').trim(), changes: (git('status --short') || '').trim() || '(乾淨)' }); },
+  };
+  const gitDiff = {
+    name: 'git_diff', label: 'git diff', readOnly: true, description: '顯示未提交變更的 diff（staged=true 看已暫存）',
+    parameters: { type: 'object', properties: { staged: { type: 'boolean' } } },
+    execute: async (_id, { staged } = {}) => { if (!isRepo()) return txt({ error: '非 git 倉庫' }); return txt((git(`diff ${staged ? '--cached' : ''}`) || '').trim() || '(無變更)'); },
+  };
+  const gitLog = {
+    name: 'git_log', label: 'git log', readOnly: true, description: '最近的提交記錄',
+    parameters: { type: 'object', properties: { n: { type: 'number' } } },
+    execute: async (_id, { n = 10 } = {}) => { if (!isRepo()) return txt({ error: '非 git 倉庫' }); return txt(git(`log --oneline -${Math.min(50, Math.max(1, n || 10))}`) || '(無提交)'); },
+  };
+  const gitCommit = {
+    name: 'git_commit', label: 'git commit', mutating: true,
+    description: '提交變更。message 由你依 git_diff 撰寫（簡潔說明做了什麼與為何）；all=true 會先 git add -A。',
+    parameters: { type: 'object', properties: { message: { type: 'string' }, all: { type: 'boolean' } }, required: ['message'] },
+    execute: async (_id, { message, all }) => {
+      if (!isRepo()) return txt({ error: '非 git 倉庫' });
+      if (all) git('add -A');
+      try { return txt((execSync(`git commit -m ${JSON.stringify(String(message))}`, { cwd, encoding: 'utf8' }) || '').trim()); }
+      catch (e) { return txt({ error: (e.stdout || e.message || '').toString().trim() }); }
+    },
+  };
+
   return {
     name: 'coding',
-    tools: () => [readTool, lsTool, writeTool, editTool, bashTool],
+    tools: () => [readTool, lsTool, writeTool, editTool, bashTool, gitStatus, gitDiff, gitLog, gitCommit],
     systemPrompt: SYSTEM_PROMPT,
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）
