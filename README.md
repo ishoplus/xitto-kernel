@@ -127,7 +127,7 @@ xitto-kernel/
 **git 能力**（coding pack）、**spawn_agent 子 agent**、**PreToolUse/PostToolUse hooks**、
 **skills 漸進揭露**、**MCP 工具接入**、互動 CLI、腳手架（`new-agent` 產出獨立專案）。75 測試全綠。
 
-**仍為接縫（後續）**：回合內上下文壓縮、Ink 富 TUI（彩色 diff/markdown）、發佈到 npm（讓 `file:` 依賴變正式版本）。
+**仍為接縫（後續）**：發佈到 npm（讓 `file:` 依賴變正式版本；版本已備 0.1.0）。Ink 全功能 TUI 可作為另一個 app（目前 CLI 已有輕量串流 markdown + 彩色 diff）。
 
 **設計取向**：沿用 Node ESM + pi-ai provider 抽象；不重寫 xitto-code（kernel 是抽象，xitto-code 仍可獨立存在）。
 

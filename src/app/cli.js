@@ -4,6 +4,7 @@
 import readline from 'node:readline';
 import { createKernel } from '../kernel/index.js';
 import { seatbeltAvailable } from '../kernel/security/sandbox.js';
+import { createStreamRenderer } from './markdown.js';
 
 const e = (n) => (s) => `\x1b[${n}m${s}\x1b[0m`;
 const c = { gray: e(90), green: e(32), yellow: e(33), red: e(31), cyan: e(36), bold: e(1), blue: e(34) };
@@ -71,21 +72,32 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
   const persist = () => { try { kernel.session.save(sessionId, history); } catch { /* 略 */ } };
 
   const out = (s) => process.stdout.write(s);
-  const endStream = () => { if (streaming) { out('\n'); streaming = false; } };
+  const md = createStreamRenderer(out);             // 串流 markdown 渲染（粗體/標題/code/inline code）
+  const endStream = () => { if (md.active()) md.flush(); streaming = false; };
+
+  // edit/write 的彩色 diff 預覽（紅 - 舊 / 綠 + 新）
+  const diffPreview = (name, args) => {
+    if (name === 'edit' && args?.oldText != null) {
+      for (const l of String(args.oldText).split('\n').slice(0, 8)) out(c.red('  - ' + l) + '\n');
+      for (const l of String(args.newText ?? '').split('\n').slice(0, 8)) out(c.green('  + ' + l) + '\n');
+    } else if (name === 'write' && args?.content != null) {
+      const lines = String(args.content).split('\n');
+      for (const l of lines.slice(0, 8)) out(c.green('  + ' + l) + '\n');
+      if (lines.length > 8) out(c.gray(`  … 共 ${lines.length} 行`) + '\n');
+    }
+  };
 
   const onEvent = (ev) => {
     switch (ev.type) {
       case 'message_update': {
         const a = ev.assistantMessageEvent;
-        if (a?.type === 'text_delta' && a.delta) {
-          if (!streaming) { out(c.green('● ')); streaming = true; }
-          out(a.delta);
-        }
+        if (a?.type === 'text_delta' && a.delta) { md.push(a.delta); streaming = true; }
         break;
       }
       case 'tool_execution_start':
         endStream();
         out(c.yellow('⚙ ' + ev.toolName) + c.gray('(' + summarize(ev.args) + ')\n'));
+        diffPreview(ev.toolName, ev.args);
         break;
       case 'tool_execution_end':
         out((ev.isError ? c.red('  ⎿ ✗') : c.gray('  ⎿ ✓')) + c.gray(' ' + preview(ev.result)) + '\n');
