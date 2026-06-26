@@ -14,6 +14,7 @@ import { createSpawnTool } from './subagent.js';
 import { createSkills } from './skills.js';
 import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
 import { maybeCompact, resolveCompactionSettings } from './compaction.js';
+import { checkGoal, normalizeFeedback } from './goal-loop.js';
 import { newSessionId, saveSession, loadSession, listSessions, latestSession } from './session.js';
 
 // 載入 pack.contextFiles：從 cwd 逐層往上找每個檔名，找到就讀入並注入 system prompt（領域規範）。
@@ -161,7 +162,7 @@ export function createKernel(pack, config = {}) {
     services,
   });
 
-  return {
+  const api = {
     pack,
     registry,
     mutatingTools,
@@ -285,7 +286,43 @@ export function createKernel(pack, config = {}) {
       const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
       const text = (lastAssistant?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
       const aborted = lastAssistant?.stopReason === 'aborted';
-      return { text, messages, agent, aborted };
+      return { text, messages, agent, aborted, turnModified };
+    },
+
+    /**
+     * 目標驅動自主循環：反覆 runTurn + LLM 自我驗收，直到達成 / 到上限 / 連續無進展。
+     * @param {string} goal
+     * @param {{ maxRounds?: number, history?: object[], onRound?, onCheck?, onEvent?, onAgent?, signal? }} [opts]
+     * @returns {Promise<{ done: boolean, rounds: number, history: object[], stalled?: boolean, aborted?: boolean }>}
+     */
+    runGoal: async (goal, opts = {}) => {
+      if (!config.model) throw new Error('runGoal 需要 config.model。');
+      const maxRounds = opts.maxRounds || 12;
+      const NO_PROGRESS_CAP = 3;
+      let history = opts.history || [];
+      let instruction = `目標：${goal}\n\n請著手完成這個目標；可自由使用工具（讀寫檔/跑命令/抓網頁/子 agent…）。完成後簡述你做了什麼、如何驗證。`;
+      let lastRemaining = null;
+      let noProgress = 0;
+      for (let round = 1; round <= maxRounds; round++) {
+        opts.onRound?.({ round, maxRounds });
+        const r = await api.runTurn(instruction, { history, onEvent: opts.onEvent, onAgent: opts.onAgent });
+        history = r.messages;
+        if (r.aborted) return { done: false, aborted: true, rounds: round, history };
+        let apiKey; try { apiKey = await config.getApiKey(config.model.provider); } catch { /* 略 */ }
+        const judge = config.checkGoal || checkGoal; // 可注入自訂驗收（測試 / app 客製）
+        const v = await judge(goal, history, config.model, apiKey, opts.signal);
+        opts.onCheck?.({ round, done: v.done, remaining: v.remaining });
+        if (v.done) return { done: true, rounds: round, history };
+        noProgress = r.turnModified ? 0 : noProgress + 1;
+        const rem = normalizeFeedback(v.remaining);
+        if ((!r.turnModified && rem && rem === lastRemaining) || noProgress >= NO_PROGRESS_CAP) {
+          return { done: false, stalled: true, rounds: round, history };
+        }
+        lastRemaining = rem;
+        instruction = `目標尚未達成。驗收回饋：${v.remaining}\n請繼續完成目標：${goal}`;
+      }
+      return { done: false, maxedOut: true, rounds: maxRounds, history };
     },
   };
+  return api;
 }

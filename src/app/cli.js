@@ -130,6 +130,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
           '  /sandbox [on|off] 切換沙箱（macOS=Seatbelt 真隔離）',
           '  /auto [on|off]    自動核准 mutating 工具（危險命令仍把關）',
           '  /plan [on|off]    計劃模式（只規劃、擋下實際改動）',
+          '  /goal <目標>      目標驅動自主循環（反覆做到完成）',
           '  /undo            撤銷上一次檔案改動（write/edit）',
           '  /tools           列出此 pack 的工具',
           '  /memory          顯示跨 session 記憶',
@@ -218,6 +219,24 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
     q(c.blue('› '), async (raw) => {
       const input = (raw || '').trim();
       if (!input) return loop();
+      // /goal <目標>：目標驅動自主循環（在此 await，避免與下一個提示交錯）
+      if (input.startsWith('/goal ') || input === '/goal') {
+        const goal = input.slice(5).trim();
+        if (!goal) { out(c.gray('用法 /goal <目標>\n')); return loop(); }
+        try {
+          out(c.cyan('🎯 目標：') + goal + '\n');
+          const r = await kernel.runGoal(goal, {
+            history,
+            onRound: ({ round, maxRounds }) => out(c.yellow(`\n🔁 第 ${round}/${maxRounds} 輪\n`)),
+            onCheck: ({ done, remaining }) => out(done ? c.green('  ✓ 驗收：已達成\n') : c.gray(`  ↻ ${remaining}\n`)),
+            onEvent, onAgent: (a) => { currentAgent = a; },
+          });
+          endStream(); history = r.history; persist();
+          out('\n' + (r.done ? c.green(`✅ 目標達成（${r.rounds} 輪）`) : c.yellow(`⚠ 未達成（${r.stalled ? '無進展' : r.aborted ? '中斷' : '到上限'}，${r.rounds} 輪）`)) + '\n');
+        } catch (err) { endStream(); out(c.red('錯誤：' + err.message) + '\n'); }
+        finally { currentAgent = null; }
+        out('\n'); return loop();
+      }
       if (handleSlash(input)) return loop();
       try {
         const text = planMode

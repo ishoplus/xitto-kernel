@@ -42,7 +42,13 @@ xitto-kernel --pack data-query
 xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
 ```
 
-**CLI 內操作**：直接打需求（模型會自己呼叫工具）；指令 `/help` `/sandbox [on|off]` `/tools` `/clear` `/exit`；`Ctrl+C` 中斷該輪、閒置時再按一次離開。
+**CLI 內操作**：直接打需求（模型會自己呼叫工具）；指令 `/help` `/goal <目標>` `/sandbox` `/plan` `/undo` `/tools` `/memory` `/sessions` `/resume` `/exit`；`Ctrl+C` 中斷該輪、閒置時再按一次離開。
+
+**通用自主 agent（給目標、自己做到完成）**
+```bash
+xitto-kernel --pack general --yes --goal "抓取 example.com 摘要成繁中寫進 summary.txt"
+```
+`general` pack（檔案/shell/web_fetch）+ kernel 的 **goal loop**（反覆 runTurn + LLM 自我驗收，直到達成/無進展/上限）。互動模式用 `/goal <目標>`。
 
 ## 做你自己的領域 agent（不固化）
 
@@ -92,9 +98,10 @@ xitto-kernel/
 │   │   ├── templates/            ✅ 獨立專案樣板（package.json/index.js/pack.js…）
 │   │   └── providers.js          ✅ providers.json 載入（provider 設定屬 app，非 kernel）
 │   └── packs/
-│       ├── coding/               ✅ 參考 pack（read/ls/write/edit/bash 真實工具）
+│       ├── coding/               ✅ 參考 pack（read/ls/write/edit/bash/git）
 │       ├── data-query/           ✅ 第二領域（證明正交）
-│       └── notes/                ✅ 第三領域（知識庫；示範「怎麼做新領域 agent」）
+│       ├── notes/                ✅ 第三領域（知識庫）
+│       └── general/              ✅ 通用自主 agent（檔案/shell/web_fetch + goal loop）
 ├── bin/xitto-kernel.js           ✅ CLI 進入點（run / new-agent）
 ├── test/                         ✅ 41 測試全綠（runTurn + Seatbelt 隔離 + 腳手架 + …）
 └── examples/
