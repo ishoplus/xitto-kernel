@@ -37,7 +37,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test \"test/*.test.js\"",
+    "test": "node --test",
     "demo": "node examples/demo.js",
     "start": "node bin/xitto-kernel.js"
   },
