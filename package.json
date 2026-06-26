@@ -49,6 +49,7 @@
     "./packs/notes": "./src/packs/notes/index.js"
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.70.6"
+    "@mariozechner/pi-ai": "^0.70.6",
+    "@modelcontextprotocol/sdk": "^1.29.0"
   }
 }

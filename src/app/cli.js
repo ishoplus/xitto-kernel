@@ -25,12 +25,12 @@ const preview = (result) => {
  * @param {() => string} o.getApiKey
  * @param {boolean} [o.sandbox]   初始沙箱狀態（預設關）
  */
-export function runCli({ pack, model, getApiKey, sandbox = false, resume = null, auto = false }) {
+export function runCli({ pack, model, getApiKey, sandbox = false, resume = null, auto = false, extraTools = [], onExit = null }) {
   let sandboxOn = !!sandbox;
   let autoApprove = !!auto;
   let planMode = false;
   const kernel = createKernel(pack, {
-    model, getApiKey,
+    model, getApiKey, extraTools,
     sandbox: { enabled: sandboxOn },        // 提供策略（blockNetwork/allowWritePrefixes）
     getSandbox: () => sandboxOn,            // on/off 由 CLI 即時切換
     getPlanMode: () => planMode,            // 計劃模式：守衛擋 mutating 工具
@@ -179,7 +179,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: c.blue('› ') });
   let closed = false;
-  const cleanup = () => { try { rl.close(); } catch { /* 略 */ } };
+  const cleanup = () => { try { rl.close(); } catch { /* 略 */ } try { onExit?.(); } catch { /* 略 */ } };
   const finish = () => { cleanup(); process.exit(0); };
   rl.on('close', () => { closed = true; }); // 管線輸入結束（非 TTY）→ 收尾
 

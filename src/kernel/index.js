@@ -112,6 +112,7 @@ export function createKernel(pack, config = {}) {
     ...pack.tools().map((t) => wrapUndo(wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }), { cwd, undoStack })),
     ...memory.tools,
     ...(skills.tool ? [skills.tool] : []),
+    ...(config.extraTools || []),  // 外部注入（MCP 工具等）：由 app 層先 async 載入再傳入
   ];
   // spawn_agent：派唯讀子 agent。其可用工具 = 所有唯讀工具（不含 spawn_agent 自己，避免遞迴）。
   let allTools = baseTools;

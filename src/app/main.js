@@ -1,8 +1,10 @@
 // App 進入點：解析參數 → 載入 model（providers.json）→ 選 pack → 啟動 CLI。
 // 子指令：new-agent <name> → 產出依賴 kernel 的獨立 agent 專案。
+import { join } from 'node:path';
 import { loadModel } from './providers.js';
 import { runCli } from './cli.js';
 import { newAgent } from './scaffold.js';
+import { loadMcpTools } from '../kernel/mcp.js';
 import { createCodingPack } from '../packs/coding/index.js';
 import { createDataQueryPack } from '../packs/data-query/index.js';
 import { createNotesPack } from '../packs/notes/index.js';
@@ -16,7 +18,7 @@ const PACKS = {
   notes: createNotesPack,
 };
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   // 子指令：new-agent <name> —— 產出獨立 agent 專案（不碰 kernel）
   if (argv[0] === 'new-agent') {
     const name = argv[1];
@@ -41,7 +43,15 @@ export function main(argv = process.argv.slice(2)) {
   try { ({ model, getApiKey } = loadModel(opts.model)); }
   catch (err) { console.error('\x1b[31m' + err.message + '\x1b[0m'); process.exit(1); }
 
-  runCli({ pack: make({ cwd: process.cwd() }), model, getApiKey, sandbox: opts.sandbox, resume: opts.resume, auto: opts.yes });
+  // MCP：啟動時連 .xitto-kernel/<pack>/mcp.json 的 server，工具以 extraTools 注入
+  const cwd = process.cwd();
+  const mcp = await loadMcpTools(join(cwd, '.xitto-kernel', opts.pack, 'mcp.json'), (m) => console.log(gray(`  [MCP] ${m}`)));
+
+  runCli({
+    pack: make({ cwd }), model, getApiKey,
+    sandbox: opts.sandbox, resume: opts.resume, auto: opts.yes,
+    extraTools: mcp.tools, onExit: mcp.close,
+  });
 }
 
 function parse(argv) {
