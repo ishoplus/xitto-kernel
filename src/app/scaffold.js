@@ -17,24 +17,32 @@ const FILES = [
   ['gitignore.tmpl', '.gitignore'],
 ];
 
+const kernelVersion = () => {
+  try { return JSON.parse(readFileSync(join(KERNEL_ROOT, 'package.json'), 'utf8')).version || '0.1.0'; }
+  catch { return '0.1.0'; }
+};
+
 /**
  * 產生一個獨立 agent 專案。
  * @param {string} name                    agent 名（字母/數字/連字號）
- * @param {{ dir?: string, kernelPath?: string }} [opts]
- *        dir：產出根目錄（預設 cwd）；kernelPath：寫進 package.json 的 file: 依賴路徑（預設此 kernel）
- * @returns {{ target: string, files: string[] }}
+ * @param {{ dir?: string, local?: boolean, kernelPath?: string }} [opts]
+ *        dir：產出根目錄（預設 cwd）；local：用 file: 依賴本機 kernel（開發用，預設用 npm 正式版本）
+ * @returns {{ target: string, files: string[], dep: string }}
  */
-export function newAgent(name, { dir = process.cwd(), kernelPath = KERNEL_ROOT } = {}) {
+export function newAgent(name, { dir = process.cwd(), local = false, kernelPath = KERNEL_ROOT } = {}) {
   if (!name || !/^[a-z0-9][a-z0-9-]*$/i.test(name)) {
     throw new Error(`agent 名稱不合法：「${name}」（只能用字母/數字/連字號，且不以連字號開頭）`);
   }
   const target = join(dir, name);
   if (existsSync(target)) throw new Error(`目錄已存在：${target}`);
 
+  // 依賴：預設用 npm 正式版本（^x.y.z）；--local 用 file: 指向本機 kernel（開發測試用）
+  const dep = local ? `file:${kernelPath}` : `^${kernelVersion()}`;
+
   mkdirSync(target, { recursive: true });
-  const subst = (s) => s.replaceAll('__NAME__', name).replaceAll('__KERNEL_PATH__', kernelPath);
+  const subst = (s) => s.replaceAll('__NAME__', name).replaceAll('__KERNEL_DEP__', dep);
   for (const [tmpl, outName] of FILES) {
     writeFileSync(join(target, outName), subst(readFileSync(join(TEMPLATES, tmpl), 'utf8')));
   }
-  return { target, files: FILES.map(([, o]) => o) };
+  return { target, files: FILES.map(([, o]) => o), dep };
 }

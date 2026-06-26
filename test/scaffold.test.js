@@ -16,17 +16,26 @@ test('newAgent：產出完整獨立專案檔案', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('newAgent：package.json 用 file: 依賴 kernel（不固化的關鍵）', () => {
+test('newAgent：預設用 npm 正式版本依賴（^x.y.z）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'scaf2-'));
   try {
-    const { target } = newAgent('my-bot', { dir, kernelPath: '/abs/kernel' });
+    const { target, dep } = newAgent('my-bot', { dir });
     const pkg = JSON.parse(readFileSync(join(target, 'package.json'), 'utf8'));
     assert.equal(pkg.name, 'my-bot');
-    assert.equal(pkg.dependencies['xitto-kernel'], 'file:/abs/kernel');
+    assert.match(pkg.dependencies['xitto-kernel'], /^\^\d+\.\d+\.\d+$/); // ^0.1.0 之類
+    assert.match(dep, /^\^/);
     // index.js import kernel 的 app 子路徑（消費而非修改）
     assert.match(readFileSync(join(target, 'index.js'), 'utf8'), /from 'xitto-kernel\/app'/);
-    // pack.js 已代換名稱
     assert.match(readFileSync(join(target, 'pack.js'), 'utf8'), /name: 'my-bot'/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('newAgent --local：用 file: 依賴本機 kernel（開發用）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'scaf2b-'));
+  try {
+    const { target } = newAgent('dev-bot', { dir, local: true, kernelPath: '/abs/kernel' });
+    const pkg = JSON.parse(readFileSync(join(target, 'package.json'), 'utf8'));
+    assert.equal(pkg.dependencies['xitto-kernel'], 'file:/abs/kernel');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

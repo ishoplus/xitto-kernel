@@ -21,11 +21,12 @@ const PACKS = {
 export async function main(argv = process.argv.slice(2)) {
   // 子指令：new-agent <name> —— 產出獨立 agent 專案（不碰 kernel）
   if (argv[0] === 'new-agent') {
-    const name = argv[1];
+    const name = argv.find((a, i) => i >= 1 && !a.startsWith('--'));
+    const local = argv.includes('--local');
     try {
-      const { target, files } = newAgent(name);
+      const { target, files, dep } = newAgent(name, { local });
       console.log(green(`✓ 已建立獨立 agent 專案：${target}`));
-      console.log(gray(`  ${files.join('  ')}`));
+      console.log(gray(`  ${files.join('  ')}  ·  依賴 xitto-kernel@${dep}`));
       console.log('\n下一步：');
       console.log(gray(`  cd ${name} && npm install && npm start`));
       console.log(gray('  （改 pack.js 換成你的領域；npm update xitto-kernel 升級底座，不固化）'));
