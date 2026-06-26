@@ -25,17 +25,38 @@ const preview = (result) => {
  * @param {() => string} o.getApiKey
  * @param {boolean} [o.sandbox]   初始沙箱狀態（預設關）
  */
-export function runCli({ pack, model, getApiKey, sandbox = false, resume = null }) {
+export function runCli({ pack, model, getApiKey, sandbox = false, resume = null, auto = false }) {
   let sandboxOn = !!sandbox;
+  let autoApprove = !!auto;
   const kernel = createKernel(pack, {
     model, getApiKey,
     sandbox: { enabled: sandboxOn },        // 提供策略（blockNetwork/allowWritePrefixes）
     getSandbox: () => sandboxOn,            // on/off 由 CLI 即時切換
+    confirm: askConfirm,                    // 互動權限確認（mutating/危險工具執行前）
   });
 
   let history = [];
   let currentAgent = null;
   let streaming = false;
+
+  // 互動權限確認：守衛鏈第 5 格對 mutating/危險工具呼叫此函數。autoApprove → 一律放行。
+  // 回 'yes'（允許一次）/ 'always'（此工具全部）/ 'no'（拒絕）。
+  async function askConfirm(name, args, danger) {
+    if (autoApprove && !danger) return 'yes';   // 自動模式仍對危險命令把關
+    endStream();
+    return new Promise((res) => {
+      const warn = danger ? c.red(`  ⛔ 危險：${danger}\n`) : '';
+      out(warn + c.yellow('  需要許可 ') + c.bold(name) + c.gray('(' + summarize(args) + ')') + '\n');
+      const hint = danger ? '[y]允許一次  [n]拒絕' : '[y]允許  [a]此工具全部  [n]拒絕';
+      try {
+        rl.question(c.yellow(`    ${hint} › `), (ans) => {
+          const a = (ans || '').trim().toLowerCase();
+          if (danger) return res(a === 'y' || a === 'yes' ? 'yes' : 'no');
+          res(a === 'y' || a === 'yes' ? 'yes' : a === 'a' ? 'always' : 'no');
+        });
+      } catch { res('no'); }
+    });
+  }
 
   // session：續接（--resume [id]）或開新；每輪結束自動存檔
   let sessionId = kernel.session.newId();
@@ -86,6 +107,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null 
         out(c.gray([
           '  /help            說明',
           '  /sandbox [on|off] 切換沙箱（macOS=Seatbelt 真隔離）',
+          '  /auto [on|off]    自動核准 mutating 工具（危險命令仍把關）',
           '  /tools           列出此 pack 的工具',
           '  /memory          顯示跨 session 記憶',
           '  /sessions        列出已保存的對話',
@@ -123,6 +145,10 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null 
           : c.gray('沙箱關\n'));
         return true;
       }
+      case '/auto':
+        autoApprove = arg ? arg === 'on' : !autoApprove;
+        out(autoApprove ? c.yellow('⚡ 自動核准開（mutating 工具不再逐一確認；危險命令仍把關）\n') : c.gray('自動核准關（mutating 工具會逐一確認）\n'));
+        return true;
       case '/tools':
         out(c.gray(kernel.registry.all().map((t) =>
           `  ${t.name}${t.readOnly ? c.gray(' [唯讀]') : ''}${t.mutating ? c.yellow(' [mutating]') : ''}${t.sandboxable ? c.cyan(' [sandboxable]') : ''}`,

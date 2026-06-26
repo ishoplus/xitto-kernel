@@ -19,6 +19,7 @@ import { commandSignature } from './allow.js';
 export function createPermissionStep({ registry, getSandbox, getSandboxConfig, deny = [], confirm }) {
   const denySet = new Set(deny);
   const allowedSignatures = new Set(); // session 內「允許此命令簽章全部」
+  const alwaysTools = new Set();       // session 內「允許此工具全部」（使用者選 always）
 
   return async function permission(ctx) {
     const name = ctx.name;
@@ -44,17 +45,17 @@ export function createPermissionStep({ registry, getSandbox, getSandboxConfig, d
     // 3) 危險命令：即使 always-allow / 無 confirm 也強制把關（headless 直接擋）
     const danger = isShell ? dangerousReason(cmd) : null;
 
-    // 4) 非危險：命令簽章已放行 → 直接過；headless（無 confirm）→ 放行
+    // 4) 非危險：本工具/命令簽章已 always-allow → 直接過；headless（無 confirm）→ 放行
     if (!danger) {
-      if (sig && allowedSignatures.has(sig)) return undefined;
+      if (alwaysTools.has(name) || (sig && allowedSignatures.has(sig))) return undefined;
       if (!confirm) return undefined;
     } else if (!confirm) {
       return { block: true, reason: `偵測到危險命令（${danger}），headless 模式下拒絕執行。` };
     }
 
-    // 5) 互動確認
+    // 5) 互動確認（危險命令即使選 always 也只放行這次，不永久放行）
     const decision = await confirm(name, ctx.args, danger);
-    if (decision === 'always' && !danger) return undefined;
+    if (decision === 'always' && !danger) { alwaysTools.add(name); return undefined; }
     if (decision === 'command' && sig && !danger) { allowedSignatures.add(sig); return undefined; }
     if (decision === 'yes') return undefined;
     return { block: true, reason: `使用者拒絕執行 ${name}。` };
