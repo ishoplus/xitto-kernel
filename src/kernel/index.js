@@ -10,6 +10,7 @@ import { composeGuards } from './guard-chain.js';
 import { createPermissionStep } from './security/permission-step.js';
 import { normalizeSandbox, wrapWithSeatbelt } from './security/sandbox.js';
 import { createMemory } from './memory.js';
+import { createSpawnTool } from './subagent.js';
 import { newSessionId, saveSession, loadSession, listSessions, latestSession } from './session.js';
 
 // 載入 pack.contextFiles：從 cwd 逐層往上找每個檔名，找到就讀入並注入 system prompt（領域規範）。
@@ -101,12 +102,21 @@ export function createKernel(pack, config = {}) {
   const getSandbox = config.getSandbox || (() => !!sandboxCfg.enabled);
   const getSandboxConfig = () => sandboxCfg;
 
-  // 工具：pack 工具（sandboxable 包 Seatbelt、mutating+path 加 undo 快照）+ kernel 內建記憶工具。
+  // 工具：pack 工具（sandboxable 包 Seatbelt、mutating+path 加 undo 快照）+ kernel 內建記憶工具 + spawn_agent。
   const undoStack = [];
-  const tools = [
+  const baseTools = [
     ...pack.tools().map((t) => wrapUndo(wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }), { cwd, undoStack })),
     ...memory.tools,
   ];
+  // spawn_agent：派唯讀子 agent。其可用工具 = 所有唯讀工具（不含 spawn_agent 自己，避免遞迴）。
+  let allTools = baseTools;
+  const spawnTool = createSpawnTool({
+    getModel: () => config.model,
+    getApiKey: config.getApiKey,
+    getReadOnlyTools: () => allTools.filter((t) => t.readOnly === true && t.name !== 'spawn_agent'),
+  });
+  const tools = [...baseTools, spawnTool];
+  allTools = tools;
   const registry = createToolRegistry(tools);
   const mutatingTools = new Set(deriveMutatingTools(pack, tools));
   const services = {
