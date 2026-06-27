@@ -102,7 +102,8 @@ xitto-kernel/
 │       ├── data-query/           ✅ 第二領域（證明正交）
 │       ├── notes/                ✅ 第三領域（知識庫）
 │       ├── general/              ✅ 通用自主 agent（檔案/shell/web/http + goal loop）
-│       └── deep-research/        ✅ 深度研究（多來源搜尋→查證→有引用結論）
+│       ├── deep-research/        ✅ 深度研究（多來源搜尋→查證→有引用結論）
+│       └── devops/               ✅ 維運/SRE（shell + bash_bg + 設定 + 日誌 + 健康檢查）
 ├── bin/xitto-kernel.js           ✅ CLI 進入點（run / new-agent）
 ├── test/                         ✅ 41 測試全綠（runTurn + Seatbelt 隔離 + 腳手架 + …）
 └── examples/
@@ -151,6 +152,7 @@ xitto-kernel/
 | general | GAIA 風格 | 答案比對 / 狀態檢查 | `node eval/general-run.js` | 4/4 |
 | data-query | Spider/BIRD 風格 | 真實 SQLite + 答案比對 | `node eval/data-query-run.js` | 4/4 |
 | deep-research | GAIA/研究 | 事實正確 + 真的查證（allOf）| `node eval/deep-research-run.js` | 3/3 |
+| devops | Terminal-Bench 風格 | 狀態檢查（系統/檔案達標）| `node eval/devops-run.js` | 4/4 |
 | 工具呼叫 | BFCL 風格 | 軌跡檢查（呼叫對工具/參數）| `node eval/tool-calling-run.js` | 6/6 |
 
 \* 用 MiniMax-M2.7 跑的參考數字（小樣本）；換模型/擴樣本見 `eval/README.md`。scorer 型：`answerMatch` / `stateCheck` / `toolCalled`。
