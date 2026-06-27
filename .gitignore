@@ -11,3 +11,5 @@ providers.json
 .swebench-repos/
 predictions*.jsonl
 verified*.jsonl
+# 評估/執行時產生的 SQLite db
+*.db
