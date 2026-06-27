@@ -38,6 +38,30 @@ node eval/run.js      # 需 ~/.xitto-code/providers.json
 4. **接線點**：把 `runTask` 裡「建 repo / 跑 verify」換成「Docker checkout / 套 test_patch / 跑指定測試」，
    `createKernel(createCodingPack({cwd}), …) + runGoal(problem_statement)` 那段照舊。
 
+### 完整步驟（真實 SWE-bench Verified）
+
+需求：一台有 **Docker** 的機器、Python、足夠磁碟（映像大）、有預算的 API key、時間（建議先跑 20–50 題子集）。
+
+```bash
+# 1) 匯出 Verified 資料集成逐行 JSON（一次）
+pip install datasets
+python -c "from datasets import load_dataset; \
+  [print(__import__('json').dumps(dict(x))) for x in load_dataset('princeton-nlp/SWE-bench_Verified', split='test')]" \
+  > verified.jsonl
+
+# 2) 用 xitto-kernel 產 patch（這側）—— clone repo@base_commit、跑 coding pack、git diff
+node eval/swebench-generate.js --instances verified.jsonl --limit 20 --out predictions.jsonl
+
+# 3) 官方 harness 跑隱藏測試評估（Docker，套 test_patch + FAIL_TO_PASS/PASS_TO_PASS）
+pip install swebench
+python -m swebench.harness.run_evaluation \
+  --dataset_name princeton-nlp/SWE-bench_Verified \
+  --predictions_path predictions.jsonl --max_workers 4 --run_id xitto1
+# → 產出 resolved 報告（resolved 數 / 總數）
+```
+
+`swebench-generate.js` 的 `model_name_or_path` 設成 `xitto-kernel`；要換模型比較，改 `providers.json` 的 `defaultModel`。
+
 > 公平比較提醒：code agent 成績 = scaffold（工具設計）+ 模型。要比「工具 vs Claude Code/Codex」，
 > 用**同一底層模型**跑同一子集；否則比的是「工具+模型」綁一起。建議先跑 50 題 Verified 子集，
 > 記錄 pass@1 + 成本 + 回合，再對照各家官方數字。
