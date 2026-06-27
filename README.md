@@ -87,6 +87,12 @@ const o = await kernel.runOutcome('建立 greet.js 並寫個範例驗證');
 ```
 `--goal` 與 server 的 `POST /v1/tasks`（mode=goal）都會回交付物——**產出/改動的檔案**(掃工作目錄前後 diff,連 bash 寫的也抓)+ 摘要 + 是否達成。對話被降格成過程,結果(檔案/達成)被擺到最前面。背景任務的 webhook 也帶 `artifacts`。
 
+**澄清通道（只在非問不可時才打斷你）**：自主交付的風險是「自主走錯」。`ask_user` 工具讓 agent 在**缺少關鍵資訊、無法合理推斷**時暫停提問——而非盲猜或頻繁打擾(prompt 明確引導:能用合理預設就別問)。由 app 注入 `config.askUser` 決定「問」的形態：
+- **CLI**：內嵌提問,你打字回答,agent 續跑
+- **背景任務**：任務轉 `needs-input` 狀態並掛起問題 → 你 `POST /v1/tasks/:id/answer` 回答 → 解除暫停、續跑(可隔數小時才答,完全非同步)
+
+實測:給「建個設定檔但檔名/內容我還沒決定」→ agent 不亂猜,暫停問你檔名與內容 → 答完才交付正確的 `app.config.json`。這讓「許願→交付」既自主又不失控。
+
 ## 當成服務跑（不只 CLI）
 
 kernel 是 UI 無關的，CLI 只是其中一個 app。`src/app/server.js` 是把它包成 **HTTP 服務**的 PoC

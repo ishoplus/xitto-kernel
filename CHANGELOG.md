@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.2
+
+- **澄清通道（結果導向第二刀）**：agent 只在非問不可時暫停提問,而非盲猜或頻繁打擾。
+  - 新增 `ask_user` 工具（app 提供 `config.askUser` 才注入；readOnly）；prompt 引導節制使用(能合理推斷就別問)
+  - **CLI**：`askUser` 內嵌提問,使用者打字回答,agent 續跑
+  - **背景任務 pause/resume**：`createTaskStore` 的 `runJob` 多收 `ask`；呼叫即轉 `needs-input` 並掛起問題;
+    新增 `POST /v1/tasks/:id/answer` 回答後解除暫停、續跑（完全非同步,可隔很久才答）
+  - 任務 view 帶 `pending`（待答問題）；事件流發 `needs_input` / `answered`
+  - 4 個測試（工具有無/回空提示 + 佇列 pause/answer/resume + 無待答回 false）+ 真實 server 端到端
+    （under-spec 目標 → agent 暫停問檔名/內容 → 答完交付正確檔案）
+
 ## 0.4.1
 
 - **結果導向：交付物為一等公民（「對話只是過程」）**：第一刀朝非技術使用者的「許願→交付」模型。

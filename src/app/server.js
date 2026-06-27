@@ -46,12 +46,19 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
   const subs = new Map();    // id -> Set<(ev)=>void>
   let active = 0;
 
-  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', sessionId: t.result?.sessionId || t.spec.sessionId || null, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error });
+  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', sessionId: t.result?.sessionId || t.spec.sessionId || null, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null });
 
   const emit = (t, ev) => {
     t.events.push(ev);
     if (t.events.length > maxEvents) t.events.shift();
     const s = subs.get(t.id); if (s) for (const fn of s) { try { fn(ev); } catch { /* 訂閱端錯不影響任務 */ } }
+  };
+
+  // 澄清通道：job 呼叫 ask({question,options}) → 任務轉 needs-input、暫停,直到有人 answer()
+  const makeAsk = (t) => ({ question, options }) => {
+    t.status = 'needs-input'; t.pending = { question: String(question || ''), options: options || null };
+    emit(t, { type: 'needs_input', question: t.pending.question, options: t.pending.options });
+    return new Promise((resolve) => { t._answer = resolve; });
   };
 
   function pump() {
@@ -61,7 +68,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
       t.status = 'running'; t.startedAt = new Date().toISOString();
       emit(t, { type: 'status', status: 'running' });
       Promise.resolve()
-        .then(() => runJob(t.spec, (ev) => emit(t, ev)))
+        .then(() => runJob(t.spec, (ev) => emit(t, ev), makeAsk(t)))
         .then((result) => { t.status = 'done'; t.result = result; })
         .catch((e) => { t.status = 'error'; t.error = e.message || String(e); })
         .finally(() => {
@@ -87,6 +94,15 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
     result: (id) => { const t = tasks.get(id); return t ? { ...view(t), result: t.result } : null; },
     list: () => [...tasks.values()].map(view),
     subscribe(id, fn) { let s = subs.get(id); if (!s) { s = new Set(); subs.set(id, s); } s.add(fn); return () => s.delete(fn); },
+    // 回答一個待答任務 → 解除暫停、續跑。回 true 表示有對應的待答問題。
+    answer(id, text) {
+      const t = tasks.get(id);
+      if (!t || typeof t._answer !== 'function') return false;
+      const resolve = t._answer; t._answer = null; t.pending = null; t.status = 'running';
+      emit(t, { type: 'answered', answer: String(text ?? '') });
+      resolve(String(text ?? ''));
+      return true;
+    },
     stats: () => ({ active, queued: queue.length, total: tasks.size }),
   };
 }
@@ -111,14 +127,15 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
   const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 1e6) req.destroy(); }); req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch { resolve({}); } }); });
   const sseHead = (res) => res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
 
-  // 共用：跑一輪/一目標，回傳 { sessionId, text, usage, rounds, done }；onEvent 收原始 kernel 事件
-  async function runKernel(spec, onEvent) {
+  // 共用：跑一輪/一目標，回傳 { sessionId, text, usage, rounds, done }；onEvent 收原始 kernel 事件；
+  // ask（可選）= 澄清通道,讓 agent 在背景任務中暫停問使用者。
+  async function runKernel(spec, onEvent, ask) {
     const make = PACKS[spec.pack || 'general'];
     if (!make) throw new Error(`未知 pack「${spec.pack}」，可用：${Object.keys(PACKS).join(', ')}`);
     const sessionId = spec.sessionId || newId();
     const sess = sessions.get(sessionId) || { pack: spec.pack || 'general', history: [] };
     const workdir = join(baseDir, sessionId); mkdirSync(workdir, { recursive: true });
-    const kernel = createKernel(make({ cwd: workdir }), { cwd: workdir, model, getApiKey, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes' });
+    const kernel = createKernel(make({ cwd: workdir }), { cwd: workdir, model, getApiKey, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes', ...(ask ? { askUser: ask } : {}) });
     const usage = { input: 0, output: 0 };
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
     if (spec.mode === 'goal') {
@@ -143,7 +160,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
 
   const tasks = createTaskStore({
     concurrency,
-    runJob: (spec, emit) => runKernel(spec, (ev) => { const m = mapEvent(ev); if (m) emit(m); }),
+    runJob: (spec, emit, ask) => runKernel(spec, (ev) => { const m = mapEvent(ev); if (m) emit(m); }, ask),
     onFinish: (task) => { log({ task: task.id, pack: task.spec.pack, mode: task.spec.mode || 'turn', status: task.status, ms: task.startedAt ? Date.parse(task.finishedAt) - Date.parse(task.startedAt) : 0 }); fireWebhook(task); },
   });
 
@@ -186,6 +203,18 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     const mTask = path.match(/^\/v1\/tasks\/([^/]+)$/);
     if (req.method === 'GET' && mTask) { const v = tasks.result(mTask[1]); return v ? json(res, 200, v) : json(res, 404, { error: 'task not found' }); }
 
+    // 回答待答任務（澄清通道）：背景任務問了問題,使用者把答案送回 → 解除暫停、續跑
+    const mAns = path.match(/^\/v1\/tasks\/([^/]+)\/answer$/);
+    if (req.method === 'POST' && mAns) {
+      const body = await readBody(req);
+      const t = tasks.get(mAns[1]);
+      if (!t) return json(res, 404, { error: 'task not found' });
+      if (t.status !== 'needs-input') return json(res, 409, { error: '此任務目前沒有待答問題', status: t.status });
+      tasks.answer(mAns[1], body.answer);
+      log({ task: mAns[1], action: 'answer' });
+      return json(res, 200, { ok: true, taskId: mAns[1], status: 'running' });
+    }
+
     // 附掛背景任務的事件流（replay 緩衝 + 即時；已結束則回放後關閉）
     const mEv = path.match(/^\/v1\/tasks\/([^/]+)\/events$/);
     if (req.method === 'GET' && mEv) {
@@ -214,7 +243,7 @@ export function startServer() {
   server.listen(port, () => {
     console.log(`xitto-kernel server · http://localhost:${port} · model ${model.id} · 沙箱 ${sandbox ? '開' : '關'} · 背景並發 ${concurrency}`);
     console.log(`token: ${token === 'dev-token' ? 'dev-token（請設 XITTO_SERVER_TOKEN）' : '(已設定)'}`);
-    console.log('路由：POST /v1/run · /v1/stream · /v1/tasks（背景+webhook）｜GET /v1/tasks[/:id[/events]] · /health');
+    console.log('路由：POST /v1/run · /v1/stream · /v1/tasks（背景+webhook）· /v1/tasks/:id/answer（澄清）｜GET /v1/tasks[/:id[/events]] · /health');
   });
   return server;
 }

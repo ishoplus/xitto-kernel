@@ -37,6 +37,8 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
     getPlanMode: () => planMode,            // 計劃模式：守衛擋 mutating 工具
     autoExtractMemory: true,                // 事實層：每輪後自動萃取持久事實進記憶（非阻塞）
     confirm: askConfirm,                    // 互動權限確認（mutating/危險工具執行前）
+    askUser: askUserQuestion,               // 澄清通道：agent 非問不可時向使用者提問並等待
+
     onTrusted: ({ name, signature, scope }) => {            // 漸進放權：自動放行時標示「已信任」（維持可理解）
       endStream();
       out(c.gray(`  ✓ 已信任 ${scope === 'command' ? `「${signature}」類` : name}，自動放行\n`));
@@ -89,6 +91,16 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
           res(a === 'y' || a === 'yes' ? 'yes' : 'no');
         });
       } catch { res('no'); }
+    });
+  }
+
+  // 澄清通道：agent 呼叫 ask_user 時,內嵌問使用者並等待回答（自由文字；options 只當提示）
+  async function askUserQuestion({ question, options }) {
+    endStream();
+    out('\n' + c.cyan('  ❓ ' + String(question || '')) + '\n');
+    if (Array.isArray(options) && options.length) out(c.gray('     選項：' + options.map((o, i) => `${i + 1}) ${o}`).join('   ')) + '\n');
+    return new Promise((res) => {
+      try { rl.question(c.cyan('  你的回答 › '), (ans) => res((ans || '').trim())); } catch { res(''); }
     });
   }
 

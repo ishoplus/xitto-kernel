@@ -172,6 +172,18 @@ export function createKernel(pack, config = {}) {
   };
   const skills = createSkills(join(dataDir, 'skills'), { verifyRunner: runVerify }); // 漸進揭露 + 結晶（須驗證）
 
+  // 澄清通道：app 提供 askUser 才有 ask_user 工具（結果導向:自主完成,只在非問不可時才打斷使用者）。
+  const askUserTool = typeof config.askUser === 'function' ? {
+    name: 'ask_user', label: '詢問使用者', readOnly: true,
+    description: '只在「缺少關鍵資訊、無法合理推斷、或決策會明顯改變結果」時,才向使用者提問並等待回答。能自己判斷、能用合理預設就別問——盡量自主完成,把打斷降到最低。回傳使用者的回答。',
+    parameters: { type: 'object', properties: { question: { type: 'string', description: '簡短、具體的問題' }, options: { type: 'array', items: { type: 'string' }, description: '可選:提供幾個選項供使用者挑' } }, required: ['question'] },
+    execute: async (_id, { question, options }) => {
+      let answer; try { answer = await config.askUser({ question, options }); } catch { answer = null; }
+      const text = (answer == null || answer === '') ? '(使用者未回答；請用合理預設繼續，不要再追問)' : String(answer);
+      return { content: [{ type: 'text', text: JSON.stringify({ answer: text }) }] };
+    },
+  } : null;
+
   // 工具：pack 工具（sandboxable 包 Seatbelt、mutating+path 加 undo 快照）+ kernel 內建記憶工具 + spawn_agent。
   const undoStack = [];
   const baseTools = [
@@ -179,6 +191,7 @@ export function createKernel(pack, config = {}) {
     ...memory.tools,
     ...playbook.tools,
     ...episodes.tools,
+    ...(askUserTool ? [askUserTool] : []),
     todo.tool,
     ...skills.tools,
     ...(config.extraTools || []),  // 外部注入（MCP 工具等）：由 app 層先 async 載入再傳入
@@ -209,6 +222,7 @@ export function createKernel(pack, config = {}) {
     '\n\n# 記憶與專案手冊\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) + '\n' + DEFAULT_PLAYBOOK_GUIDE + '\n' + DEFAULT_EPISODE_GUIDE +
     (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '') +
     (pbText ? `\n\n# 專案手冊（這個專案怎麼做事，跨 session 累積）\n${pbText}` : '') +
+    (askUserTool ? '\n\n# 詢問\n盡量自主完成目標。只在缺少關鍵資訊、無法合理推斷、或決策會明顯改變結果時，才用 ask_user 問使用者；能用合理預設就別問。' : '') +
     skills.promptSection();
 
   const getPlanMode = config.getPlanMode || (() => false);
