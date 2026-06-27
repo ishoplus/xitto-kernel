@@ -2,8 +2,8 @@
 // 確定性那半部：pack 載入、工具註冊、mutatingTools 推導、固定順序守衛鏈、systemPrompt 組裝、
 // 單一工具呼叫（runTool）。LLM 那半部：runTurn 驅動移植自 xitto-code 的 Agent loop
 // （串流 + 多步工具循環 + 守衛接線）。壓縮/TUI 仍為後續接縫。
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join, dirname, isAbsolute } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
+import { join, dirname, isAbsolute, relative } from 'node:path';
 import { loadPack } from './pack-loader.js';
 import { createToolRegistry, deriveMutatingTools, isSandboxable } from './tool-registry.js';
 import { composeGuards } from './guard-chain.js';
@@ -42,6 +42,25 @@ function loadContextFiles(cwd, names) {
   if (!found.length) return '';
   return '\n\n# 專案規範（讀自下列檔案，請遵守）\n' +
     found.map((f) => `## ${f.name}\n${f.text.trim()}`).join('\n\n');
+}
+
+// 交付物偵測：掃工作目錄前後快照,diff 出「產出/改動的檔案」（pack 無關,連 bash 寫的也抓得到）。
+const SKIP_SCAN = new Set(['.xitto-kernel', 'node_modules', '.git', '.swebench-repos', '.xitto-server']);
+function scanWorkdir(dir, base = dir, acc = new Map(), depth = 0) {
+  if (depth > 8 || acc.size > 5000) return acc;
+  let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return acc; }
+  for (const e of entries) {
+    if (SKIP_SCAN.has(e.name)) continue;
+    const full = join(dir, e.name);
+    if (e.isDirectory()) scanWorkdir(full, base, acc, depth + 1);
+    else if (e.isFile()) { try { const s = statSync(full); acc.set(relative(base, full), `${s.mtimeMs}:${s.size}`); } catch { /* 略 */ } }
+  }
+  return acc;
+}
+function diffWorkdir(before, after) {
+  const created = [], modified = [];
+  for (const [rel, sig] of after) { if (!before.has(rel)) created.push(rel); else if (before.get(rel) !== sig) modified.push(rel); }
+  return { created: created.sort(), modified: modified.sort() };
 }
 
 const DEFAULT_MEMORY_GUIDE =
@@ -414,6 +433,22 @@ export function createKernel(pack, config = {}) {
         instruction = `目標尚未達成。驗收回饋：${v.remaining}\n請繼續完成目標：${goal}`;
       }
       return { done: false, maxedOut: true, rounds: maxRounds, history };
+    },
+
+    /**
+     * 結果導向：給目標 → 跑 goal loop → 回「交付物」（做了什麼 + 產出/改動的檔案 + 是否達成）。
+     * 對非技術使用者:對話只是過程,這回傳的才是產品。
+     * @param {string} goal
+     * @param {object} [opts] 同 runGoal
+     * @returns {Promise<{ goal, done, rounds, aborted, stalled, summary, artifacts: {created:string[], modified:string[]}, history }>}
+     */
+    runOutcome: async (goal, opts = {}) => {
+      const before = scanWorkdir(cwd);
+      const g = await api.runGoal(goal, opts);
+      const artifacts = diffWorkdir(before, scanWorkdir(cwd));
+      const lastAssistant = [...(g.history || [])].reverse().find((m) => m.role === 'assistant');
+      const summary = (lastAssistant?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim();
+      return { goal, done: !!g.done, rounds: g.rounds, aborted: !!g.aborted, stalled: !!g.stalled, summary, artifacts, history: g.history };
     },
   };
   return api;

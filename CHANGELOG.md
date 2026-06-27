@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+
+- **結果導向：交付物為一等公民（「對話只是過程」）**：第一刀朝非技術使用者的「許願→交付」模型。
+  - 新增 `api.runOutcome(goal, opts)`：跑 goal loop,回傳**交付物** `{ done, summary, artifacts:{created,modified}, rounds, history }`
+  - 交付物偵測：掃工作目錄前後 diff（pack 無關,連 bash 寫的檔也抓；排除 .xitto-kernel/node_modules/.git）
+  - `--goal` 改印交付物（📦 產出/改動檔案 + 📝 摘要),不再只報達成輪數
+  - server `POST /v1/tasks`（mode=goal）回 `artifacts`；背景任務 webhook payload 也帶 `artifacts`
+  - 3 個測試（created/modified/無變動 + 內部沉澱檔不算交付物）+ 真實 model 端到端（產出 greet.js/example.js）
+  - 後續規劃:澄清通道（ask_user 暫停/續跑）、Job 介面（成品歷史）
+
 ## 0.4.0
 
 **「執行中沉澱經驗」五層完整**（反射 / 事實 / 程序 / 情節 / 結晶）——里程碑。

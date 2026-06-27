@@ -87,7 +87,7 @@ export async function main(argv = process.argv.slice(2)) {
       confirm: opts.yes ? (async () => 'yes') : undefined, // headless：--yes 才自動核准 mutating
     });
     console.log(cyan('🎯 目標：') + opts.goal + gray(`  ·  ${opts.pack} pack · ${model.id}`));
-    const res = await kernel.runGoal(opts.goal, {
+    const res = await kernel.runOutcome(opts.goal, {
       onRound: ({ round, maxRounds }) => console.log(yellow(`\n🔁 第 ${round}/${maxRounds} 輪`)),
       onCheck: ({ done, remaining }) => console.log(done ? green('  ✓ 驗收：已達成') : gray(`  ↻ 驗收：${remaining}`)),
       onEvent: (ev) => {
@@ -95,8 +95,16 @@ export async function main(argv = process.argv.slice(2)) {
         if (ev.type === 'tool_execution_end') console.log(ev.isError ? red('    ⎿ ✗') : gray('    ⎿ ✓'));
       },
     });
-    const why = res.stalled ? '無進展停止' : res.aborted ? '中斷' : res.verifyBroken ? '驗收持續失敗' : '到上限';
-    console.log('\n' + (res.done ? green(`✅ 目標達成（${res.rounds} 輪）`) : yellow(`⚠ 未達成（${why}，${res.rounds} 輪）`)));
+    // 交付物（對話只是過程，這才是產品）
+    const why = res.stalled ? '無進展停止' : res.aborted ? '中斷' : '到上限';
+    console.log('\n' + (res.done ? green(`✅ 已交付（${res.rounds} 輪）`) : yellow(`⚠ 未完成（${why}，${res.rounds} 輪）`)));
+    const { created, modified } = res.artifacts;
+    if (created.length || modified.length) {
+      console.log(cyan('📦 產出檔案：'));
+      created.forEach((f) => console.log(green(`   + ${f}`)));
+      modified.forEach((f) => console.log(yellow(`   ~ ${f}`)));
+    } else console.log(gray('   （沒有檔案變動）'));
+    if (res.summary) console.log(cyan('📝 摘要：') + gray(res.summary.slice(0, 400)));
     try { await mcp.close(); } catch { /* 略 */ }
     process.exit(res.done ? 0 : 1);
   }
