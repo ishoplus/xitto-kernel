@@ -1,6 +1,6 @@
 {
   "name": "xitto-kernel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "領域無關的 agent 底座（kernel + 可插拔 DomainPack），從 xitto-code 抽象而來",
   "keywords": [
@@ -34,7 +34,8 @@
     "bin",
     "docs",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node --test",
