@@ -6,3 +6,8 @@ providers.json
 .xitto-code/
 # kernel 執行期資料（記憶 / session）
 .xitto-kernel/
+
+# SWE-bench 評估產物（本機，勿進版控）
+.swebench-repos/
+predictions*.jsonl
+verified*.jsonl
