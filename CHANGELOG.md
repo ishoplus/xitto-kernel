@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1
+
+首次使用導引 —— 不再假設使用者已有 xitto-code。
+
+### 新增
+
+- **`xitto-kernel init`**：互動式設定導引，產生 `~/.xitto-code/providers.json`
+  - 內建 provider 範本（MiniMax / Anthropic / OpenAI / DeepSeek / 自訂）
+  - 引導選 provider → 填 model → 處理 API key（環境變數參照 `${NAME}` 不落地，或內嵌）
+  - 既有設定不覆寫；`--force` 合併新 provider
+  - pipe-safe 逐行讀取（可 `echo answers | xitto-kernel init` 腳本化）
+- **沒設定就啟動**：改丟明確提示，引導跑 `xitto-kernel init`（不再叫人去找 xitto-code 的範例檔）
+- README 快速開始改為 安裝 → `init` → 啟動 三步
+
 ## 0.3.0
 
 把底座的「能力」與「體驗」補到接近 Claude Code，並擴充領域 pack 與評測。

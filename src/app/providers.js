@@ -7,7 +7,7 @@ import { join } from 'node:path';
 const DEFAULT_PATH = () => process.env.XITTO_CODE_CONFIG || join(homedir(), '.xitto-code', 'providers.json');
 
 export function loadProvidersConfig(path = DEFAULT_PATH()) {
-  if (!existsSync(path)) throw new Error(`找不到 providers.json：${path}\n（可複用 xitto-code 的 ~/.xitto-code/providers.json）`);
+  if (!existsSync(path)) { const err = new Error(`找不到 providers.json：${path}`); err.noConfig = true; throw err; }
   return { ...JSON.parse(readFileSync(path, 'utf8')), path };
 }
 

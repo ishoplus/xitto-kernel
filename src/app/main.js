@@ -5,6 +5,7 @@ import { loadModel } from './providers.js';
 import { runCli } from './cli.js';
 import { runTui } from './tui-run.js';
 import { newAgent } from './scaffold.js';
+import { runInit } from './init.js';
 import { createKernel } from '../kernel/index.js';
 import { loadMcpTools } from '../kernel/mcp.js';
 import { createCodingPack } from '../packs/coding/index.js';
@@ -27,6 +28,9 @@ const PACKS = {
 };
 
 export async function main(argv = process.argv.slice(2)) {
+  // 子指令：init —— 首次設定導引，產生 providers.json
+  if (argv[0] === 'init') { await runInit(argv.slice(1)); return; }
+
   // 子指令：new-agent <name> —— 產出獨立 agent 專案（不碰 kernel）
   if (argv[0] === 'new-agent') {
     const name = argv.find((a, i) => i >= 1 && !a.startsWith('--'));
@@ -50,7 +54,14 @@ export async function main(argv = process.argv.slice(2)) {
 
   let model, getApiKey;
   try { ({ model, getApiKey } = loadModel(opts.model)); }
-  catch (err) { console.error('\x1b[31m' + err.message + '\x1b[0m'); process.exit(1); }
+  catch (err) {
+    console.error(red(err.message));
+    if (err.noConfig) {
+      console.error('\n' + cyan('首次使用？') + ' 跑一次設定導引：');
+      console.error(green('  xitto-kernel init') + gray('   # 選 provider、填 model、設定 API key'));
+    }
+    process.exit(1);
+  }
 
   // MCP：啟動時連 .xitto-kernel/<pack>/mcp.json 的 server，工具以 extraTools 注入
   const cwd = process.cwd();
@@ -112,6 +123,7 @@ function printHelp() {
     'xitto-kernel — 領域無關 agent 底座',
     '',
     '用法:',
+    '  xitto-kernel init                                        首次設定導引（產生 providers.json）',
     '  xitto-kernel [--pack <name>] [--model <id>] [--sandbox] [--resume [id]] [--yes]   互動跑內建 pack',
     '  xitto-kernel --pack general --goal "..." [--yes]         目標驅動自主循環（headless）',
     '  xitto-kernel new-agent <name>                            產出依賴 kernel 的獨立 agent 專案',
@@ -125,7 +137,7 @@ function printHelp() {
     '  --yes, -y       自動核准 mutating 工具（headless / 自主循環常用）',
     '  --help          顯示說明',
     '',
-    '需要 ~/.xitto-code/providers.json（與 xitto-code 共用）。',
+    '首次使用先跑 `xitto-kernel init` 建立 ~/.xitto-code/providers.json（已是 xitto-code 使用者可直接共用）。',
     'new-agent 產出的是獨立專案，import xitto-kernel 而非修改它——升級不固化。',
   ].join('\n'));
 }
