@@ -39,6 +39,9 @@ export const mapEvent = (ev) => {
   if (ev.type === 'tool_execution_start') return { type: 'tool', name: ev.toolName, args: ev.args };
   if (ev.type === 'tool_execution_end') return { type: 'tool_end', name: ev.toolName, isError: !!ev.isError };
   if (ev.type === 'message_update' && ev.assistantMessageEvent?.type === 'text_delta') return { type: 'text', delta: ev.assistantMessageEvent.delta };
+  if (ev.type === 'round') return { type: 'round', round: ev.round, maxRounds: ev.maxRounds };
+  if (ev.type === 'verify_start') return { type: 'phase', phase: 'verifying' };
+  if (ev.type === 'verify_end') return { type: 'phase', phase: ev.ok ? 'verified' : 'fixing' };
   return null;
 };
 
@@ -57,11 +60,19 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
   const subs = new Map();    // id -> Set<(ev)=>void>
   let active = 0;
 
-  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', goal: t.spec.goal || t.spec.input || '', sessionId: t.result?.sessionId || t.spec.sessionId || null, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null });
+  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', goal: t.spec.goal || t.spec.input || '', sessionId: t.result?.sessionId || t.spec.sessionId || null, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null, progress: t.progress || null });
 
   const emit = (t, ev) => {
     t.events.push(ev);
     if (t.events.length > maxEvents) t.events.shift();
+    // 進度追蹤（給 UI 顯示「正在做什麼」,不要只顯示進行中；排除 text 雜訊）
+    const p = (t.progress ||= { steps: 0, round: 0, maxRounds: 0, recent: [], phase: 'starting' });
+    if (ev.type === 'tool') { p.steps++; p.phase = 'acting'; p.recent.push({ name: ev.name, args: ev.args }); if (p.recent.length > 6) p.recent.shift(); }
+    else if (ev.type === 'round') { p.round = ev.round; if (ev.maxRounds) p.maxRounds = ev.maxRounds; }
+    else if (ev.type === 'phase') p.phase = ev.phase;
+    else if (ev.type === 'needs_input') p.phase = 'needs-input';
+    else if (ev.type === 'answered') p.phase = 'acting';
+    else if (ev.type === 'end') p.phase = ev.status;
     const s = subs.get(t.id); if (s) for (const fn of s) { try { fn(ev); } catch { /* 訂閱端錯不影響任務 */ } }
   };
 
@@ -151,7 +162,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
     if (spec.mode === 'goal') {
       // 結果導向：回傳交付物（做了什麼 + 產出的檔案 + 是否達成），對話只是過程
-      const o = await kernel.runOutcome(spec.goal || spec.input || '', { history: sess.history, onEvent: wrapped });
+      const o = await kernel.runOutcome(spec.goal || spec.input || '', { history: sess.history, onEvent: wrapped, onRound: (i) => wrapped({ type: 'round', round: i.round, maxRounds: i.maxRounds }) });
       sess.history = o.history || []; sessions.set(sessionId, sess);
       return { sessionId, text: o.summary || lastText(sess.history), usage, rounds: o.rounds, done: o.done, artifacts: o.artifacts };
     }

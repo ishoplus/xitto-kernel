@@ -29,6 +29,11 @@
   .status.done { color:var(--ok); border-color:var(--ok); }
   .status.error { color:#f08a8a; border-color:#f08a8a; }
   .activity { color:var(--dim); font-size:13px; margin-top:8px; min-height:20px; }
+  .phase { color:var(--accent); font-size:13px; margin-bottom:5px; }
+  .step { font-size:13px; color:var(--dim); padding:1px 0; }
+  .step.cur { color:var(--fg); }
+  .dots::after { content:""; animation:dots 1.4s steps(4,end) infinite; }
+  @keyframes dots { 0%{content:""} 25%{content:"·"} 50%{content:"··"} 75%{content:"···"} }
   .summary { margin-top:10px; white-space:pre-wrap; }
   .files { margin-top:10px; }
   .file { display:inline-block; margin:3px 6px 0 0; padding:4px 10px; background:#0c0e12; border:1px solid var(--line); border-radius:8px; font-size:13px; cursor:pointer; color:var(--accent); }
@@ -73,6 +78,18 @@ const $ = (s) => document.querySelector(s);
 const api = (p, opts={}) => fetch(p, { ...opts, headers: { authorization:"Bearer "+TOKEN, "content-type":"application/json", ...(opts.headers||{}) } });
 const esc = (s) => String(s==null?"":s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
+// 把工具動作翻成人話,讓「進行中」變成看得懂的進度
+const TOOL_ZH = { read:"讀取檔案", ls:"查看目錄", glob:"尋找檔案", grep:"搜尋內容", write:"建立檔案", edit:"修改檔案", bash:"執行指令", web_search:"搜尋網路", web_fetch:"讀取網頁", http:"呼叫 API", read_image:"看圖片", skill:"載入技能", skill_save:"記錄技能", skills_check:"複查技能", playbook_update:"記下做法", episode_record:"記下經驗", episode_recall:"回想經驗", memory_save:"記住重點", todo_write:"規劃步驟", spawn_agent:"派出子助手", ask_user:"來問你" };
+const PHASE_ZH = { starting:"啟動中", acting:"執行中", verifying:"驗收中", verified:"驗收通過", fixing:"修正中", "needs-input":"等你回答" };
+const friendlyStep = (a) => { const z = TOOL_ZH[a.name] || a.name; const d = a.args && (a.args.command||a.args.path||a.args.query||a.args.url||a.args.topic||a.args.name) || ""; return z + (d ? ` ${String(d).slice(0,44)}` : ""); };
+function progressHtml(t) {
+  const p = t.progress;
+  if (!p || (!(p.recent||[]).length && !p.round)) return `<div class="activity"><span class="phase dots">準備中</span></div>`;
+  const head = `${PHASE_ZH[p.phase]||"進行中"}${p.round?` · 第 ${p.round} 輪`:""}${p.steps?` · 已執行 ${p.steps} 個動作`:""}`;
+  const steps = (p.recent||[]).slice().reverse().map((a,i)=>`<div class="step ${i===0?"cur":""}">${i===0?"▸":"·"} ${esc(friendlyStep(a))}</div>`).join("");
+  return `<div class="activity"><div class="phase dots">${esc(head)}</div>${steps}</div>`;
+}
+
 // 領域選單（非技術使用者預設「通用」）
 const LABELS = { general:"通用", coding:"程式", "data-query":"查資料", notes:"筆記", "deep-research":"研究", devops:"維運" };
 $("#pack").innerHTML = PACKS.map(p=>`<option value="${p}" ${p==="general"?"selected":""}>${LABELS[p]||p}</option>`).join("");
@@ -107,7 +124,7 @@ function renderCurrent(t) {
   $("#current").innerHTML = `<div class="card">
     <div class="goal">${esc(t.goal||"任務")}</div>
     <span class="status ${statusClass(t.status)}">${statusText(t.status)}${t.rounds?` · ${t.rounds} 輪`:""}</span>
-    ${t.status==="running"||t.status==="queued"?`<div class="activity">⏳ agent 正在自主完成，完成或需要你回答時會更新…</div>`:""}
+    ${t.status==="running"||t.status==="queued"?progressHtml(t):""}
     ${t.status==="needs-input"?`<div class="qbox"><div class="q">❓ ${esc(t.pending?.question)}</div>
       <input id="ans" placeholder="輸入你的回答，按 Enter 送出"></div>`:""}
     ${t.status==="done"?`<div class="summary">${esc(t.result?.text||"")}</div>`:""}
