@@ -35,6 +35,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
     sandbox: { enabled: sandboxOn },        // 提供策略（blockNetwork/allowWritePrefixes）
     getSandbox: () => sandboxOn,            // on/off 由 CLI 即時切換
     getPlanMode: () => planMode,            // 計劃模式：守衛擋 mutating 工具
+    autoExtractMemory: true,                // 事實層：每輪後自動萃取持久事實進記憶（非阻塞）
     confirm: askConfirm,                    // 互動權限確認（mutating/危險工具執行前）
     onTrusted: ({ name, signature, scope }) => {            // 漸進放權：自動放行時標示「已信任」（維持可理解）
       endStream();
@@ -155,6 +156,9 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
       case 'compact':
         endStream();
         out(c.gray(`  ⊙ 已壓縮上下文：${ev.tokensBefore}→${ev.tokensAfter} tokens（摘要 ${ev.summarized} 則，保留 ${ev.kept} 則）\n`));
+        break;
+      case 'memory_extracted':
+        out(c.gray(`  ✓ 自動記住 ${ev.facts.length} 條：${ev.facts.map((f) => f.slice(0, 24)).join('；')}\n`));
         break;
     }
   };

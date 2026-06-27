@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { createMemory } from './memory.js';
 import { createPlaybook } from './playbook.js';
 import { createEpisodes } from './episodes.js';
+import { extractFacts } from './extract.js';
 import { createTodo } from './todo.js';
 import { createSpawnTool } from './subagent.js';
 import { createSkills } from './skills.js';
@@ -113,6 +114,17 @@ export function createKernel(pack, config = {}) {
   const memory = createMemory(join(dataDir, 'memory.md'));
   const playbook = createPlaybook(join(dataDir, 'playbook.md'));
   const episodes = createEpisodes(join(dataDir, 'episodes.jsonl'));
+
+  // 事實層自動萃取：從對話抽持久事實存進 memory（去重靠 memory.save + existing 過濾）。
+  let lastMessages = [];
+  const doExtract = async (messages) => {
+    if (!config.model || !config.getApiKey) return { extracted: [] };
+    const streamFn = config.streamFn || (await import('./provider.js')).defaultStreamFn();
+    const facts = await extractFacts({ model: config.model, getApiKey: config.getApiKey, streamFn, messages: messages || [], existing: memory.list() });
+    const saved = [];
+    for (const f of facts) { if (memory.save(f).saved) saved.push(f); }
+    return { extracted: saved };
+  };
   const todo = createTodo();
   const sessionsDir = join(dataDir, 'sessions');
   const hooks = loadHooks(join(dataDir, 'settings.json')); // PreToolUse/PostToolUse
@@ -223,6 +235,8 @@ export function createKernel(pack, config = {}) {
     },
     sandbox: { isOn: () => getSandbox(), config: () => getSandboxConfig() },
     memory,
+    // 事實層自動萃取：從指定（或上一輪）對話抽持久事實存進 memory，回 { extracted: [...] }。
+    extractMemory: (opts = {}) => doExtract(opts.messages || lastMessages),
     // 專案手冊（程序層沉澱）：列出 / 更新 / 移除 / 全清；path 為落地檔。
     playbook: { list: playbook.list, update: playbook.update, remove: playbook.remove, clear: playbook.clear, load: playbook.load, path: join(dataDir, 'playbook.md') },
     // 技能（結晶層 + 自我維護）：列出 / 移除 / 重掃 / 漂移複查；path 為技能資料夾。
@@ -345,10 +359,18 @@ export function createKernel(pack, config = {}) {
       }
 
       const messages = agent.state.messages;
+      lastMessages = messages;
       const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
       const text = (lastAssistant?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
       const aborted = lastAssistant?.stopReason === 'aborted';
-      return { text, messages, agent, aborted, turnModified };
+      const result = { text, messages, agent, aborted, turnModified };
+      // 事實層自動萃取：非阻塞,把 promise 掛在 result 上供需要者 await（測試/headless）。
+      if (config.autoExtractMemory && !aborted) {
+        result.memoryExtraction = doExtract(messages)
+          .then((r) => { if (r.extracted.length) opts.onEvent?.({ type: 'memory_extracted', facts: r.extracted }); return r; })
+          .catch(() => ({ extracted: [] }));
+      }
+      return result;
     },
 
     /**

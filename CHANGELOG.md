@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+**「執行中沉澱經驗」五層完整**（反射 / 事實 / 程序 / 情節 / 結晶）——里程碑。
+
+- **事實自動萃取（事實層，本版收尾）**：每輪後自動把持久事實抽進記憶,不再只靠 agent 自覺。
+  - 新增 `extract.js`：`extractFacts`（輕量 LLM 單次呼叫,只抽偏好/身分/長期決策/穩定設定）
+  - `runTurn` 在 `config.autoExtractMemory` 開啟時**非阻塞**萃取（掛 `result.memoryExtraction` promise,可 await）；發 `memory_extracted` 事件
+  - 略過一次性任務細節/閒聊；以 existing + memory.save 去重；萃取失敗容錯不影響主流程
+  - `api.extractMemory({messages})` 手動觸發；CLI 預設開啟並顯示「✓ 自動記住 N 條」
+  - 4 個測試（解析 / 去重 / 容錯 / runTurn 鉤子）+ 真實 model 端到端（持久事實存、閒聊略過）
+- 至此五層全齊；README 補上五層總表。
+
 ## 0.3.9
 
 - **情節記憶 + 相關性召回（情節層）**：記「做過什麼任務」,相似任務時自動召回最相關的幾筆。

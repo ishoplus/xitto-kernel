@@ -58,6 +58,20 @@ xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
 
 **情節記憶 + 相關性召回（情節層）**：完成有價值的任務後,agent 用 `episode_record` 記一筆情節(摘要 + tags + 成敗)進 `.xitto-kernel/<pack>/episodes.jsonl`。**關鍵在召回不在存**:遇到相似任務時,kernel **自動**把與當前 input 最相關的 top-K 過往情節(相關性評分:關鍵詞/中文 bigram 重疊 + tag 加權 + 近期微傾)注入該輪 prompt——**只注入最相關的幾條,不全量倒**(避免稀釋 context、誤導)。也可主動 `episode_recall`。記錄時做 Jaccard 去重避免膨脹。`/episodes` 列近期、`/episodes <關鍵詞>` 測召回、`/episodes clear`。這直接解掉所有記憶系統的真正瓶頸——**召回對的那幾條**(零依賴、可解釋的評分,非黑箱 embedding)。
 
+**事實自動萃取（事實層）**：每輪對話後,kernel 用一次輕量 LLM **自動**把「值得跨 session 記住的持久事實」(偏好、身分、長期決策、穩定設定)抽出來存進 `memory`——不再只靠 agent 自覺呼叫 `memory_save`。一次性的任務細節/閒聊會被略過(那是情節層的事),已知事實會過濾不重複。**非阻塞**(掛在 `runTurn` 回傳的 `memoryExtraction` promise,不卡回覆);`config.autoExtractMemory` 開關(CLI 預設開),`api.extractMemory()` 也可手動觸發。對標 xitto 的 extractMemory。
+
+### 沉澱經驗：五層完整
+
+agent 執行中自動累積經驗,且每層都有治理:
+
+| 層 | 沉澱什麼 | 機制 |
+|---|---|---|
+| 反射層 | 什麼安全 | 漸進信任(per-pattern,跨 session) |
+| 事實層 | 記住的事 | 每輪自動萃取持久事實進 memory |
+| 程序層 | 這專案怎麼做 | playbook(按 topic,自動注入) |
+| 情節層 | 做過什麼 | episodes + **相關性召回**(只注入最相關幾條) |
+| 結晶層 | 可複用流程 | 自寫 skill(須驗證 + 自我體檢漂移) |
+
 **通用自主 agent（給目標、自己做到完成）**
 ```bash
 xitto-kernel --pack general --yes --goal "抓取 example.com 摘要成繁中寫進 summary.txt"
