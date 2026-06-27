@@ -38,7 +38,7 @@ test('無 skills 目錄 → skill/skill_save 仍在；promptSection 引導結晶
   const dir = tmp('sk0-');
   try {
     const s = createSkills(join(dir, 'nope'));
-    assert.equal(s.tools.length, 2);                    // skill + skill_save 永遠在
+    assert.deepEqual(s.tools.map((t) => t.name), ['skill', 'skill_save', 'skills_check']); // 永遠在
     assert.match(s.promptSection(), /skill_save/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -102,20 +102,74 @@ test('結晶：無 verifyRunner 環境 → 拒絕新增；slug 防穿越；同�
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('kernel：真實 runVerify — verify 通過(true)才新增，失敗(false)拒絕', async () => {
+test('使用戳記（A）：skill 載入 → usedCount 累加 + lastUsedAt', async () => {
+  const dir = tmp('sku-');
+  try {
+    const sk = mk(dir);
+    const [load, save] = sk.tools;
+    await call(save, { name: 'a', goal: 'g', body: 'b', verify: 'ok' });
+    assert.equal(sk.list().find((s) => s.name === 'a').used, 0);
+    await load.execute('t', { name: 'a' });
+    await load.execute('t', { name: 'a' });
+    const s = sk.list().find((x) => x.name === 'a');
+    assert.equal(s.used, 2);
+    assert.match(readFileSync(join(dir, 'a.md'), 'utf8'), /lastUsedAt:/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('漂移偵測（B）：check 重跑 verify → 標 ok / stale', async () => {
+  const dir = tmp('skd-');
+  try {
+    let failNow = false;
+    const runner = async (cmd) => (/danger/.test(cmd) ? { ok: false, blocked: true, reason: 'x' } : (failNow ? { ok: false, code: 1, output: 'drift' } : { ok: true, code: 0, output: 'ok' }));
+    const sk = createSkills(dir, { verifyRunner: runner });
+    await sk.tools[1].execute('t', { name: 'a', goal: 'g', body: 'b', verify: 'check-cmd' }); // 建立時通過
+    // 仍有效
+    let res = await sk.check();
+    assert.equal(res.find((r) => r.name === 'a').status, 'ok');
+    assert.equal(sk.list().find((s) => s.name === 'a').stale, false);
+    // 專案變動 → verify 失效
+    failNow = true;
+    res = await sk.check();
+    assert.equal(res.find((r) => r.name === 'a').status, 'stale');
+    assert.equal(sk.list().find((s) => s.name === 'a').stale, true);
+    assert.match(sk.promptSection(), /a：.*已失效待修/);
+    // 修好 → check 回 ok,stale 清除
+    failNow = false;
+    await sk.check();
+    assert.equal(sk.list().find((s) => s.name === 'a').stale, false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('漂移偵測：無 verify 區塊的技能 → no-verify（不誤判 stale）', async () => {
+  const dir = tmp('skn-');
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'manual.md'), 'description: 純思考型\n\n# 檢查清單\n- a\n- b');
+    const sk = mk(dir);
+    const res = await sk.check();
+    assert.equal(res.find((r) => r.name === 'manual').status, 'no-verify');
+    assert.equal(sk.list().find((s) => s.name === 'manual').stale, false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('kernel：真實 runVerify — verify 通過(true)才新增，失敗(false)拒絕；api.skills.check 可用', async () => {
   const cwd = tmp('ski-');
   try {
     const model = { id: 'x', provider: 'p', api: 'openai-completions', contextWindow: 1000 };
     const k = createKernel(createGeneralPack({ cwd }), { cwd, model, getApiKey: () => 'k' });
-    assert.ok(k.registry.has('skill') && k.registry.has('skill_save'));
+    assert.ok(k.registry.has('skill') && k.registry.has('skill_save') && k.registry.has('skills_check'));
     const save = k.registry.get('skill_save');
     // 真實在沙箱外跑 `true` → exit 0 → 新增
     const ok = JSON.parse((await save.execute('t', { name: 'release', goal: '發版 SOP', body: 'bump→test→tag', verify: 'true' })).content[0].text);
     assert.equal(ok.saved, 'release');
-    assert.deepEqual(k.skills.list(), [{ name: 'release', desc: '發版 SOP' }]);
+    assert.deepEqual(k.skills.list(), [{ name: 'release', desc: '發版 SOP', used: 0, stale: false }]);
     // `false` → exit 1 → 拒絕
     const bad = JSON.parse((await save.execute('t', { name: 'nope', goal: 'g', body: 'b', verify: 'false' })).content[0].text);
     assert.match(bad.error, /驗證未通過/);
+    // api.skills.check：release 的 verify 是 `true` → 仍 ok
+    const checked = await k.skills.check();
+    assert.equal(checked.find((r) => r.name === 'release').status, 'ok');
     // 新 session：已驗證技能列入 prompt
     const k2 = createKernel(createGeneralPack({ cwd }), { cwd, model, getApiKey: () => 'k' });
     assert.match(k2.systemPrompt, /release：發版 SOP/);

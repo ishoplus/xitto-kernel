@@ -176,7 +176,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
           '  /trust [forget <項>|clear]  已信任的工具/命令（漸進放權,跨 session）',
           '  /memory          顯示跨 session 記憶',
           '  /playbook [forget <主題>|clear]  專案手冊（agent 沉澱的程序知識,跨 session）',
-          '  /skills [forget <名>]  已結晶的技能（agent 自寫的可複用流程）',
+          '  /skills [check|forget <名>]  已結晶技能（用量/失效標示；check 重跑 verify 偵測漂移）',
           '  /sessions        列出已保存的對話',
           '  /resume [id]     續接對話（不給 id=最近一次）',
           '  /clear           清除歷史（開新 session）',
@@ -211,10 +211,18 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
           out(r.removed ? c.gray(`（已移除技能「${r.removed}」）\n`) : c.yellow(`找不到技能「${n}」\n`));
           return true;
         }
+        if (rest === 'check') {
+          out(c.gray('複查中（重跑各技能 verify）…\n'));
+          kernel.skills.check().then((res) => {
+            if (!res.length) { out(c.gray('（尚無技能可複查）\n')); return; }
+            out(res.map((r) => (r.status === 'ok' ? c.green('  ✓ ') : r.status === 'stale' ? c.red('  ✗ ') : c.gray('  - ')) + r.name + c.gray(`（${r.status}）`)).join('\n') + '\n');
+          });
+          return true;
+        }
         const sk = kernel.skills.list();
         if (!sk.length) { out(c.gray('（尚無技能；agent 摸出可重複流程時會用 skill_save 結晶）\n')); return true; }
-        out(sk.map((s) => c.cyan(`  • ${s.name}`) + c.gray(`：${s.desc}`)).join('\n') + '\n');
-        if (kernel.skills.path) out(c.gray(`  ↳ ${kernel.skills.path}（移除：/skills forget <名>）\n`));
+        out(sk.map((s) => (s.stale ? c.red('  ⚠ ') : c.cyan('  • ')) + s.name + c.gray(`：${s.desc}${s.used ? ` · 用過 ${s.used} 次` : ''}${s.stale ? ' · 已失效待修' : ''}`)).join('\n') + '\n');
+        if (kernel.skills.path) out(c.gray(`  ↳ ${kernel.skills.path}（複查：/skills check · 移除：/skills forget <名>）\n`));
         return true;
       }
       case '/trust': {

@@ -54,7 +54,7 @@ xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
 
 **執行中沉澱經驗（專案手冊）**：agent 摸清「這個專案怎麼做事」(建置/測試/部署指令、慣例、必經步驟、踩過的坑與修法)時,會用 `playbook_update` 按 topic 記進 `.xitto-kernel/<pack>/playbook.md`(同 topic 覆蓋,天然去重)；**下次 session 自動載入系統提示,不必重新摸索**。因檔案綁 cwd,手冊天然只對這個專案生效。`/playbook` 查看、`/playbook forget <主題>`、`/playbook clear`。分工:`memory` 存事實/偏好/決策(扁平),`playbook` 存可重複的程序知識(按主題)。
 
-**自我結晶技能（結晶層，須驗證）**：摸出一套可重複的操作流程/SOP 時,agent 用 `skill_save` 把它**寫成新技能**(markdown)存進 `.xitto-kernel/<pack>/skills/`。**政策閘門:每個技能新增時必須附 (1) `goal` 明確目標 (2) `verify` 一條驗證指令——verify 會在沙箱實際執行,通過(exit 0)才落地**,否則拒絕並回傳輸出讓 agent 修正(危險指令一律擋下)。確保結晶的是「已驗證的成功」而非「宣稱的成功」。**本 session 立即可用 `skill` 按名載入(熱掃描),未來 session 自動列入「可用技能」**(漸進揭露:prompt 只列名稱+簡述,需要時才載全文)。`/skills` 查看、`/skills forget <名>` 移除。分工:`playbook` 是專案事實性 know-how,`skill` 是可跨任務複用且**已驗證**的操作流程。這層讓 agent 像 Voyager 一樣**長出自己的技能庫**——但每條都經驗證,且跑在 kernel 的沙箱 + 漸進信任治理裡。
+**自我結晶技能（結晶層，須驗證）**：摸出一套可重複的操作流程/SOP 時,agent 用 `skill_save` 把它**寫成新技能**(markdown)存進 `.xitto-kernel/<pack>/skills/`。**政策閘門:每個技能新增時必須附 (1) `goal` 明確目標 (2) `verify` 一條驗證指令——verify 會在沙箱實際執行,通過(exit 0)才落地**,否則拒絕並回傳輸出讓 agent 修正(危險指令一律擋下)。確保結晶的是「已驗證的成功」而非「宣稱的成功」。**本 session 立即可用 `skill` 按名載入(熱掃描),未來 session 自動列入「可用技能」**(漸進揭露:prompt 只列名稱+簡述,需要時才載全文)。**自我維護**:載入會記用量(`usedCount`);`skills_check`/`/skills check` 重跑每個技能存的 verify 偵測**漂移**——專案變動後失效的標 `⚠ stale` 浮上來讓你修或刪,保持技能庫可信(失效的在 prompt 標注、別誤用)。`/skills` 查看(含用量/失效)、`/skills forget <名>` 移除。分工:`playbook` 是專案事實性 know-how,`skill` 是可跨任務複用且**已驗證**的操作流程。這層讓 agent 像 Voyager 一樣**長出自己的技能庫**——但每條都經驗證、會自我體檢,且跑在 kernel 的沙箱 + 漸進信任治理裡。
 
 **通用自主 agent（給目標、自己做到完成）**
 ```bash

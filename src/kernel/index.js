@@ -219,8 +219,8 @@ export function createKernel(pack, config = {}) {
     memory,
     // 專案手冊（程序層沉澱）：列出 / 更新 / 移除 / 全清；path 為落地檔。
     playbook: { list: playbook.list, update: playbook.update, remove: playbook.remove, clear: playbook.clear, load: playbook.load, path: join(dataDir, 'playbook.md') },
-    // 技能（結晶層）：列出 / 移除 / 重掃；path 為技能資料夾。
-    skills: { list: skills.list, remove: skills.remove, reload: skills.reload, path: join(dataDir, 'skills') },
+    // 技能（結晶層 + 自我維護）：列出 / 移除 / 重掃 / 漂移複查；path 為技能資料夾。
+    skills: { list: skills.list, remove: skills.remove, reload: skills.reload, check: skills.check, path: join(dataDir, 'skills') },
     todo: { get: todo.get },
     /** 撤銷上一次檔案改動（write/edit）：還原內容，新建的檔則刪除。 */
     undo: () => {

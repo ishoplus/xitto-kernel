@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.8
+
+- **技能自我維護（用量戳記 + 漂移偵測）**：結晶後不再靜止,技能庫會自我體檢。
+  - **A 用量戳記**：`skill` 載入時記 `usedCount` / `lastUsedAt`（寫進 frontmatter,不動 body）
+  - **B 漂移偵測**：新增 `skills_check` 工具 + `api.skills.check()`——重跑每個技能存的 verify,
+    仍 exit 0 標 `ok`、失效標 `stale`（清/設 frontmatter）；無 verify 區塊的技能回 `no-verify`(不誤判)
+  - prompt 與 `/skills` 清單顯示用量與 `⚠ 已失效待修`；`/skills check` 觸發複查
+  - frontmatter 簡易解析/patch（splitFront/joinFront/extractVerify）；複用 v0.3.7 存下的 verify
+  - 4 個新測試（用量累加 / ok→stale→修復 / no-verify 不誤判 / api.skills.check）+ 真實 verify 端到端
+    （載入計次、刪檔→stale、復原→ok）。測試 143/143。
+
 ## 0.3.7
 
 - **技能結晶政策閘門（驗證才算數）**：每個自寫技能新增時必須有明確目標 + 通過的驗證,否則不落地。
