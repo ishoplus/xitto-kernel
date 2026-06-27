@@ -138,6 +138,21 @@ xitto-kernel/
 
 **設計取向**：沿用 Node ESM + pi-ai provider 抽象；不重寫 xitto-code（kernel 是抽象，xitto-code 仍可獨立存在）。
 
+## 評估（能力可量化）
+
+每個 pack 配一個 EvalSuite（`eval/`，共用 `eval/framework.js`，不進 npm 包）。
+範式：**新領域 agent = 新 pack（會什麼）+ 新 EvalSuite（怎麼打分）**。
+
+| Suite | 對標 | 評分方式 | 跑法 | 參考結果* |
+|------|------|------|------|------|
+| coding | SWE-bench Verified | 隱藏測試 fail→pass（Docker）| `eval/swebench-generate.js` + 官方 harness | 3/8 resolved（真實子集）|
+| coding（迷你）| SWE-bench 風格 | 隱藏測試（免 Docker）| `npm run eval` | 4/4 |
+| general | GAIA 風格 | 答案比對 / 狀態檢查 | `node eval/general-run.js` | 4/4 |
+| data-query | Spider/BIRD 風格 | 真實 SQLite + 答案比對 | `node eval/data-query-run.js` | 4/4 |
+| 工具呼叫 | BFCL 風格 | 軌跡檢查（呼叫對工具/參數）| `node eval/tool-calling-run.js` | 6/6 |
+
+\* 用 MiniMax-M2.7 跑的參考數字（小樣本）；換模型/擴樣本見 `eval/README.md`。scorer 型：`answerMatch` / `stateCheck` / `toolCalled`。
+
 ## 貢獻
 
 見 [CONTRIBUTING.md](CONTRIBUTING.md)。核心原則：kernel 必須領域無關（安全行為靠工具 metadata，不寫死領域名單）；新領域 = 新增一個 pack，kernel 零改動。

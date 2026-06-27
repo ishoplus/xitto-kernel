@@ -17,6 +17,11 @@ export const answerMatch = (expect) => ({ answer }) => norm(answer).includes(nor
 export const answerMatchAny = (...xs) => ({ answer }) => xs.some((x) => norm(answer).includes(norm(x)));
 export const stateCheck = (cmd) => ({ dir }) => shOk(cmd, dir);
 
+// 軌跡檢查（BFCL 風格）：agent 是否呼叫了某工具（可選 args 條件）。掃 history 的 toolCall。
+export const toolCalled = (name, argPred) => ({ history }) =>
+  (history || []).some((m) => m.role === 'assistant'
+    && (m.content || []).some((c) => c.type === 'toolCall' && c.name === name && (!argPred || (() => { try { return argPred(c.arguments || {}); } catch { return false; } })())));
+
 /**
  * 跑一個 EvalSuite。
  * @param {Object} o
