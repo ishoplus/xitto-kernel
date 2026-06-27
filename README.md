@@ -54,6 +54,8 @@ xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
 
 **執行中沉澱經驗（專案手冊）**：agent 摸清「這個專案怎麼做事」(建置/測試/部署指令、慣例、必經步驟、踩過的坑與修法)時,會用 `playbook_update` 按 topic 記進 `.xitto-kernel/<pack>/playbook.md`(同 topic 覆蓋,天然去重)；**下次 session 自動載入系統提示,不必重新摸索**。因檔案綁 cwd,手冊天然只對這個專案生效。`/playbook` 查看、`/playbook forget <主題>`、`/playbook clear`。分工:`memory` 存事實/偏好/決策(扁平),`playbook` 存可重複的程序知識(按主題)。
 
+**自我結晶技能（結晶層）**：摸出一套可重複的操作流程/SOP 時,agent 用 `skill_save` 把它**寫成新技能**(markdown)存進 `.xitto-kernel/<pack>/skills/`。**本 session 立即可用 `skill` 按名載入(熱掃描),未來 session 自動列入「可用技能」**(漸進揭露:prompt 只列名稱+簡述,需要時才載全文)。技能是指令文字非可執行碼,自寫安全(名稱 slug 化防穿越)。`/skills` 查看、`/skills forget <名>` 移除。分工:`playbook` 是專案事實性 know-how,`skill` 是可跨任務複用的操作流程。這層讓 agent 像 Voyager 一樣**長出自己的技能庫**——但跑在 kernel 的沙箱 + 漸進信任治理裡。
+
 **通用自主 agent（給目標、自己做到完成）**
 ```bash
 xitto-kernel --pack general --yes --goal "抓取 example.com 摘要成繁中寫進 summary.txt"

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.6
+
+- **自我結晶技能（結晶層）**：agent 摸出可重複流程時自己寫成技能,跨任務/跨 session 複用。
+  - 新增 kernel 內建工具 `skill_save`（把流程結晶成 `.xitto-kernel/<pack>/skills/<name>.md`,含 frontmatter description）
+  - `skill` 載入改為**熱掃描**：本 session 剛結晶的技能即時可載；未來 session 自動列入「可用技能」
+  - `skill`/`skill_save` **永遠可用**（即使尚無技能,才能結晶第一個）；name slug 化防路徑穿越,同名覆蓋
+  - 漸進揭露不變：prompt 只列名稱+簡述,需要時才載全文
+  - `/skills`（查看）、`/skills forget <名>`；`api.skills.{list,remove,reload,path}`
+  - 6 個測試 + 真實 model 端到端閉環（結晶 → 落地 → 新 session 列出並載入全文）
+  - 至此「執行中沉澱經驗」反射/程序/結晶三層皆落地（事實/情節層待後續）
+
 ## 0.3.5
 
 - **執行中沉澱經驗 — 專案手冊（程序層）**：agent 摸清專案「做事方法」時自己記下來,跨 session 自動載入。
