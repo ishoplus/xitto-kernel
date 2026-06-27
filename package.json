@@ -1,6 +1,6 @@
 {
   "name": "xitto-kernel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "領域無關的 agent 底座（kernel + 可插拔 DomainPack），從 xitto-code 抽象而來",
   "keywords": [
@@ -49,7 +49,10 @@
     "./app": "./src/app/index.js",
     "./packs/coding": "./src/packs/coding/index.js",
     "./packs/data-query": "./src/packs/data-query/index.js",
-    "./packs/notes": "./src/packs/notes/index.js"
+    "./packs/notes": "./src/packs/notes/index.js",
+    "./packs/general": "./src/packs/general/index.js",
+    "./packs/deep-research": "./src/packs/deep-research/index.js",
+    "./packs/devops": "./src/packs/devops/index.js"
   },
   "dependencies": {
     "@mariozechner/pi-ai": "^0.70.6",

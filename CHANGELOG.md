@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0
+
+把底座的「能力」與「體驗」補到接近 Claude Code，並擴充領域 pack 與評測。
+
+### 新增
+
+- **完整 Ink TUI**（`--tui`）：持久底部狀態列（model/cwd/git/權限/sandbox/plan/ctx）、`Static` 捲動轉錄、即時串流重繪、Esc 中斷、markdown/程式碼語法高亮、Select 式權限詢問；非真實終端自動退回 readline CLI
+- **新領域 pack**：`deep-research`（多源檢索→深讀→綜整）、`devops`
+- **agent loop 內建化**：把 xitto-code 的 agent loop 移植進 `runTurn`（自帶、用 pi-ai streamFn）
+- **真實 sandbox 接入守衛鏈第 5 格**：macOS Seatbelt（sandbox-exec）OS 層隔離
+- **server app PoC**：把 kernel 包成 HTTP 服務（`/v1/run`、`/v1/stream` SSE、bearer 驗證、per-session workdir）
+- **評測框架**：scorers（answerMatch/stateCheck/toolCalled/allOf）+ SWE-bench mini 與真實 SWE-bench Verified adapter；各 pack eval 套件
+- 套件匯出補上 `./packs/general`、`./packs/deep-research`、`./packs/devops`
+
+### 驗證
+
+- 真實 SWE-bench Verified：coding pack（MiniMax）可重現解出 flask-5014、requests-1142 等
+- 測試 116/116 通過（含 Ink TUI 煙霧測試）
+
 ## 0.2.0
 
 第一個功能完整版 —— 從 0.1.0（基礎 kernel + CLI + 腳手架）補齊近乎 xitto-code 等價的能力，
