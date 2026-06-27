@@ -55,12 +55,24 @@ export async function main(argv = process.argv.slice(2)) {
   let model, getApiKey;
   try { ({ model, getApiKey } = loadModel(opts.model)); }
   catch (err) {
-    console.error(red(err.message));
-    if (err.noConfig) {
-      console.error('\n' + cyan('首次使用？') + ' 跑一次設定導引：');
-      console.error(green('  xitto-kernel init') + gray('   # 選 provider、填 model、設定 API key'));
+    // 沒設定 + 真實終端：直接帶進設定導引，完成後續跑；非 TTY 才只給提示
+    if (err.noConfig && process.stdin.isTTY) {
+      console.log(cyan('首次使用，沒找到 providers.json —— 進入設定導引。') + gray('（按 Ctrl+C 取消）'));
+      await runInit([]);
+      try { ({ model, getApiKey } = loadModel(opts.model)); }
+      catch (err2) {
+        console.error(red(err2.message));
+        console.error(gray(err2.noConfig ? '（未完成設定，已取消）' : '（設定好像缺東西，可編輯該檔或重跑 `xitto-kernel init`）'));
+        process.exit(1);
+      }
+    } else {
+      console.error(red(err.message));
+      if (err.noConfig) {
+        console.error('\n' + cyan('首次使用？') + ' 跑一次設定導引：');
+        console.error(green('  xitto-kernel init') + gray('   # 選 provider、填 model、設定 API key'));
+      }
+      process.exit(1);
     }
-    process.exit(1);
   }
 
   // MCP：啟動時連 .xitto-kernel/<pack>/mcp.json 的 server，工具以 extraTools 注入
