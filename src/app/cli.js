@@ -41,6 +41,26 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
   let history = [];
   let currentAgent = null;
   let streaming = false;
+  const turnUsage = { input: 0, output: 0 }; // 本輪 token 累計（顯示頁腳）
+
+  // 等待 LLM 時的 spinner（首個可見輸出出現即停）
+  const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let spinTimer = null;
+  const startSpin = () => {
+    if (!process.stdout.isTTY) return; // 非互動（管線）不顯示 spinner，避免 \r 雜訊
+    let i = 0; const t0 = Date.now();
+    spinTimer = setInterval(() => { process.stdout.write(`\r\x1b[2m${FRAMES[i++ % FRAMES.length]} 思考中… ${Math.round((Date.now() - t0) / 1000)}s\x1b[0m\x1b[K`); }, 100);
+  };
+  const stopSpin = () => { if (spinTimer) { clearInterval(spinTimer); spinTimer = null; process.stdout.write('\r\x1b[K'); } };
+
+  // 目前模式標記（提示列前綴，讓使用者隨時看到狀態）
+  const modeTag = () => {
+    const t = [];
+    if (planMode) t.push('plan');
+    if (sandboxOn) t.push('🔒');
+    if (autoApprove) t.push('⚡');
+    return t.length ? c.gray('[' + t.join(' ') + '] ') : '';
+  };
 
   // 互動權限確認：守衛鏈第 5 格對 mutating/危險工具呼叫此函數。autoApprove → 一律放行。
   // 回 'yes'（允許一次）/ 'always'（此工具全部）/ 'no'（拒絕）。
@@ -88,13 +108,15 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
   };
 
   const onEvent = (ev) => {
+    if (ev.type === 'message_end' && ev.message?.usage) { turnUsage.input += ev.message.usage.input || 0; turnUsage.output += ev.message.usage.output || 0; }
     switch (ev.type) {
       case 'message_update': {
         const a = ev.assistantMessageEvent;
-        if (a?.type === 'text_delta' && a.delta) { md.push(a.delta); streaming = true; }
+        if (a?.type === 'text_delta' && a.delta) { stopSpin(); md.push(a.delta); streaming = true; }
         break;
       }
       case 'tool_execution_start':
+        stopSpin();
         endStream();
         if (ev.toolName === 'todo_write' && Array.isArray(ev.args?.todos)) {
           out(c.cyan('☑ 待辦更新\n'));
@@ -202,7 +224,14 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
     }
   };
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: c.blue('› ') });
+  // 斜線指令 tab 補全
+  const SLASH = ['/help', '/goal ', '/sandbox', '/auto', '/plan', '/undo', '/tools', '/memory', '/sessions', '/resume', '/clear', '/exit'];
+  const completer = (line) => {
+    if (!line.startsWith('/')) return [[], line];
+    const hits = SLASH.filter((s) => s.startsWith(line));
+    return [hits.length ? hits : SLASH, line];
+  };
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: c.blue('› '), completer, historySize: 200 });
   let closed = false;
   const cleanup = () => { try { rl.close(); } catch { /* 略 */ } try { onExit?.(); } catch { /* 略 */ } };
   const finish = () => { cleanup(); process.exit(0); };
@@ -210,13 +239,13 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
 
   // Ctrl+C：執行中→中斷該輪；閒置→離開
   process.on('SIGINT', () => {
-    if (currentAgent) { currentAgent.abort(); out(c.yellow('\n⏹ 已中斷本輪\n')); }
+    if (currentAgent) { stopSpin(); currentAgent.abort(); out(c.yellow('\n⏹ 已中斷本輪\n')); }
     else { out(c.gray('\n再見。\n')); cleanup(); process.exit(0); }
   });
 
   // 橫幅
   out('\n' + c.cyan('✻ ') + c.bold('xitto-kernel') + c.gray(`  ·  ${pack.name} pack  ·  ${model.id}`) + '\n');
-  out(c.gray(`  沙箱 ${sandboxOn ? '開' : '關'}${seatbeltAvailable() ? '（Seatbelt 可用）' : ''}  ·  /help 看指令  ·  Ctrl+C 中斷/離開`) + '\n');
+  out(c.gray(`  沙箱 ${sandboxOn ? '開' : '關'}${seatbeltAvailable() ? '（Seatbelt 可用）' : ''}  ·  /help · Tab 補全 · ↑↓ 歷史 · Ctrl+C 中斷/離開`) + '\n');
   if (resumedNote) out(c.gray('  ' + resumedNote) + '\n');
   out('\n');
 
@@ -224,7 +253,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
     if (closed) return finish();
     let q;
     try { q = rl.question.bind(rl); } catch { return finish(); }
-    q(c.blue('› '), async (raw) => {
+    q(modeTag() + c.blue('› '), async (raw) => {
       const input = (raw || '').trim();
       if (!input) return loop();
       // /goal <目標>：目標驅動自主循環（在此 await，避免與下一個提示交錯）
@@ -233,13 +262,16 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
         if (!goal) { out(c.gray('用法 /goal <目標>\n')); return loop(); }
         try {
           out(c.cyan('🎯 目標：') + goal + '\n');
+          turnUsage.input = 0; turnUsage.output = 0;
+          const t0 = Date.now();
           const r = await kernel.runGoal(goal, {
             history,
-            onRound: ({ round, maxRounds }) => out(c.yellow(`\n🔁 第 ${round}/${maxRounds} 輪\n`)),
-            onCheck: ({ done, remaining }) => out(done ? c.green('  ✓ 驗收：已達成\n') : c.gray(`  ↻ ${remaining}\n`)),
+            onRound: ({ round, maxRounds }) => { stopSpin(); out(c.yellow(`\n🔁 第 ${round}/${maxRounds} 輪 `)); startSpin(); },
+            onCheck: ({ done, remaining }) => { stopSpin(); out(done ? c.green('  ✓ 驗收：已達成\n') : c.gray(`  ↻ ${remaining}\n`)); },
             onEvent, onAgent: (a) => { currentAgent = a; },
           });
-          endStream(); history = r.history; persist();
+          stopSpin(); endStream(); history = r.history; persist();
+          out(c.gray(`↳ ${((Date.now() - t0) / 1000).toFixed(1)}s · ${turnUsage.input + turnUsage.output} tokens · ${r.rounds} 輪`) + '\n');
           const why = r.stalled ? '無進展' : r.aborted ? '中斷' : r.verifyBroken ? '驗收持續失敗' : '到上限';
           out('\n' + (r.done ? c.green(`✅ 目標達成（${r.rounds} 輪）`) : c.yellow(`⚠ 未達成（${why}，${r.rounds} 輪）`)) + '\n');
         } catch (err) { endStream(); out(c.red('錯誤：' + err.message) + '\n'); }
@@ -251,13 +283,19 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
         const text = planMode
           ? `[計劃模式：只制定計劃，列出你打算做的步驟與會改動的檔案，不要實際寫檔或執行命令]\n\n${input}`
           : input;
+        turnUsage.input = 0; turnUsage.output = 0;
+        const t0 = Date.now();
+        startSpin();
         const r = await kernel.runTurn(text, {
           history, onEvent, onAgent: (a) => { currentAgent = a; },
         });
+        stopSpin();
         endStream();
         history = r.messages;
         persist();                 // 每輪結束自動存檔（可 /resume 續接）
+        out(c.gray(`↳ ${((Date.now() - t0) / 1000).toFixed(1)}s · ${turnUsage.input + turnUsage.output} tokens`) + '\n');
       } catch (err) {
+        stopSpin();
         endStream();
         out(c.red('錯誤：' + err.message) + '\n');
       } finally {
