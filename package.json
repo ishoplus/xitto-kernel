@@ -41,6 +41,7 @@
     "test": "node --test",
     "demo": "node examples/demo.js",
     "eval": "node eval/run.js",
+    "serve": "node src/app/server.js",
     "start": "node bin/xitto-kernel.js"
   },
   "exports": {

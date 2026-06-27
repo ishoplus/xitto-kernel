@@ -13,3 +13,5 @@ predictions*.jsonl
 verified*.jsonl
 # 評估/執行時產生的 SQLite db
 *.db
+# server app 的 session 工作目錄
+.xitto-server/
