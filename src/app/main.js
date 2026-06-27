@@ -67,7 +67,8 @@ export async function main(argv = process.argv.slice(2)) {
         if (ev.type === 'tool_execution_end') console.log(ev.isError ? red('    ⎿ ✗') : gray('    ⎿ ✓'));
       },
     });
-    console.log('\n' + (res.done ? green(`✅ 目標達成（${res.rounds} 輪）`) : yellow(`⚠ 未達成（${res.stalled ? '無進展停止' : res.aborted ? '中斷' : '到上限'}，${res.rounds} 輪）`)));
+    const why = res.stalled ? '無進展停止' : res.aborted ? '中斷' : res.verifyBroken ? '驗收持續失敗' : '到上限';
+    console.log('\n' + (res.done ? green(`✅ 目標達成（${res.rounds} 輪）`) : yellow(`⚠ 未達成（${why}，${res.rounds} 輪）`)));
     try { await mcp.close(); } catch { /* 略 */ }
     process.exit(res.done ? 0 : 1);
   }

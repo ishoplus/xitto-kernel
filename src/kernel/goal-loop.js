@@ -24,9 +24,11 @@ export async function checkGoal(goal, messages, model, apiKey, signal) {
     const res = await completeSimple(model, ctx, { maxTokens: 220, apiKey, signal, cacheRetention: cacheRetentionFor(model) });
     if (res.stopReason === 'error') return { done: false, remaining: '(驗收呼叫失敗)', error: true };
     const t = res.content.filter((c) => c.type === 'text').map((c) => c.text).join('');
+    // 寬鬆解析：先試 JSON；失敗再用關鍵字判斷完成訊號（MiniMax 等 JSON 輸出不一定乾淨）
     const m = t.match(/\{[\s\S]*\}/);
-    if (!m) return { done: false, remaining: '(驗收輸出無法解析)', error: true };
-    const o = JSON.parse(m[0]);
-    return { done: !!o.done, remaining: String(o.remaining || '') };
+    if (m) { try { const o = JSON.parse(m[0]); return { done: !!o.done, remaining: String(o.remaining || '') }; } catch { /* 落到下方 fallback */ } }
+    if (/"?done"?\s*[:=]\s*true|已達成|已完成|目標(已)?達成/i.test(t)) return { done: true, remaining: '' };
+    if (/"?done"?\s*[:=]\s*false|尚未|未達成|還(需|要|差)/i.test(t)) return { done: false, remaining: t.slice(0, 200) };
+    return { done: false, remaining: '(驗收輸出無法解析)', error: true };
   } catch (e) { return { done: false, remaining: `(驗收例外:${e?.message || e})`, error: true }; }
 }

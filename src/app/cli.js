@@ -232,7 +232,8 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
             onEvent, onAgent: (a) => { currentAgent = a; },
           });
           endStream(); history = r.history; persist();
-          out('\n' + (r.done ? c.green(`✅ 目標達成（${r.rounds} 輪）`) : c.yellow(`⚠ 未達成（${r.stalled ? '無進展' : r.aborted ? '中斷' : '到上限'}，${r.rounds} 輪）`)) + '\n');
+          const why = r.stalled ? '無進展' : r.aborted ? '中斷' : r.verifyBroken ? '驗收持續失敗' : '到上限';
+          out('\n' + (r.done ? c.green(`✅ 目標達成（${r.rounds} 輪）`) : c.yellow(`⚠ 未達成（${why}，${r.rounds} 輪）`)) + '\n');
         } catch (err) { endStream(); out(c.red('錯誤：' + err.message) + '\n'); }
         finally { currentAgent = null; }
         out('\n'); return loop();

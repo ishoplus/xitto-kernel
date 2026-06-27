@@ -303,6 +303,7 @@ export function createKernel(pack, config = {}) {
       let instruction = `目標：${goal}\n\n請著手完成這個目標；可自由使用工具（讀寫檔/跑命令/抓網頁/子 agent…）。完成後簡述你做了什麼、如何驗證。`;
       let lastRemaining = null;
       let noProgress = 0;
+      let verifyErrors = 0;
       for (let round = 1; round <= maxRounds; round++) {
         opts.onRound?.({ round, maxRounds });
         const r = await api.runTurn(instruction, { history, onEvent: opts.onEvent, onAgent: opts.onAgent });
@@ -314,10 +315,17 @@ export function createKernel(pack, config = {}) {
         opts.onCheck?.({ round, done: v.done, remaining: v.remaining });
         if (v.done) return { done: true, rounds: round, history };
         noProgress = r.turnModified ? 0 : noProgress + 1;
-        const rem = normalizeFeedback(v.remaining);
-        if ((!r.turnModified && rem && rem === lastRemaining) || noProgress >= NO_PROGRESS_CAP) {
-          return { done: false, stalled: true, rounds: round, history };
+        if (noProgress >= NO_PROGRESS_CAP) return { done: false, stalled: true, rounds: round, history };
+        // 驗收壞掉（網路/解析）：remaining 是噪音，不拿來比對；連續壞 3 次就停（別空轉到上限）
+        if (v.error) {
+          verifyErrors += 1;
+          if (verifyErrors >= 3) return { done: false, verifyBroken: true, rounds: round, history };
+          instruction = `（驗收暫時無法判定）請繼續完成目標並自我檢查：${goal}`;
+          continue;
         }
+        verifyErrors = 0;
+        const rem = normalizeFeedback(v.remaining);
+        if (!r.turnModified && rem && rem === lastRemaining) return { done: false, stalled: true, rounds: round, history };
         lastRemaining = rem;
         instruction = `目標尚未達成。驗收回饋：${v.remaining}\n請繼續完成目標：${goal}`;
       }
