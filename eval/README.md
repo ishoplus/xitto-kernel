@@ -74,6 +74,15 @@ python -m swebench.harness.run_evaluation \
 > 用**同一底層模型**跑同一子集；否則比的是「工具+模型」綁一起。建議先跑 50 題 Verified 子集，
 > 記錄 pass@1 + 成本 + 回合，再對照各家官方數字。
 
+## 跑 SWE-bench 的實戰提醒
+
+- **離線模式避卡**：HF 對未認證請求限流，dataset 解析可能卡在 404 重試迴圈。資料集載過一次後，
+  用 `HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1` 強制用本機快取，乾淨不卡（免 token）。
+- **別接 `| tail`**：tail 會把輸出緩衝到結束才印，看不到即時進度；python 加 `-u` 不緩衝。
+- **arm64（Apple Silicon）**：x86 映像需建置/模擬，慢且偶有 build error（非 patch 問題）；
+  認真大規模跑建議用 x86 機器/雲端。先跑 4–8 題小子集驗證流程即可。
+- 參考實測：MiniMax-M2.7 + coding pack 在輕量 repo 小子集 resolve 約 2–3/8（flask/requests）。
+
 ## 注意
 
 - 迷你版任務無外部依賴，故 `sandbox` 預設關（避免環境摩擦）；可在 `runTask` opts 開 `sandbox:true`。
