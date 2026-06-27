@@ -3,8 +3,8 @@
 // JSON 或 SSE 串流，以及「背景任務 + 完成通知（webhook）」—— 派任務出去、做完回呼，不用一直盯著。
 // 這是「另一個 app 消費同一組 kernel 事件」—— 不動 kernel 核心。
 import { createServer } from 'node:http';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { join, dirname, isAbsolute, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createKernel } from '../kernel/index.js';
 import { loadModel } from './providers.js';
@@ -22,6 +22,17 @@ const PACKS = {
 
 const lastText = (history) => ([...(history || [])].reverse().find((m) => m.role === 'assistant')?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
 const newId = (p = 's') => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+// 交付檔案路徑解析（防穿越）：rel 必須是 workdir 內的相對路徑,否則回 null。
+export function resolveArtifact(workdir, rel) {
+  if (typeof rel !== 'string' || !rel || isAbsolute(rel)) return null;
+  const full = join(workdir, rel);
+  const r = relative(workdir, full);
+  return (r.startsWith('..') || isAbsolute(r)) ? null : full;
+}
+
+let _webHtml;
+const webHtml = () => (_webHtml ??= readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'web', 'index.html'), 'utf8'));
 
 // 把原始 kernel 事件壓成精簡的對外事件（串流端與背景任務共用，避免重複映射）
 export const mapEvent = (ev) => {
@@ -46,7 +57,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
   const subs = new Map();    // id -> Set<(ev)=>void>
   let active = 0;
 
-  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', sessionId: t.result?.sessionId || t.spec.sessionId || null, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null });
+  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', goal: t.spec.goal || t.spec.input || '', sessionId: t.result?.sessionId || t.spec.sessionId || null, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null });
 
   const emit = (t, ev) => {
     t.events.push(ev);
@@ -168,6 +179,14 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
     if (req.method === 'GET' && path === '/health') return json(res, 200, { ok: true, packs: Object.keys(PACKS), model: model.id, tasks: tasks.stats() });
+
+    // 「許願台」網頁（公開可載入；token 注入頁面供同源 API 呼叫——PoC/本地自用,正式部署請前置真實認證）
+    if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
+      let html; try { html = webHtml(); } catch { return json(res, 500, { error: 'web UI 未找到' }); }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end(html.replace(/__SERVER_TOKEN__/g, token || '').replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))));
+    }
+
     if (!authed(req)) return json(res, 401, { error: 'unauthorized（帶 Authorization: Bearer <token>）' });
 
     // 同步：跑完才回（JSON 或 SSE 串流）
@@ -215,6 +234,18 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       return json(res, 200, { ok: true, taskId: mAns[1], status: 'running' });
     }
 
+    // 取交付物檔案內容（讓「成品」可被瀏覽/下載）
+    const mFile = path.match(/^\/v1\/tasks\/([^/]+)\/file$/);
+    if (req.method === 'GET' && mFile) {
+      const t = tasks.get(mFile[1]); const sid = t?.result?.sessionId;
+      if (!sid) return json(res, 404, { error: '無交付物（任務尚未完成?）' });
+      const full = resolveArtifact(join(baseDir, sid), url.searchParams.get('path'));
+      if (!full) return json(res, 400, { error: 'path 不合法' });
+      if (!existsSync(full)) return json(res, 404, { error: '檔案不存在' });
+      try { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(readFileSync(full)); }
+      catch (e) { return json(res, 500, { error: e.message }); }
+    }
+
     // 附掛背景任務的事件流（replay 緩衝 + 即時；已結束則回放後關閉）
     const mEv = path.match(/^\/v1\/tasks\/([^/]+)\/events$/);
     if (req.method === 'GET' && mEv) {
@@ -241,9 +272,10 @@ export function startServer() {
   const { model, getApiKey } = loadModel(process.env.XITTO_MODEL);
   const server = createServerApp({ model, getApiKey, token, sandbox, concurrency });
   server.listen(port, () => {
-    console.log(`xitto-kernel server · http://localhost:${port} · model ${model.id} · 沙箱 ${sandbox ? '開' : '關'} · 背景並發 ${concurrency}`);
+    console.log(`🪄 許願台：http://localhost:${port}/  （瀏覽器打開即用——說出目標、交付成品）`);
+    console.log(`xitto-kernel server · model ${model.id} · 沙箱 ${sandbox ? '開' : '關'} · 背景並發 ${concurrency}`);
     console.log(`token: ${token === 'dev-token' ? 'dev-token（請設 XITTO_SERVER_TOKEN）' : '(已設定)'}`);
-    console.log('路由：POST /v1/run · /v1/stream · /v1/tasks（背景+webhook）· /v1/tasks/:id/answer（澄清）｜GET /v1/tasks[/:id[/events]] · /health');
+    console.log('API：POST /v1/run · /v1/stream · /v1/tasks · /v1/tasks/:id/answer｜GET /v1/tasks[/:id[/events|/file]] · /health');
   });
   return server;
 }

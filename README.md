@@ -93,6 +93,19 @@ const o = await kernel.runOutcome('建立 greet.js 並寫個範例驗證');
 
 實測:給「建個設定檔但檔名/內容我還沒決定」→ agent 不亂猜,暫停問你檔名與內容 → 答完才交付正確的 `app.config.json`。這讓「許願→交付」既自主又不失控。
 
+**🪄 許願台網頁（給非技術使用者：瀏覽器打開就用）**
+```bash
+XITTO_SERVER_TOKEN=secret npm run serve   # 然後瀏覽器開 http://localhost:8787/
+```
+不用終端機、不用碰金鑰(伺服器端管)。介面以**結果**為中心,不是聊天:
+- **許願**:打一句「你想完成什麼」→ 交辦(背景跑 goal loop)
+- **進行中**:顯示狀態(進行中/需要你回答/已完成),不是對話逐字稿
+- **需要你回答**:agent 暫停提問時,跳出問題 + 回答框(澄清通道)
+- **收成品**:完成後顯示摘要 + **產出的檔案**,點檔名可直接看內容(`GET /v1/tasks/:id/file`,防路徑穿越)
+- **歷史成品**:過往交辦的清單(願望 + 狀態),不是聊天串
+
+零依賴單一 HTML(`src/app/web/index.html`),polling 不靠 SSE。token 注入頁面供同源呼叫——本地自用零設定;**正式部署請前置真實認證**。
+
 ## 當成服務跑（不只 CLI）
 
 kernel 是 UI 無關的，CLI 只是其中一個 app。`src/app/server.js` 是把它包成 **HTTP 服務**的 PoC

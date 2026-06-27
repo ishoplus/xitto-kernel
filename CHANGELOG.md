@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.3
+
+- **許願台網頁（結果導向第三刀）**：給非技術使用者的瀏覽器介面,以結果為中心、不是聊天。
+  - server 服務 `GET /` → 單一 HTML（`src/app/web/index.html`,零依賴 vanilla,polling 不靠 SSE）
+  - 介面:許願(送目標)→ 進行中狀態 → needs-input 時跳問題+回答框 → 收成品(摘要+產出檔案)→ 歷史清單
+  - 新增 `GET /v1/tasks/:id/file?path=`：取交付檔案內容（點檔名看成品）；`resolveArtifact` 防路徑穿越
+  - 任務 view 補 `goal`（顯示願望）；token 注入頁面供同源呼叫（本地自用零設定,正式部署需前置認證）
+  - 2 個測試（resolveArtifact 穿越防護 + GET / 服務頁面/token 注入/API 仍需 auth）+ 真實端到端
+    （許願→交付 hello.txt→點開看內容→穿越攻擊擋下）
+  - 「許願→交付」三刀完成:交付抽象 + 澄清通道 + Job 介面
+
 ## 0.4.2
 
 - **澄清通道（結果導向第二刀）**：agent 只在非問不可時暫停提問,而非盲猜或頻繁打擾。
