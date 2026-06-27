@@ -96,6 +96,14 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
       }
       case 'tool_execution_start':
         endStream();
+        if (ev.toolName === 'todo_write' && Array.isArray(ev.args?.todos)) {
+          out(c.cyan('☑ 待辦更新\n'));
+          for (const t of ev.args.todos) {
+            const mark = t.status === 'completed' ? c.green('☑') : t.status === 'in_progress' ? c.yellow('◐') : c.gray('☐');
+            out(`  ${mark} ${t.status === 'completed' ? c.gray(t.content) : t.content}\n`);
+          }
+          break;
+        }
         out(c.yellow('⚙ ' + ev.toolName) + c.gray('(' + summarize(ev.args) + ')\n'));
         diffPreview(ev.toolName, ev.args);
         break;

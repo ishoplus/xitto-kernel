@@ -10,6 +10,7 @@ import { composeGuards } from './guard-chain.js';
 import { createPermissionStep } from './security/permission-step.js';
 import { normalizeSandbox, wrapWithSeatbelt } from './security/sandbox.js';
 import { createMemory } from './memory.js';
+import { createTodo } from './todo.js';
 import { createSpawnTool } from './subagent.js';
 import { createSkills } from './skills.js';
 import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
@@ -99,6 +100,7 @@ export function createKernel(pack, config = {}) {
   // 每個 pack 在 cwd 下有獨立資料夾（記憶、session 分領域存放，互不混）
   const dataDir = join(cwd, '.xitto-kernel', pack.name);
   const memory = createMemory(join(dataDir, 'memory.md'));
+  const todo = createTodo();
   const sessionsDir = join(dataDir, 'sessions');
   const hooks = loadHooks(join(dataDir, 'settings.json')); // PreToolUse/PostToolUse
   const skills = createSkills(join(dataDir, 'skills'));     // 漸進揭露技能
@@ -113,6 +115,7 @@ export function createKernel(pack, config = {}) {
   const baseTools = [
     ...pack.tools().map((t) => wrapUndo(wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }), { cwd, undoStack })),
     ...memory.tools,
+    todo.tool,
     ...(skills.tool ? [skills.tool] : []),
     ...(config.extraTools || []),  // 外部注入（MCP 工具等）：由 app 層先 async 載入再傳入
   ];
@@ -171,6 +174,7 @@ export function createKernel(pack, config = {}) {
     permissionPolicy: pack.permissionPolicy || {},
     sandbox: { isOn: () => getSandbox(), config: () => getSandboxConfig() },
     memory,
+    todo: { get: todo.get },
     /** 撤銷上一次檔案改動（write/edit）：還原內容，新建的檔則刪除。 */
     undo: () => {
       const snap = undoStack.pop();
