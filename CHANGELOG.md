@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.5
+
+- **執行中沉澱經驗 — 專案手冊（程序層）**：agent 摸清專案「做事方法」時自己記下來,跨 session 自動載入。
+  - 新增 kernel 內建工具 `playbook_update`（按 topic 記/更新,同 topic 覆蓋去重）、`playbook_remove`
+  - 落地 `.xitto-kernel/<pack>/playbook.md`；綁 cwd → 天然只對該專案生效(自帶相關性範圍)
+  - 開場自動注入 system prompt（`# 專案手冊`）+ 引導語；與 `memory`(事實層) 分工明確
+  - `/playbook`（查看）、`/playbook forget <主題>`、`/playbook clear`；`api.playbook.{list,update,remove,clear,load,path}`
+  - 5 個測試（topic 去重/多條/落地重載/多行 note/kernel 注入）+ 真實 model 端到端閉環驗證
+    （agent 呼叫 playbook_update → 落地 → 新 session 自動載入）
+
 ## 0.3.4
 
 - **漸進式放權（per-pattern 記住批准）**：把「事事都問的煩」和「全自動的怕」同時解掉。

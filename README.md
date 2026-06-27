@@ -52,6 +52,8 @@ xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
 
 **漸進式放權（trust 隨用累積）**：mutating/危險工具執行前會確認；批准時可選 `[a]` 信任整個工具、或 `[c]` 只信任「該命令簽章類」（如 `git status`、`npm test`——細粒度,`npm install` 仍會問）。選擇會**落地到 `.xitto-kernel/<pack>/allow.json`,跨 session 記得**,下次同類自動放行並標示「✓ 已信任」。`/trust` 查看、`/trust forget <項>` 撤銷、`/trust clear` 全清。一開始謹慎、用著用著越來越順手——危險命令永不寫入信任,每次都把關。
 
+**執行中沉澱經驗（專案手冊）**：agent 摸清「這個專案怎麼做事」(建置/測試/部署指令、慣例、必經步驟、踩過的坑與修法)時,會用 `playbook_update` 按 topic 記進 `.xitto-kernel/<pack>/playbook.md`(同 topic 覆蓋,天然去重)；**下次 session 自動載入系統提示,不必重新摸索**。因檔案綁 cwd,手冊天然只對這個專案生效。`/playbook` 查看、`/playbook forget <主題>`、`/playbook clear`。分工:`memory` 存事實/偏好/決策(扁平),`playbook` 存可重複的程序知識(按主題)。
+
 **通用自主 agent（給目標、自己做到完成）**
 ```bash
 xitto-kernel --pack general --yes --goal "抓取 example.com 摘要成繁中寫進 summary.txt"

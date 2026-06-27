@@ -11,6 +11,7 @@ import { createPermissionStep } from './security/permission-step.js';
 import { fileAllowStore, memoryAllowStore } from './security/allow-store.js';
 import { normalizeSandbox, wrapWithSeatbelt } from './security/sandbox.js';
 import { createMemory } from './memory.js';
+import { createPlaybook } from './playbook.js';
 import { createTodo } from './todo.js';
 import { createSpawnTool } from './subagent.js';
 import { createSkills } from './skills.js';
@@ -40,7 +41,10 @@ function loadContextFiles(cwd, names) {
 }
 
 const DEFAULT_MEMORY_GUIDE =
-  '遇到值得跨 session 記住的事實（使用者偏好、建置/測試指令、踩過的坑、專案決策）時，當下就存一條。';
+  '遇到值得跨 session 記住的事實（使用者偏好、踩過的坑、專案決策）時，當下就存一條。';
+
+const DEFAULT_PLAYBOOK_GUIDE =
+  '摸清這個專案的「做事方法」(如何建置/測試/執行/部署、慣例、必經步驟、坑與修法)時，用 playbook_update 按 topic 記下來(同 topic 覆蓋)；過時就用 playbook_remove 清掉。下次自動載入，不必重新摸索。分工：memory 存事實/偏好/決策，playbook 存可重複的程序步驟。';
 
 // 把 sandboxable 工具的命令在執行期包進 Seatbelt（macOS OS 級隔離）。
 // 非 macOS / 沙箱關閉 / 無 command → wrapWithSeatbelt 回 null，跑原命令（仍受第 5 格靜態策略保護）。
@@ -101,6 +105,7 @@ export function createKernel(pack, config = {}) {
   // 每個 pack 在 cwd 下有獨立資料夾（記憶、session 分領域存放，互不混）
   const dataDir = join(cwd, '.xitto-kernel', pack.name);
   const memory = createMemory(join(dataDir, 'memory.md'));
+  const playbook = createPlaybook(join(dataDir, 'playbook.md'));
   const todo = createTodo();
   const sessionsDir = join(dataDir, 'sessions');
   const hooks = loadHooks(join(dataDir, 'settings.json')); // PreToolUse/PostToolUse
@@ -116,6 +121,7 @@ export function createKernel(pack, config = {}) {
   const baseTools = [
     ...pack.tools().map((t) => wrapUndo(wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }), { cwd, undoStack })),
     ...memory.tools,
+    ...playbook.tools,
     todo.tool,
     ...(skills.tool ? [skills.tool] : []),
     ...(config.extraTools || []),  // 外部注入（MCP 工具等）：由 app 層先 async 載入再傳入
@@ -139,11 +145,13 @@ export function createKernel(pack, config = {}) {
   };
 
   const memText = memory.load();
+  const pbText = playbook.load();
   const systemPrompt =
     pack.systemPrompt +
     loadContextFiles(cwd, pack.contextFiles) +          // 注入領域規範檔（CLAUDE.md 等）
-    '\n\n# 記憶\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) +
+    '\n\n# 記憶與專案手冊\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) + '\n' + DEFAULT_PLAYBOOK_GUIDE +
     (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '') +
+    (pbText ? `\n\n# 專案手冊（這個專案怎麼做事，跨 session 累積）\n${pbText}` : '') +
     skills.promptSection();
 
   const getPlanMode = config.getPlanMode || (() => false);
@@ -189,6 +197,8 @@ export function createKernel(pack, config = {}) {
     },
     sandbox: { isOn: () => getSandbox(), config: () => getSandboxConfig() },
     memory,
+    // 專案手冊（程序層沉澱）：列出 / 更新 / 移除 / 全清；path 為落地檔。
+    playbook: { list: playbook.list, update: playbook.update, remove: playbook.remove, clear: playbook.clear, load: playbook.load, path: join(dataDir, 'playbook.md') },
     todo: { get: todo.get },
     /** 撤銷上一次檔案改動（write/edit）：還原內容，新建的檔則刪除。 */
     undo: () => {

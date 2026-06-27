@@ -175,6 +175,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
           '  /tools           列出此 pack 的工具',
           '  /trust [forget <項>|clear]  已信任的工具/命令（漸進放權,跨 session）',
           '  /memory          顯示跨 session 記憶',
+          '  /playbook [forget <主題>|clear]  專案手冊（agent 沉澱的程序知識,跨 session）',
           '  /sessions        列出已保存的對話',
           '  /resume [id]     續接對話（不給 id=最近一次）',
           '  /clear           清除歷史（開新 session）',
@@ -184,6 +185,21 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
       case '/memory': {
         const mems = kernel.memory.list();
         out(mems.length ? c.gray(mems.map((m) => '  • ' + m).join('\n') + '\n') : c.gray('（尚無記憶）\n'));
+        return true;
+      }
+      case '/playbook': {
+        const rest = input.trim().slice(cmd.length).trim();
+        if (rest === 'clear') { const { cleared } = kernel.playbook.clear(); out(c.gray(`（已清空專案手冊,移除 ${cleared} 條）\n`)); return true; }
+        if (rest.startsWith('forget ')) {
+          const t = rest.slice('forget '.length).trim();
+          const r = kernel.playbook.remove(t);
+          out(r.removed ? c.gray(`（已移除「${t}」）\n`) : c.yellow(`找不到主題「${t}」\n`));
+          return true;
+        }
+        const entries = kernel.playbook.list();
+        if (!entries.length) { out(c.gray('（尚無專案手冊；agent 摸清做法時會用 playbook_update 累積）\n')); return true; }
+        out(entries.map((e) => c.cyan(`  ## ${e.topic}\n`) + c.gray(e.note.split('\n').map((l) => '  ' + l).join('\n'))).join('\n') + '\n');
+        if (kernel.playbook.path) out(c.gray(`  ↳ ${kernel.playbook.path}（清除：/playbook forget <主題>）\n`));
         return true;
       }
       case '/trust': {
@@ -251,7 +267,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
   };
 
   // 斜線指令 tab 補全
-  const SLASH = ['/help', '/goal ', '/sandbox', '/auto', '/plan', '/undo', '/tools', '/trust', '/memory', '/sessions', '/resume', '/clear', '/exit'];
+  const SLASH = ['/help', '/goal ', '/sandbox', '/auto', '/plan', '/undo', '/tools', '/trust', '/memory', '/playbook', '/sessions', '/resume', '/clear', '/exit'];
   const completer = (line) => {
     if (!line.startsWith('/')) return [[], line];
     const hits = SLASH.filter((s) => s.startsWith(line));
