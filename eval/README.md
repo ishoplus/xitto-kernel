@@ -1,7 +1,15 @@
-# eval — xitto-kernel code-agent 評估 harness
+# eval — xitto-kernel 評估 harness
 
-SWE-bench 風格地評估 coding pack：**建 repo → 確認修復前測試失敗 → agent 只看 problem 產 patch → 跑隱藏測試判定 resolved**。
-（本目錄不進 npm 發佈包。）
+兩套評分（本目錄不進 npm 發佈包）：
+
+- **code agent**（SWE-bench 風格）：`npm run eval` —— 建 repo → 確認修復前測試失敗 → agent 產 patch → 跑隱藏測試判定 resolved。
+- **通用 agent**（GAIA 風格）：`node eval/general-run.js` —— 給目標 → agent 用工具完成 → 檢查**最終答案**（expect 正規化比對）或**結果狀態**（verify shell 檢查）。各題鍛鍊不同工具（bash / 檔案 / http / web_search）。
+
+---
+
+## code agent（SWE-bench 風格）
+
+評估 coding pack：**建 repo → 確認修復前測試失敗 → agent 只看 problem 產 patch → 跑隱藏測試判定 resolved**。
 
 ## 跑迷你版（自足、即可跑）
 
