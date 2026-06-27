@@ -6,37 +6,9 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from '
 import { isAbsolute, join, relative } from 'node:path';
 import { execSync } from 'node:child_process';
 import { createBackgroundTools } from '../../kernel/bg.js';
+import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
-
-const IGNORE = new Set(['node_modules', '.git', '.xitto-kernel', '.xitto-code', 'dist', 'build', '.next', 'coverage']);
-
-// 遞迴收集檔案路徑（跳過 IGNORE 目錄），上限保護
-function walkFiles(dir, out, limit) {
-  if (out.length >= limit) return;
-  let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of entries) {
-    if (out.length >= limit) return;
-    if (e.name.startsWith('.') && e.name !== '.env') { if (IGNORE.has(e.name)) continue; }
-    if (IGNORE.has(e.name)) continue;
-    const full = join(dir, e.name);
-    if (e.isDirectory()) walkFiles(full, out, limit);
-    else out.push(full);
-  }
-}
-
-// glob 樣式 → 正則（支援 ** 遞迴、* 與 ?）
-function globToRegex(pattern) {
-  let re = '';
-  for (let i = 0; i < pattern.length; i++) {
-    const ch = pattern[i];
-    if (ch === '*') { if (pattern[i + 1] === '*') { re += '.*'; i++; if (pattern[i + 1] === '/') i++; } else re += '[^/]*'; }
-    else if (ch === '?') re += '[^/]';
-    else if ('.+^${}()|[]\\'.includes(ch)) re += '\\' + ch;
-    else re += ch;
-  }
-  return new RegExp('^' + re + '$');
-}
 
 const SYSTEM_PROMPT = [
   '你是嚴謹的編碼 agent。準則：',
@@ -126,45 +98,9 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     },
   };
 
-  // ── codebase 導航：grep（搜內容）+ glob（找檔）──
-  const grepTool = {
-    name: 'grep', label: '搜尋內容', readOnly: true,
-    description: '在檔案內容用正則搜尋，回 path:line:文字。可選 path(起點目錄)、glob(檔名過濾如 *.js)。自動跳過 node_modules/.git。',
-    parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, glob: { type: 'string' }, ignoreCase: { type: 'boolean' } }, required: ['pattern'] },
-    execute: async (_id, { pattern, path, glob, ignoreCase }) => {
-      let re; try { re = new RegExp(pattern, ignoreCase ? 'i' : ''); } catch (e) { return txt({ error: '正則無效：' + e.message }); }
-      const base = path ? abs(path) : cwd;
-      if (!existsSync(base)) return txt({ error: '目錄不存在', path });
-      const files = []; walkFiles(base, files, 8000);
-      const gre = glob ? globToRegex(glob) : null;
-      const hits = [];
-      for (const f of files) {
-        if (gre && !gre.test(f.split('/').pop())) continue;
-        let content; try { content = readFileSync(f, 'utf8'); } catch { continue; }
-        if (content.includes(' ')) continue; // 跳過二進位
-        const lines = content.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          if (re.test(lines[i])) { hits.push(`${relative(cwd, f)}:${i + 1}: ${lines[i].trim().slice(0, 200)}`); if (hits.length >= 200) break; }
-        }
-        if (hits.length >= 200) break;
-      }
-      return txt(hits.length ? hits.join('\n') + (hits.length >= 200 ? '\n…（結果已截斷至 200）' : '') : '(無匹配)');
-    },
-  };
-
-  const globTool = {
-    name: 'glob', label: '找檔', readOnly: true,
-    description: '用萬用字元樣式找檔（** 遞迴、* ?），相對路徑比對。如 "src/**/*.js"、"**/*.test.js"。',
-    parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' } }, required: ['pattern'] },
-    execute: async (_id, { pattern, path }) => {
-      const base = path ? abs(path) : cwd;
-      if (!existsSync(base)) return txt({ error: '目錄不存在', path });
-      const files = []; walkFiles(base, files, 8000);
-      const re = globToRegex(pattern);
-      const matched = files.map((f) => relative(cwd, f)).filter((rel) => re.test(rel)).slice(0, 200);
-      return txt({ pattern, count: matched.length, files: matched });
-    },
-  };
+  // ── codebase 導航：grep / glob（共用模組）──
+  const grepTool = createGrepTool(cwd);
+  const globTool = createGlobTool(cwd);
 
   const webFetch = {
     name: 'web_fetch', label: '抓網頁', readOnly: true,

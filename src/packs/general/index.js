@@ -1,16 +1,21 @@
 // general pack — 通用自主 agent。廣的 system prompt + 檔案/shell/web 工具。
 // 搭配 kernel 的 runGoal（目標循環）+ 子 agent + MCP，即為「給目標、自己做到完成」的通用 agent。
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, extname } from 'node:path';
 import { execSync } from 'node:child_process';
+import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
+
+const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
 const SYSTEM_PROMPT = [
   '你是通用自主 agent。給你一個目標，你用工具反覆推進直到完成：',
-  '- 可讀寫檔案、跑 shell 命令、搜尋網路（web_search）、抓網頁（web_fetch）、派子 agent 做聚焦調查。',
+  '- 可讀寫檔案、grep/glob 找東西、跑 shell、搜尋網路(web_search)、抓網頁(web_fetch)、',
+  '  串接 API(http)、讀圖(read_image)、派子 agent、用待辦(todo_write)規劃多步任務。',
   '- 先想清楚步驟再動手；每步簡述你在做什麼。',
-  '- 需要外部資料：先 web_search 找來源，再 web_fetch 讀全文，不要憑空編造。',
+  '- 需要外部資料：先 web_search 找來源，再 web_fetch 讀全文；串 API 用 http。不要憑空編造。',
+  '- 還缺的能力（瀏覽器點擊、特定服務）可由使用者掛 MCP server 補上。',
   '- 編輯既有檔案前先 read；破壞性/對外操作前確認。',
   '- 完成後明確說「已完成」並總結結果與如何驗證。',
 ].join('\n');
@@ -79,9 +84,42 @@ export function createGeneralPack({ cwd = process.cwd() } = {}) {
     },
   };
 
+  // 通用 HTTP：串接任何 REST API（GET/POST/PUT/DELETE…，可帶 headers/body）。非唯讀（可能有副作用）→ 走確認。
+  const http = {
+    name: 'http', label: 'HTTP 請求',
+    description: '發 HTTP 請求串接 API：method（預設 GET）、headers、body。回 status + headers + body（截斷）。',
+    parameters: { type: 'object', properties: { url: { type: 'string' }, method: { type: 'string' }, headers: { type: 'object' }, body: { type: 'string' } }, required: ['url'] },
+    execute: async (_id, { url, method = 'GET', headers, body }) => {
+      try {
+        const m = String(method).toUpperCase();
+        const res = await fetch(url, { method: m, headers: headers || {}, body: (m === 'GET' || m === 'HEAD') ? undefined : body, signal: AbortSignal.timeout(20000) });
+        const text = (await res.text()).slice(0, 8000);
+        return txt({ url, method: m, status: res.status, headers: Object.fromEntries(res.headers), body: text });
+      } catch (e) { return txt({ error: e?.message || String(e), url }); }
+    },
+  };
+
+  // 多模態：讀圖交給模型「看」（需模型支援影像輸入）
+  const readImage = {
+    name: 'read_image', label: '讀圖', readOnly: true,
+    description: '讀取一張圖片（png/jpg/gif/webp）交給模型分析（截圖/設計稿/圖表）。需模型支援影像輸入。',
+    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    execute: async (_id, { path }) => {
+      const p = abs(path);
+      if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      const mimeType = MIME[extname(p).toLowerCase()];
+      if (!mimeType) return txt({ error: '不支援的格式（png/jpg/gif/webp）', path });
+      try { return { content: [{ type: 'image', data: readFileSync(p).toString('base64'), mimeType }] }; }
+      catch (e) { return txt({ error: e.message }); }
+    },
+  };
+
+  const grepTool = createGrepTool(cwd);
+  const globTool = createGlobTool(cwd);
+
   return {
     name: 'general',
-    tools: () => [read, ls, write, edit, bash, webFetch, webSearch],
+    tools: () => [read, ls, globTool, grepTool, write, edit, bash, webSearch, webFetch, http, readImage],
     systemPrompt: SYSTEM_PROMPT,
     contextFiles: ['AGENTS.md', 'GENERAL.md'],
     preToolPolicy: {
