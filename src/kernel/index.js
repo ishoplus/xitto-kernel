@@ -8,6 +8,7 @@ import { loadPack } from './pack-loader.js';
 import { createToolRegistry, deriveMutatingTools, isSandboxable } from './tool-registry.js';
 import { composeGuards } from './guard-chain.js';
 import { createPermissionStep } from './security/permission-step.js';
+import { fileAllowStore, memoryAllowStore } from './security/allow-store.js';
 import { normalizeSandbox, wrapWithSeatbelt } from './security/sandbox.js';
 import { createMemory } from './memory.js';
 import { createTodo } from './todo.js';
@@ -147,11 +148,18 @@ export function createKernel(pack, config = {}) {
 
   const getPlanMode = config.getPlanMode || (() => false);
 
+  // 漸進式放權：已信任的工具/命令簽章跨 session 累積。
+  // 預設落地到 .xitto-kernel/<pack>/allow.json；config.allowStore=false → 不持久化（記憶體版）；給字串 → 自訂路徑。
+  const allowStore = config.allowStore === false ? memoryAllowStore()
+    : fileAllowStore(typeof config.allowStore === 'string' ? config.allowStore : join(dataDir, 'allow.json'));
+
   // 守衛鏈第 5 格：真實權限/沙箱（A 半部：靜態策略 deny/網路/提權/越界寫入 + 危險命令）。
   const permission = createPermissionStep({
     registry, getSandbox, getSandboxConfig,
     deny: pack.permissionPolicy?.deny || [],
     confirm: config.confirm,
+    store: allowStore,
+    onTrusted: config.onTrusted,
   });
 
   const guard = composeGuards({
@@ -172,6 +180,13 @@ export function createKernel(pack, config = {}) {
     systemPrompt,
     services,
     permissionPolicy: pack.permissionPolicy || {},
+    // 已信任清單（漸進放權）：列出 / 移除 / 全清；path 為落地檔（記憶體版為 null）。
+    permissions: {
+      list: () => allowStore.list(),
+      forget: (entry) => allowStore.remove(entry),
+      clear: () => allowStore.clear(),
+      path: allowStore.path,
+    },
     sandbox: { isOn: () => getSandbox(), config: () => getSandboxConfig() },
     memory,
     todo: { get: todo.get },

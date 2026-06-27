@@ -5,6 +5,7 @@
 import { sandboxViolation } from './sandbox.js';
 import { dangerousReason } from './danger.js';
 import { commandSignature } from './allow.js';
+import { memoryAllowStore } from './allow-store.js';
 
 /**
  * @param {Object} o
@@ -12,14 +13,15 @@ import { commandSignature } from './allow.js';
  * @param {() => boolean} [o.getSandbox]                沙箱是否開啟
  * @param {() => object} [o.getSandboxConfig]           沙箱策略（blockNetwork/allowWritePrefixes）
  * @param {string[]} [o.deny]                           禁止的工具名 / "bash:<簽章>"
- * @param {(name: string, args: object, danger: string|null) => Promise<'yes'|'no'|'always'|'command'>} [o.confirm]
+ * @param {object} [o.store]                            已信任儲存（漸進放權,跨 session）；預設記憶體版
+ * @param {(name: string, args: object, danger: string|null, meta: {signature?: string}) => Promise<'yes'|'no'|'always'|'command'>} [o.confirm]
  *        互動確認；不提供（headless）時：危險命令一律擋、其餘放行（沙箱靜態違規仍先擋）。
+ * @param {(info: {name: string, signature: string|null, scope: 'tool'|'command'}) => void} [o.onTrusted]
+ *        從已信任儲存自動放行時通知（讓 app 顯示「已信任」,維持可理解性）。
  * @returns {(ctx: { name: string, args: object }) => Promise<import('../../types.js').PolicyDecision>}
  */
-export function createPermissionStep({ registry, getSandbox, getSandboxConfig, deny = [], confirm }) {
+export function createPermissionStep({ registry, getSandbox, getSandboxConfig, deny = [], confirm, store = memoryAllowStore(), onTrusted }) {
   const denySet = new Set(deny);
-  const allowedSignatures = new Set(); // session 內「允許此命令簽章全部」
-  const alwaysTools = new Set();       // session 內「允許此工具全部」（使用者選 always）
 
   return async function permission(ctx) {
     const name = ctx.name;
@@ -45,18 +47,19 @@ export function createPermissionStep({ registry, getSandbox, getSandboxConfig, d
     // 3) 危險命令：即使 always-allow / 無 confirm 也強制把關（headless 直接擋）
     const danger = isShell ? dangerousReason(cmd) : null;
 
-    // 4) 非危險：本工具/命令簽章已 always-allow → 直接過；headless（無 confirm）→ 放行
+    // 4) 非危險：已信任（本工具 or 命令簽章）→ 直接過；headless（無 confirm）→ 放行
     if (!danger) {
-      if (alwaysTools.has(name) || (sig && allowedSignatures.has(sig))) return undefined;
+      if (store.hasTool(name)) { onTrusted?.({ name, signature: null, scope: 'tool' }); return undefined; }
+      if (sig && store.hasSig(sig)) { onTrusted?.({ name, signature: sig, scope: 'command' }); return undefined; }
       if (!confirm) return undefined;
     } else if (!confirm) {
       return { block: true, reason: `偵測到危險命令（${danger}），headless 模式下拒絕執行。` };
     }
 
-    // 5) 互動確認（危險命令即使選 always 也只放行這次，不永久放行）
-    const decision = await confirm(name, ctx.args, danger);
-    if (decision === 'always' && !danger) { alwaysTools.add(name); return undefined; }
-    if (decision === 'command' && sig && !danger) { allowedSignatures.add(sig); return undefined; }
+    // 5) 互動確認（危險命令即使選 always 也只放行這次,不寫入信任）
+    const decision = await confirm(name, ctx.args, danger, { signature: sig || null });
+    if (decision === 'always' && !danger) { store.addTool(name); return undefined; }
+    if (decision === 'command' && sig && !danger) { store.addSig(sig); return undefined; }
     if (decision === 'yes') return undefined;
     return { block: true, reason: `使用者拒絕執行 ${name}。` };
   };

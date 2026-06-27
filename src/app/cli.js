@@ -36,6 +36,10 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
     getSandbox: () => sandboxOn,            // on/off 由 CLI 即時切換
     getPlanMode: () => planMode,            // 計劃模式：守衛擋 mutating 工具
     confirm: askConfirm,                    // 互動權限確認（mutating/危險工具執行前）
+    onTrusted: ({ name, signature, scope }) => {            // 漸進放權：自動放行時標示「已信任」（維持可理解）
+      endStream();
+      out(c.gray(`  ✓ 已信任 ${scope === 'command' ? `「${signature}」類` : name}，自動放行\n`));
+    },
   });
 
   let history = [];
@@ -63,19 +67,25 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
   };
 
   // 互動權限確認：守衛鏈第 5 格對 mutating/危險工具呼叫此函數。autoApprove → 一律放行。
-  // 回 'yes'（允許一次）/ 'always'（此工具全部）/ 'no'（拒絕）。
-  async function askConfirm(name, args, danger) {
+  // 回 'yes'（允許一次）/ 'command'（信任此命令簽章類,跨 session）/ 'always'（信任此工具全部）/ 'no'（拒絕）。
+  async function askConfirm(name, args, danger, meta = {}) {
     if (autoApprove && !danger) return 'yes';   // 自動模式仍對危險命令把關
     endStream();
+    const sig = meta.signature; // 有簽章（bash 類）才提供細粒度「信任這類命令」
     return new Promise((res) => {
       const warn = danger ? c.red(`  ⛔ 危險：${danger}\n`) : '';
       out(warn + c.yellow('  需要許可 ') + c.bold(name) + c.gray('(' + summarize(args) + ')') + '\n');
-      const hint = danger ? '[y]允許一次  [n]拒絕' : '[y]允許  [a]此工具全部  [n]拒絕';
+      const hint = danger ? '[y]允許一次  [n]拒絕'
+        : sig ? `[y]允許  [c]信任「${sig}」類  [a]信任 ${name} 全部  [n]拒絕`
+          : `[y]允許  [a]信任 ${name} 全部  [n]拒絕`;
+      out(c.gray('    （c/a 會記住,下次自動放行；/trust 查看與撤銷）\n'));
       try {
         rl.question(c.yellow(`    ${hint} › `), (ans) => {
           const a = (ans || '').trim().toLowerCase();
           if (danger) return res(a === 'y' || a === 'yes' ? 'yes' : 'no');
-          res(a === 'y' || a === 'yes' ? 'yes' : a === 'a' ? 'always' : 'no');
+          if (a === 'a') return res('always');
+          if (a === 'c' && sig) return res('command');
+          res(a === 'y' || a === 'yes' ? 'yes' : 'no');
         });
       } catch { res('no'); }
     });
@@ -163,6 +173,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
           '  /goal <目標>      目標驅動自主循環（反覆做到完成）',
           '  /undo            撤銷上一次檔案改動（write/edit）',
           '  /tools           列出此 pack 的工具',
+          '  /trust [forget <項>|clear]  已信任的工具/命令（漸進放權,跨 session）',
           '  /memory          顯示跨 session 記憶',
           '  /sessions        列出已保存的對話',
           '  /resume [id]     續接對話（不給 id=最近一次）',
@@ -173,6 +184,21 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
       case '/memory': {
         const mems = kernel.memory.list();
         out(mems.length ? c.gray(mems.map((m) => '  • ' + m).join('\n') + '\n') : c.gray('（尚無記憶）\n'));
+        return true;
+      }
+      case '/trust': {
+        const rest = input.trim().slice(cmd.length).trim();
+        if (rest === 'clear') { kernel.permissions.clear(); out(c.gray('（已清除全部信任）\n')); return true; }
+        if (rest.startsWith('forget ')) {
+          const entry = rest.slice('forget '.length).trim();
+          out(kernel.permissions.forget(entry) ? c.gray(`（已撤銷信任：${entry}）\n`) : c.yellow(`找不到信任項「${entry}」\n`));
+          return true;
+        }
+        const { tools, bash } = kernel.permissions.list();
+        if (!tools.length && !bash.length) { out(c.gray('（尚無已信任項；批准工具時選 a/c 即可記住）\n')); return true; }
+        if (tools.length) out(c.gray('  工具（全部放行）：') + tools.join('、') + '\n');
+        if (bash.length) out(c.gray('  命令（簽章類）：') + bash.map((s) => `「${s}」`).join('、') + '\n');
+        if (kernel.permissions.path) out(c.gray(`  ↳ ${kernel.permissions.path}（撤銷：/trust forget <項>）\n`));
         return true;
       }
       case '/sessions': {
@@ -225,7 +251,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
   };
 
   // 斜線指令 tab 補全
-  const SLASH = ['/help', '/goal ', '/sandbox', '/auto', '/plan', '/undo', '/tools', '/memory', '/sessions', '/resume', '/clear', '/exit'];
+  const SLASH = ['/help', '/goal ', '/sandbox', '/auto', '/plan', '/undo', '/tools', '/trust', '/memory', '/sessions', '/resume', '/clear', '/exit'];
   const completer = (line) => {
     if (!line.startsWith('/')) return [[], line];
     const hits = SLASH.filter((s) => s.startsWith(line));

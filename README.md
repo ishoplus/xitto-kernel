@@ -48,7 +48,9 @@ xitto-kernel --pack data-query
 xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
 ```
 
-**CLI 內操作**：直接打需求（模型會自己呼叫工具）；指令 `/help` `/goal <目標>` `/sandbox` `/plan` `/undo` `/tools` `/memory` `/sessions` `/resume` `/exit`；`Ctrl+C` 中斷該輪、閒置時再按一次離開。
+**CLI 內操作**：直接打需求（模型會自己呼叫工具）；指令 `/help` `/goal <目標>` `/sandbox` `/plan` `/undo` `/tools` `/trust` `/memory` `/sessions` `/resume` `/exit`；`Ctrl+C` 中斷該輪、閒置時再按一次離開。
+
+**漸進式放權（trust 隨用累積）**：mutating/危險工具執行前會確認；批准時可選 `[a]` 信任整個工具、或 `[c]` 只信任「該命令簽章類」（如 `git status`、`npm test`——細粒度,`npm install` 仍會問）。選擇會**落地到 `.xitto-kernel/<pack>/allow.json`,跨 session 記得**,下次同類自動放行並標示「✓ 已信任」。`/trust` 查看、`/trust forget <項>` 撤銷、`/trust clear` 全清。一開始謹慎、用著用著越來越順手——危險命令永不寫入信任,每次都把關。
 
 **通用自主 agent（給目標、自己做到完成）**
 ```bash

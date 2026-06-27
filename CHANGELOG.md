@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.4
+
+- **漸進式放權（per-pattern 記住批准）**：把「事事都問的煩」和「全自動的怕」同時解掉。
+  - 批准工具時可選 `[a]` 信任整個工具、或 `[c]` 只信任「命令簽章類」（`git status` ≠ `npm install`）
+  - 信任**落地到 `.xitto-kernel/<pack>/allow.json`,跨 session 累積**；重啟後同類自動放行
+  - 自動放行時標示「✓ 已信任」（`onTrusted` 回呼,維持可理解性）
+  - **危險命令永不寫入信任**,即使選 always 也只放行這次
+  - `/trust`（查看）、`/trust forget <項>`、`/trust clear`；`api.permissions.{list,forget,clear,path}`
+  - 新增 `allow-store.js`（`memoryAllowStore` / `fileAllowStore`）；接通既有 `parseAllowFile`/`commandSignature`
+  - 6 個測試 + 跨 kernel 實例（模擬重啟）整合驗證
+
 ## 0.3.3
 
 - **背景任務 + 完成通知（非同步交互）**：server 新增「派任務→通知」形態，把 agent 當同事用。
