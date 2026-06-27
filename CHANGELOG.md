@@ -19,6 +19,12 @@
 - **輕量串流 markdown 渲染** + edit/write 彩色 diff（CLI）
 - **通用自主 agent**：`general` pack（檔案/shell/`web_fetch`/`web_search`）+ **goal loop**
   （`runGoal` / `--goal "..."` / `/goal`：給目標、反覆做到完成、LLM 自我驗收）
+- **code agent 工具升級（達 Claude Code 等級）**：
+  - `grep`（正則搜內容、`path:line`、glob 過濾）、`glob`（`**` 遞迴找檔）
+  - `read` 附行號 + `offset`/`limit`；`edit` 唯一性檢查 + `replaceAll`（避免改錯位置）
+  - `bash` timeout 參數；`bash_bg` / `bash_output` / `bash_kill`（後台 dev server/watch）
+  - `web_fetch`（coding pack 也能查線上文件）
+  - **TodoWrite**（`todo_write`）：多步任務規劃/追蹤，CLI 即時清單渲染（☐/◐/☑）
 
 ### 變更
 
