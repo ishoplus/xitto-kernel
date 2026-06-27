@@ -10,6 +10,7 @@ import { createCodingPack } from '../packs/coding/index.js';
 import { createDataQueryPack } from '../packs/data-query/index.js';
 import { createNotesPack } from '../packs/notes/index.js';
 import { createGeneralPack } from '../packs/general/index.js';
+import { createDeepResearchPack } from '../packs/deep-research/index.js';
 
 const e = (n) => (s) => `\x1b[${n}m${s}\x1b[0m`;
 const green = e(32); const gray = e(90); const red = e(31); const cyan = e(36); const yellow = e(33);
@@ -19,6 +20,7 @@ const PACKS = {
   'data-query': createDataQueryPack,
   notes: createNotesPack,
   general: createGeneralPack,
+  'deep-research': createDeepResearchPack,
 };
 
 export async function main(argv = process.argv.slice(2)) {

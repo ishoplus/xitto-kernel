@@ -16,6 +16,7 @@ const shOk = (cmd, cwd) => { try { execSync(cmd, { cwd, stdio: 'ignore' }); retu
 export const answerMatch = (expect) => ({ answer }) => norm(answer).includes(norm(expect));
 export const answerMatchAny = (...xs) => ({ answer }) => xs.some((x) => norm(answer).includes(norm(x)));
 export const stateCheck = (cmd) => ({ dir }) => shOk(cmd, dir);
+export const allOf = (...fns) => (ctx) => fns.every((f) => f(ctx)); // 組合：全部通過才算 pass
 
 // 軌跡檢查（BFCL 風格）：agent 是否呼叫了某工具（可選 args 條件）。掃 history 的 toolCall。
 export const toolCalled = (name, argPred) => ({ history }) =>

@@ -101,7 +101,8 @@ xitto-kernel/
 │       ├── coding/               ✅ 參考 pack（read/ls/write/edit/bash/git）
 │       ├── data-query/           ✅ 第二領域（證明正交）
 │       ├── notes/                ✅ 第三領域（知識庫）
-│       └── general/              ✅ 通用自主 agent（檔案/shell/web_fetch + goal loop）
+│       ├── general/              ✅ 通用自主 agent（檔案/shell/web/http + goal loop）
+│       └── deep-research/        ✅ 深度研究（多來源搜尋→查證→有引用結論）
 ├── bin/xitto-kernel.js           ✅ CLI 進入點（run / new-agent）
 ├── test/                         ✅ 41 測試全綠（runTurn + Seatbelt 隔離 + 腳手架 + …）
 └── examples/
