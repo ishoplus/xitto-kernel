@@ -150,6 +150,7 @@ xitto-kernel/
 | coding（迷你）| SWE-bench 風格 | 隱藏測試（免 Docker）| `npm run eval` | 4/4 |
 | general | GAIA 風格 | 答案比對 / 狀態檢查 | `node eval/general-run.js` | 4/4 |
 | data-query | Spider/BIRD 風格 | 真實 SQLite + 答案比對 | `node eval/data-query-run.js` | 4/4 |
+| deep-research | GAIA/研究 | 事實正確 + 真的查證（allOf）| `node eval/deep-research-run.js` | 3/3 |
 | 工具呼叫 | BFCL 風格 | 軌跡檢查（呼叫對工具/參數）| `node eval/tool-calling-run.js` | 6/6 |
 
 \* 用 MiniMax-M2.7 跑的參考數字（小樣本）；換模型/擴樣本見 `eval/README.md`。scorer 型：`answerMatch` / `stateCheck` / `toolCalled`。
