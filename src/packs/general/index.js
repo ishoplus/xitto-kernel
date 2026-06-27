@@ -2,7 +2,7 @@
 // 搭配 kernel 的 runGoal（目標循環）+ 子 agent + MCP，即為「給目標、自己做到完成」的通用 agent。
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, extname } from 'node:path';
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
 
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
@@ -45,9 +45,16 @@ export function createGeneralPack({ cwd = process.cwd() } = {}) {
     execute: async (_id, { path, oldText, newText }) => { const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path }); const b = readFileSync(p, 'utf8'); if (!b.includes(oldText)) return txt({ error: 'oldText 未找到', path }); writeFileSync(p, b.replace(oldText, newText), 'utf8'); return txt({ edited: path }); },
   };
   const bash = {
-    name: 'bash', label: 'bash', description: '執行 shell 命令', mutating: true, sandboxable: true,
-    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
-    execute: async (_id, { command }) => { try { return txt(execSync(command, { cwd, encoding: 'utf8', timeout: 120000 }) || '(no output)'); } catch (e) { return txt({ error: e.message, stdout: e.stdout, stderr: e.stderr }); } },
+    name: 'bash', label: 'bash', description: '執行 shell 命令（可選 timeout 秒數，預設 120）', mutating: true, sandboxable: true,
+    parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } }, required: ['command'] },
+    execute: async (_id, { command, timeout }) => {
+      const ms = Math.min(600, Math.max(1, timeout || 120)) * 1000;
+      const r = spawnSync(command, { shell: true, cwd, encoding: 'utf8', timeout: ms, maxBuffer: 16 * 1024 * 1024 });
+      const output = ((r.stdout || '') + (r.stderr || '')).trim();
+      if (r.error) return txt({ error: r.error.message, output });
+      if (r.status !== 0) return txt({ error: `命令結束碼 ${r.status}`, output: output || '(no output)' });
+      return txt(output || '(no output)');
+    },
   };
   const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
   const stripTags = (s) => String(s).replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim();

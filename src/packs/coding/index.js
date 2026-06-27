@@ -4,7 +4,7 @@
 // 對應 docs/05-example-packs.md「A. coding pack」。
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { createBackgroundTools } from '../../kernel/bg.js';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
 
@@ -93,8 +93,12 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } }, required: ['command'] },
     execute: async (_id, { command, timeout }) => {
       const ms = Math.min(600, Math.max(1, timeout || 120)) * 1000;
-      try { return txt(execSync(command, { cwd, encoding: 'utf8', timeout: ms, maxBuffer: 16 * 1024 * 1024 }) || '(no output)'); }
-      catch (e) { return txt({ error: e.message, stdout: e.stdout, stderr: e.stderr }); }
+      // spawnSync 同時捕捉 stdout+stderr（不漏到終端，agent 也看得到錯誤輸出）
+      const r = spawnSync(command, { shell: true, cwd, encoding: 'utf8', timeout: ms, maxBuffer: 16 * 1024 * 1024 });
+      const output = ((r.stdout || '') + (r.stderr || '')).trim();
+      if (r.error) return txt({ error: r.error.message, output });
+      if (r.status !== 0) return txt({ error: `命令結束碼 ${r.status}`, output: output || '(no output)' });
+      return txt(output || '(no output)');
     },
   };
 
