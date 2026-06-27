@@ -3,6 +3,7 @@
 import { join } from 'node:path';
 import { loadModel } from './providers.js';
 import { runCli } from './cli.js';
+import { runTui } from './tui-run.js';
 import { newAgent } from './scaffold.js';
 import { createKernel } from '../kernel/index.js';
 import { loadMcpTools } from '../kernel/mcp.js';
@@ -77,6 +78,12 @@ export async function main(argv = process.argv.slice(2)) {
     process.exit(res.done ? 0 : 1);
   }
 
+  if (opts.tui && process.stdin.isTTY) {
+    runTui({ pack: make({ cwd }), model, getApiKey, sandbox: opts.sandbox, resume: opts.resume });
+    return;
+  }
+  if (opts.tui) console.error(gray('（--tui 需要真實終端，退回一般 CLI）'));
+
   runCli({
     pack: make({ cwd }), model, getApiKey,
     sandbox: opts.sandbox, resume: opts.resume, auto: opts.yes,
@@ -93,6 +100,7 @@ function parse(argv) {
     else if (a === '--model') o.model = argv[++i];
     else if (a === '--sandbox') o.sandbox = true;
     else if (a === '--yes' || a === '-y') o.yes = true;
+    else if (a === '--tui') o.tui = true;
     else if (a === '--goal') o.goal = argv[++i];
     else if (a === '--resume') { const nxt = argv[i + 1]; if (nxt && !nxt.startsWith('--')) { o.resume = nxt; i++; } else o.resume = true; }
   }
@@ -108,10 +116,13 @@ function printHelp() {
     '  xitto-kernel --pack general --goal "..." [--yes]         目標驅動自主循環（headless）',
     '  xitto-kernel new-agent <name>                            產出依賴 kernel 的獨立 agent 專案',
     '',
-    '  --pack <name>   選擇內建 DomainPack（coding | data-query | notes | general；預設 coding）',
+    '  --pack <name>   選擇內建 DomainPack（coding | data-query | notes | general | deep-research | devops；預設 coding）',
     '  --goal "..."    給目標，agent 自主反覆做到完成（建議搭配 --pack general）',
     '  --model <id>    指定 model（預設用 providers.json 的 defaultModel）',
     '  --sandbox       啟動即開啟沙箱（macOS=Seatbelt 真隔離）',
+    '  --tui           完整 Ink TUI（持久狀態列、串流轉錄、Esc 中斷；需真實終端）',
+    '  --resume [id]   接續上次 session（不給 id 接最近一次）',
+    '  --yes, -y       自動核准 mutating 工具（headless / 自主循環常用）',
     '  --help          顯示說明',
     '',
     '需要 ~/.xitto-code/providers.json（與 xitto-code 共用）。',
