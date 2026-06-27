@@ -72,6 +72,20 @@ curl -s -XPOST localhost:8787/v1/run -H "Authorization: Bearer secret" \
 結構化 JSON 日誌（審計/觀測）、6 個 pack 可選、JSON 或 SSE（`/v1/stream`）串流。
 「個人 vs 生產」是 **app 層**的事 —— 同一個 kernel，CLI 與 server 是兩個 app。
 
+**背景任務 + 完成通知（非同步交互）** —— 派任務出去、立刻拿到 `taskId`、做完回呼 webhook，不用一直盯著：
+```bash
+# 派任務（立刻回 202 + taskId），完成時 POST 結果到 webhook
+curl -s -XPOST localhost:8787/v1/tasks -H "Authorization: Bearer secret" \
+  -H content-type:application/json \
+  -d '{"pack":"general","mode":"goal","goal":"...","webhook":"https://你的服務/done"}'
+
+curl -s localhost:8787/v1/tasks            -H "Authorization: Bearer secret"   # 列表
+curl -s localhost:8787/v1/tasks/<id>       -H "Authorization: Bearer secret"   # 狀態 + 結果
+curl -sN localhost:8787/v1/tasks/<id>/events -H "Authorization: Bearer secret" # 附掛事件流（SSE，replay+即時）
+```
+限流並發 `XITTO_SERVER_CONCURRENCY`（預設 2）；webhook 完成時收到 `{taskId,status,text,usage,rounds,done}`。
+這把「即時盯著看」延伸到「派任務→通知」的非同步形態（像把 agent 當同事）。
+
 ## 做你自己的領域 agent（不固化）
 
 kernel 是**被依賴的套件**，不是被 clone 的範本。你的 agent 是獨立小專案：

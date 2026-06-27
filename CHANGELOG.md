@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.3
+
+- **背景任務 + 完成通知（非同步交互）**：server 新增「派任務→通知」形態，把 agent 當同事用。
+  - `POST /v1/tasks`：立刻回 `202 + taskId`，後台跑，完成 POST 結果到 `webhook`
+  - `GET /v1/tasks`、`GET /v1/tasks/:id`：列表 / 狀態 + 結果
+  - `GET /v1/tasks/:id/events`：附掛事件流（SSE，replay 緩衝 + 即時）
+  - 限流並發 `XITTO_SERVER_CONCURRENCY`（預設 2）
+  - 抽出 `createTaskStore`（純記憶體、可測）與 `mapEvent`；`/v1/run`/`/v1/stream` 共用 `runKernel`
+  - 5 個任務佇列測試（狀態轉移 / 限流 / 事件緩衝 / 完成回呼 / 訂閱）
+
 ## 0.3.2
 
 - **沒設定就啟動 → 直接進導引**：偵測到沒有 providers.json 且在真實終端時，
