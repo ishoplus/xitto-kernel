@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.7
+
+- **技能結晶政策閘門（驗證才算數）**：每個自寫技能新增時必須有明確目標 + 通過的驗證,否則不落地。
+  - `skill_save` 新增必填 `goal`（明確目標）與 `verify`（驗證指令）
+  - **verify 在沙箱實際執行,exit 0 才新增**；未過則拒絕並回傳輸出供 agent 修正
+  - 危險驗證指令一律擋（複用 `dangerousReason`/`sandboxViolation`）；開沙箱時 Seatbelt 包執行
+  - 落地檔記 `goal`/`verified: true`/`verifiedAt` + `## 驗證（已通過）` 區塊（為日後重驗/衰減鋪路）
+  - kernel 新增 `runVerify`（注入 createSkills）；確保結晶的是「已驗證的成功」而非「宣稱的成功」
+  - 7 個測試 + 真實 runVerify 端到端（通過→新增 / 失敗→拒絕 / 危險→擋 / 缺 goal→拒）
+
 ## 0.3.6
 
 - **自我結晶技能（結晶層）**：agent 摸出可重複流程時自己寫成技能,跨任務/跨 session 複用。

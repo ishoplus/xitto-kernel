@@ -9,7 +9,9 @@ import { createToolRegistry, deriveMutatingTools, isSandboxable } from './tool-r
 import { composeGuards } from './guard-chain.js';
 import { createPermissionStep } from './security/permission-step.js';
 import { fileAllowStore, memoryAllowStore } from './security/allow-store.js';
-import { normalizeSandbox, wrapWithSeatbelt } from './security/sandbox.js';
+import { normalizeSandbox, wrapWithSeatbelt, sandboxViolation } from './security/sandbox.js';
+import { dangerousReason } from './security/danger.js';
+import { spawnSync } from 'node:child_process';
 import { createMemory } from './memory.js';
 import { createPlaybook } from './playbook.js';
 import { createTodo } from './todo.js';
@@ -109,12 +111,30 @@ export function createKernel(pack, config = {}) {
   const todo = createTodo();
   const sessionsDir = join(dataDir, 'sessions');
   const hooks = loadHooks(join(dataDir, 'settings.json')); // PreToolUse/PostToolUse
-  const skills = createSkills(join(dataDir, 'skills'));     // 漸進揭露技能
 
   // 沙箱策略：config.sandbox > pack.permissionPolicy.sandbox > 預設（關）。
   const sandboxCfg = normalizeSandbox(config.sandbox ?? pack.permissionPolicy?.sandbox);
   const getSandbox = config.getSandbox || (() => !!sandboxCfg.enabled);
   const getSandboxConfig = () => sandboxCfg;
+
+  // 技能驗證器：結晶新技能前，先在沙箱跑一條驗證指令，須 exit 0 才准新增（結晶=已驗證的成功）。
+  // 靜態安全：危險指令一律擋；開沙箱時併查靜態策略，再用 Seatbelt 包執行。
+  const runVerify = (command, { timeoutMs = 60000 } = {}) => {
+    const cmd = String(command || '').trim();
+    if (!cmd) return { ok: false, blocked: true, reason: 'verify 指令為空' };
+    const danger = dangerousReason(cmd);
+    if (danger) return { ok: false, blocked: true, reason: `驗證指令危險（${danger}），拒絕執行` };
+    if (getSandbox()) {
+      const v = sandboxViolation(cmd, getSandboxConfig());
+      if (v) return { ok: false, blocked: true, reason: `驗證指令違反沙箱策略（${v}）` };
+    }
+    const finalCmd = (getSandbox() ? wrapWithSeatbelt(cmd, { cwd, cfg: getSandboxConfig() }) : null) || cmd;
+    const r = spawnSync(finalCmd, { shell: true, cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
+    const output = ((r.stdout || '') + (r.stderr || '')).trim().slice(0, 4000);
+    if (r.error) return { ok: false, code: null, output: (output + ' ' + r.error.message).trim() };
+    return { ok: r.status === 0, code: r.status, output: output || '(no output)' };
+  };
+  const skills = createSkills(join(dataDir, 'skills'), { verifyRunner: runVerify }); // 漸進揭露 + 結晶（須驗證）
 
   // 工具：pack 工具（sandboxable 包 Seatbelt、mutating+path 加 undo 快照）+ kernel 內建記憶工具 + spawn_agent。
   const undoStack = [];
