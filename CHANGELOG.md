@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.9
+
+- **情節記憶 + 相關性召回（情節層）**：記「做過什麼任務」,相似任務時自動召回最相關的幾筆。
+  - 新增 kernel 內建 `episodes.js`：`episode_record`（記摘要+tags+成敗,Jaccard 去重）、`episode_recall`（按相關性召回）
+  - **自動召回**：`runTurn` 把與本輪 input 最相關的 top-K 過往情節注入該輪 prompt（`config.recallEpisodes=false` 可關）
+  - **相關性評分引擎**（重點）：關鍵詞 + 中文 bigram 重疊 + tag 加權(×2) + 近期微傾；只回 score>0、top-K
+    ——零依賴、可解釋,非黑箱 embedding；解掉記憶系統真正的瓶頸「召回對的那幾條」
+  - 落地 `.xitto-kernel/<pack>/episodes.jsonl`；綁 cwd → 天然只召回該專案
+  - `/episodes`（列近期）、`/episodes <關鍵詞>`（測召回）、`/episodes clear`；`api.episodes.*`
+  - 6 個測試（斷詞/評分/去重/召回排序/recallSection/runTurn 自動注入）+ 真實 model 端到端
+    （cors 查詢只召回 cors 情節、DB 查詢只召回 DB 情節、agent 用上召回的解法）
+  - 「沉澱經驗」五層至此完成四層（反射/程序/結晶/情節）；僅餘事實層自動萃取
+
 ## 0.3.8
 
 - **技能自我維護（用量戳記 + 漂移偵測）**：結晶後不再靜止,技能庫會自我體檢。

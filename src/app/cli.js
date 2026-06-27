@@ -177,6 +177,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
           '  /memory          顯示跨 session 記憶',
           '  /playbook [forget <主題>|clear]  專案手冊（agent 沉澱的程序知識,跨 session）',
           '  /skills [check|forget <名>]  已結晶技能（用量/失效標示；check 重跑 verify 偵測漂移）',
+          '  /episodes [查詢|clear]  過往任務情節（無參數列近期；給查詢測相關性召回）',
           '  /sessions        列出已保存的對話',
           '  /resume [id]     續接對話（不給 id=最近一次）',
           '  /clear           清除歷史（開新 session）',
@@ -223,6 +224,21 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
         if (!sk.length) { out(c.gray('（尚無技能；agent 摸出可重複流程時會用 skill_save 結晶）\n')); return true; }
         out(sk.map((s) => (s.stale ? c.red('  ⚠ ') : c.cyan('  • ')) + s.name + c.gray(`：${s.desc}${s.used ? ` · 用過 ${s.used} 次` : ''}${s.stale ? ' · 已失效待修' : ''}`)).join('\n') + '\n');
         if (kernel.skills.path) out(c.gray(`  ↳ ${kernel.skills.path}（複查：/skills check · 移除：/skills forget <名>）\n`));
+        return true;
+      }
+      case '/episodes': {
+        const rest = input.trim().slice(cmd.length).trim();
+        if (rest === 'clear') { const { cleared } = kernel.episodes.clear(); out(c.gray(`（已清空情節,移除 ${cleared} 筆）\n`)); return true; }
+        if (rest) {   // 給查詢 → 測相關性召回
+          const hits = kernel.episodes.recall(rest, 8);
+          if (!hits.length) { out(c.gray(`（沒召回到與「${rest}」相關的情節）\n`)); return true; }
+          out(hits.map((h) => c.cyan(`  • [${h.score}] `) + h.summary + c.gray(`${h.outcome ? ` (${h.outcome})` : ''}${h.tags?.length ? ` [${h.tags.join(', ')}]` : ''}`)).join('\n') + '\n');
+          return true;
+        }
+        const eps = kernel.episodes.list(15);
+        if (!eps.length) { out(c.gray('（尚無情節；完成有價值的任務時 agent 會用 episode_record 記下）\n')); return true; }
+        out(eps.map((e) => c.cyan('  • ') + e.summary + c.gray(`${e.outcome ? ` (${e.outcome})` : ''}${e.tags?.length ? ` [${e.tags.join(', ')}]` : ''}`)).join('\n') + '\n');
+        out(c.gray(`  ↳ ${kernel.episodes.count()} 筆 · 試召回：/episodes <關鍵詞>\n`));
         return true;
       }
       case '/trust': {
@@ -290,7 +306,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
   };
 
   // 斜線指令 tab 補全
-  const SLASH = ['/help', '/goal ', '/sandbox', '/auto', '/plan', '/undo', '/tools', '/trust', '/memory', '/playbook', '/skills', '/sessions', '/resume', '/clear', '/exit'];
+  const SLASH = ['/help', '/goal ', '/sandbox', '/auto', '/plan', '/undo', '/tools', '/trust', '/memory', '/playbook', '/skills', '/episodes', '/sessions', '/resume', '/clear', '/exit'];
   const completer = (line) => {
     if (!line.startsWith('/')) return [[], line];
     const hits = SLASH.filter((s) => s.startsWith(line));

@@ -56,6 +56,8 @@ xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
 
 **自我結晶技能（結晶層，須驗證）**：摸出一套可重複的操作流程/SOP 時,agent 用 `skill_save` 把它**寫成新技能**(markdown)存進 `.xitto-kernel/<pack>/skills/`。**政策閘門:每個技能新增時必須附 (1) `goal` 明確目標 (2) `verify` 一條驗證指令——verify 會在沙箱實際執行,通過(exit 0)才落地**,否則拒絕並回傳輸出讓 agent 修正(危險指令一律擋下)。確保結晶的是「已驗證的成功」而非「宣稱的成功」。**本 session 立即可用 `skill` 按名載入(熱掃描),未來 session 自動列入「可用技能」**(漸進揭露:prompt 只列名稱+簡述,需要時才載全文)。**自我維護**:載入會記用量(`usedCount`);`skills_check`/`/skills check` 重跑每個技能存的 verify 偵測**漂移**——專案變動後失效的標 `⚠ stale` 浮上來讓你修或刪,保持技能庫可信(失效的在 prompt 標注、別誤用)。`/skills` 查看(含用量/失效)、`/skills forget <名>` 移除。分工:`playbook` 是專案事實性 know-how,`skill` 是可跨任務複用且**已驗證**的操作流程。這層讓 agent 像 Voyager 一樣**長出自己的技能庫**——但每條都經驗證、會自我體檢,且跑在 kernel 的沙箱 + 漸進信任治理裡。
 
+**情節記憶 + 相關性召回（情節層）**：完成有價值的任務後,agent 用 `episode_record` 記一筆情節(摘要 + tags + 成敗)進 `.xitto-kernel/<pack>/episodes.jsonl`。**關鍵在召回不在存**:遇到相似任務時,kernel **自動**把與當前 input 最相關的 top-K 過往情節(相關性評分:關鍵詞/中文 bigram 重疊 + tag 加權 + 近期微傾)注入該輪 prompt——**只注入最相關的幾條,不全量倒**(避免稀釋 context、誤導)。也可主動 `episode_recall`。記錄時做 Jaccard 去重避免膨脹。`/episodes` 列近期、`/episodes <關鍵詞>` 測召回、`/episodes clear`。這直接解掉所有記憶系統的真正瓶頸——**召回對的那幾條**(零依賴、可解釋的評分,非黑箱 embedding)。
+
 **通用自主 agent（給目標、自己做到完成）**
 ```bash
 xitto-kernel --pack general --yes --goal "抓取 example.com 摘要成繁中寫進 summary.txt"

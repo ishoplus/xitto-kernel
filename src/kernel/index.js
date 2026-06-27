@@ -14,6 +14,7 @@ import { dangerousReason } from './security/danger.js';
 import { spawnSync } from 'node:child_process';
 import { createMemory } from './memory.js';
 import { createPlaybook } from './playbook.js';
+import { createEpisodes } from './episodes.js';
 import { createTodo } from './todo.js';
 import { createSpawnTool } from './subagent.js';
 import { createSkills } from './skills.js';
@@ -47,6 +48,9 @@ const DEFAULT_MEMORY_GUIDE =
 
 const DEFAULT_PLAYBOOK_GUIDE =
   '摸清這個專案的「做事方法」(如何建置/測試/執行/部署、慣例、必經步驟、坑與修法)時，用 playbook_update 按 topic 記下來(同 topic 覆蓋)；過時就用 playbook_remove 清掉。下次自動載入，不必重新摸索。分工：memory 存事實/偏好/決策，playbook 存可重複的程序步驟。';
+
+const DEFAULT_EPISODE_GUIDE =
+  '完成有價值的任務後，用 episode_record 記一筆情節(做了什麼+結果+tags)；遇到相似任務時系統會自動召回最相關的幾筆供參考，也可主動用 episode_recall 查。';
 
 // 把 sandboxable 工具的命令在執行期包進 Seatbelt（macOS OS 級隔離）。
 // 非 macOS / 沙箱關閉 / 無 command → wrapWithSeatbelt 回 null，跑原命令（仍受第 5 格靜態策略保護）。
@@ -108,6 +112,7 @@ export function createKernel(pack, config = {}) {
   const dataDir = join(cwd, '.xitto-kernel', pack.name);
   const memory = createMemory(join(dataDir, 'memory.md'));
   const playbook = createPlaybook(join(dataDir, 'playbook.md'));
+  const episodes = createEpisodes(join(dataDir, 'episodes.jsonl'));
   const todo = createTodo();
   const sessionsDir = join(dataDir, 'sessions');
   const hooks = loadHooks(join(dataDir, 'settings.json')); // PreToolUse/PostToolUse
@@ -142,6 +147,7 @@ export function createKernel(pack, config = {}) {
     ...pack.tools().map((t) => wrapUndo(wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }), { cwd, undoStack })),
     ...memory.tools,
     ...playbook.tools,
+    ...episodes.tools,
     todo.tool,
     ...skills.tools,
     ...(config.extraTools || []),  // 外部注入（MCP 工具等）：由 app 層先 async 載入再傳入
@@ -169,7 +175,7 @@ export function createKernel(pack, config = {}) {
   const systemPrompt =
     pack.systemPrompt +
     loadContextFiles(cwd, pack.contextFiles) +          // 注入領域規範檔（CLAUDE.md 等）
-    '\n\n# 記憶與專案手冊\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) + '\n' + DEFAULT_PLAYBOOK_GUIDE +
+    '\n\n# 記憶與專案手冊\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) + '\n' + DEFAULT_PLAYBOOK_GUIDE + '\n' + DEFAULT_EPISODE_GUIDE +
     (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '') +
     (pbText ? `\n\n# 專案手冊（這個專案怎麼做事，跨 session 累積）\n${pbText}` : '') +
     skills.promptSection();
@@ -221,6 +227,8 @@ export function createKernel(pack, config = {}) {
     playbook: { list: playbook.list, update: playbook.update, remove: playbook.remove, clear: playbook.clear, load: playbook.load, path: join(dataDir, 'playbook.md') },
     // 技能（結晶層 + 自我維護）：列出 / 移除 / 重掃 / 漂移複查；path 為技能資料夾。
     skills: { list: skills.list, remove: skills.remove, reload: skills.reload, check: skills.check, path: join(dataDir, 'skills') },
+    // 情節（情節層 + 相關性召回）：記錄 / 召回 / 列出 / 清空；path 為落地檔。
+    episodes: { record: episodes.record, recall: episodes.recall, list: episodes.list, clear: episodes.clear, count: episodes.count, path: join(dataDir, 'episodes.jsonl') },
     todo: { get: todo.get },
     /** 撤銷上一次檔案改動（write/edit）：還原內容，新建的檔則刪除。 */
     undo: () => {
@@ -271,9 +279,12 @@ export function createKernel(pack, config = {}) {
       const streamFn = config.streamFn || (await import('./provider.js')).defaultStreamFn();
       const model = config.model;
 
+      // 自動相關性召回：把與本輪 input 最相關的過往情節注入 prompt（只 top-K,不全量倒）
+      const turnSystemPrompt = systemPrompt + (config.recallEpisodes === false ? '' : episodes.recallSection(input));
+
       const agent = new Agent({
         initialState: {
-          systemPrompt,
+          systemPrompt: turnSystemPrompt,
           model,
           tools: registry.all(),
           messages: opts.history || [],   // 多輪對話：延續歷史
