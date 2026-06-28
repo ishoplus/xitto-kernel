@@ -7,7 +7,9 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync
 import { join, dirname, isAbsolute, relative, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { completeSimple } from '@mariozechner/pi-ai';
 import { createKernel } from '../kernel/index.js';
+import { cacheRetentionFor } from '../kernel/provider.js';
 import { loadModel } from './providers.js';
 import { createCodingPack } from '../packs/coding/index.js';
 import { createDataQueryPack } from '../packs/data-query/index.js';
@@ -23,6 +25,49 @@ const PACKS = {
 
 const lastText = (history) => ([...(history || [])].reverse().find((m) => m.role === 'assistant')?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
 const newId = (p = 's') => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+// 任務自動分流：非技術使用者不必懂「領域」，依願望文字自動挑最適合的 pack。
+// LLM 為主、關鍵字 heuristic 為備援/逾時保險；任何不確定一律回 general（最通用，涵蓋八成需求）。
+// 資源型 pack（data-query 需 DB、notes 需筆記庫）只在明確訊號才選，避免誤分流到跑不起來的領域。
+const ROUTE_GUIDE =
+  'general：通用（預設）。上網查資料、讀寫檔案、跑小腳本、串 API 的一般任務。不確定就選這個。\n' +
+  'coding：改既有程式專案／repo——修 bug、跑測試、git。\n' +
+  'deep-research：一個主題查多個來源、查證後寫成研究報告。\n' +
+  'data-query：對 SQLite 資料庫下 SQL 撈數據——僅當明確提到資料庫／SQL／.db 才選。\n' +
+  'notes：管理筆記知識庫——僅當明確提到筆記才選。\n' +
+  'devops：伺服器維運／部署／docker／CI／常駐服務。';
+
+// 關鍵字快速判斷（LLM 不可用/逾時時的備援；命中強訊號才回領域，否則 null→general）。
+export function heuristicPack(goal) {
+  const g = String(goal || '').toLowerCase();
+  if (/(sqlite|資料庫|database|\.db\b|撈數據|查詢資料表|\bsql\b|select\s+\*)/.test(g)) return 'data-query';
+  if (/(部署|deploy|docker|kubernetes|k8s|nginx|ci\/cd|systemd|伺服器維運)/.test(g)) return 'devops';
+  if (/(筆記本?|\bnotes?\b)/.test(g)) return 'notes';
+  if (/(研究報告|深度研究|多來源|文獻|綜述|市場調查|競品分析|deep\s*research)/.test(g)) return 'deep-research';
+  if (/(修\s*bug|debug|重構|refactor|單元測試|unit\s*test|程式碼|codebase|\brepo\b|git\s*commit|pull\s*request|\.(js|ts|jsx|tsx|py|go|rs|java|cpp?|rb|php)\b)/.test(g)) return 'coding';
+  return null;
+}
+
+// 回傳最適合的 pack 名（一定是 PACKS 內的合法 key）。complete 可注入（測試用），預設用 pi-ai completeSimple。
+export async function classifyPack(goal, { model, getApiKey, complete = completeSimple } = {}) {
+  const fallback = heuristicPack(goal) || 'general';
+  if (!model || !getApiKey || !String(goal || '').trim()) return fallback;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 6000); // 分流不該拖慢交辦：逾時就用 heuristic
+  try {
+    const apiKey = await getApiKey(model.provider);
+    if (!apiKey) return fallback;
+    const ctx = {
+      systemPrompt: '你是任務分流器。把使用者的需求分到最適合的「領域」，只輸出一個領域代號（general/coding/deep-research/data-query/notes/devops）其中之一，不要解釋、不要標點。\n領域說明：\n' + ROUTE_GUIDE,
+      messages: [{ role: 'user', content: [{ type: 'text', text: `需求：${String(goal).slice(0, 600)}\n\n領域代號是？` }], timestamp: Date.now() }],
+    };
+    const res = await complete(model, ctx, { maxTokens: 12, apiKey, signal: ac.signal, cacheRetention: cacheRetentionFor(model) });
+    const t = (res?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').toLowerCase();
+    const hit = Object.keys(PACKS).find((p) => t.includes(p)) || (t.includes('research') ? 'deep-research' : null);
+    return hit || fallback;
+  } catch { return fallback; }
+  finally { clearTimeout(timer); }
+}
 
 // 交付檔案的 content-type（讓圖片能顯示、md/html 能渲染、其餘可下載）。
 const MIME = { md: 'text/markdown', markdown: 'text/markdown', txt: 'text/plain', log: 'text/plain', json: 'application/json', csv: 'text/csv', html: 'text/html', htm: 'text/html', js: 'text/javascript', mjs: 'text/javascript', ts: 'text/plain', py: 'text/plain', sh: 'text/plain', css: 'text/css', xml: 'application/xml', yaml: 'text/plain', yml: 'text/plain', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
@@ -120,7 +165,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
     }
   }
 
-  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', workspace: t.spec.workspace || 'default', goal: t.spec.goal || t.spec.input || '', sessionId: t.result?.sessionId || t.spec.sessionId || null, continued: !!t.spec.sessionId, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null, progress: t.progress || null });
+  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', auto: !!t.spec.auto, mode: t.spec.mode || 'turn', workspace: t.spec.workspace || 'default', goal: t.spec.goal || t.spec.input || '', sessionId: t.result?.sessionId || t.spec.sessionId || null, continued: !!t.spec.sessionId, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null, progress: t.progress || null });
 
   const emit = (t, ev) => {
     t.events.push(ev);
@@ -330,6 +375,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     // 同步：跑完才回（JSON 或 SSE 串流）
     if (req.method === 'POST' && (path === '/v1/run' || path === '/v1/stream')) {
       const body = await readBody(req);
+      if (!body.pack || body.pack === 'auto') body.pack = await classifyPack(body.goal || body.input || '', { model, getApiKey }); // 自動分流
       const streaming = path === '/v1/stream';
       if (streaming) sseHead(res);
       const sse = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
@@ -348,12 +394,15 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     // 背景任務：立刻回 taskId，後台跑，完成發 webhook
     if (req.method === 'POST' && path === '/v1/tasks') {
       const body = await readBody(req);
-      if (!PACKS[body.pack || 'general']) return json(res, 400, { error: `未知 pack「${body.pack}」，可用：${Object.keys(PACKS).join(', ')}` });
+      // 自動分流：pack 省略或為 'auto' → 依願望文字挑領域（非技術使用者不必懂領域）。
+      let pack = body.pack; let routed = false;
+      if (!pack || pack === 'auto') { pack = await classifyPack(body.goal || body.input || '', { model, getApiKey }); routed = true; }
+      if (!PACKS[pack]) return json(res, 400, { error: `未知 pack「${body.pack}」，可用：${Object.keys(PACKS).join(', ')}` });
       if (body.webhook && !/^https?:\/\//.test(body.webhook)) return json(res, 400, { error: 'webhook 需為 http(s) URL' });
       if (local && body.workspace && isAbsolute(body.workspace) && !existsSync(body.workspace)) return json(res, 400, { error: `資料夾不存在：${body.workspace}` });
-      const t = tasks.enqueue({ pack: body.pack, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook, workspace: body.workspace });
-      log({ task: t.id, action: 'enqueue', pack: body.pack || 'general', mode: body.mode || 'turn' });
-      return json(res, 202, { taskId: t.id, status: t.status, ...tasks.stats() });
+      const t = tasks.enqueue({ pack, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook, workspace: body.workspace, auto: routed });
+      log({ task: t.id, action: 'enqueue', pack, routed, mode: body.mode || 'turn' });
+      return json(res, 202, { taskId: t.id, status: t.status, pack, routed, ...tasks.stats() });
     }
     if (req.method === 'GET' && path === '/v1/tasks') return json(res, 200, { tasks: tasks.list(), ...tasks.stats() });
 

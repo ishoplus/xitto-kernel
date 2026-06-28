@@ -152,6 +152,7 @@
       <span class="askhint">⌘ / Ctrl + Enter 送出</span>
       <button id="go">交辦 →</button>
     </div>
+    <div id="routehint" class="askhint" style="margin-top:8px;display:none"></div>
   </div>
 
   <div class="layout">
@@ -198,7 +199,9 @@ setInterval(() => { if (liveTask && (liveTask.status==="running"||liveTask.statu
 
 // 領域選單（非技術使用者預設「通用」）
 const LABELS = { general:"通用", coding:"程式", "data-query":"查資料", notes:"筆記", "deep-research":"研究", devops:"維運" };
-$("#pack").innerHTML = PACKS.map(p=>`<option value="${p}" ${p==="general"?"selected":""}>${LABELS[p]||p}</option>`).join("");
+const packLabel = (p) => LABELS[p] || p;
+// 預設「自動判斷」：使用者不必懂領域,系統依願望文字挑;要手動指定可在此覆蓋
+$("#pack").innerHTML = `<option value="auto" selected>🪄 自動判斷領域</option>` + PACKS.map(p=>`<option value="${p}">${packLabel(p)}</option>`).join("");
 
 // 專案／空間（對應 Claude Code 的「目錄」,但可選＋命名＋有預設；不同空間的檔案與沉澱各自獨立）
 let spaces = JSON.parse(localStorage.getItem("xk_spaces")||'["default"]');
@@ -308,10 +311,16 @@ let activeId = null, polling = null;
 
 $("#go").onclick = async () => {
   const goal = $("#goal").value.trim(); if (!goal) return;
+  const picked = $("#pack").value;
   $("#go").disabled = true;
-  const r = await api("/v1/tasks", { method:"POST", body: JSON.stringify({ pack:$("#pack").value, mode:"goal", goal, workspace: curSpace }) }).then(r=>r.json());
+  if (picked==="auto") { const rh=$("#routehint"); rh.style.display=""; rh.textContent="🪄 判斷適合的領域…"; }
+  const r = await api("/v1/tasks", { method:"POST", body: JSON.stringify({ pack:picked, mode:"goal", goal, workspace: curSpace }) }).then(r=>r.json());
   $("#go").disabled = false;
-  if (r.error) { alert(r.error); return; }
+  if (r.error) { alert(r.error); $("#routehint").style.display="none"; return; }
+  // 自動分流回饋：告訴使用者這次用了哪個領域,要改可在上面下拉覆蓋後重交辦
+  const rh=$("#routehint");
+  if (r.routed && r.pack) { rh.style.display=""; rh.innerHTML=`🪄 已自動用「<b>${esc(packLabel(r.pack))}</b>」領域 · 不對的話可在上方下拉改選領域再交辦`; }
+  else rh.style.display="none";
   $("#goal").value = "";
   $("#fview").style.display="none"; expandedLog=false;
   activeId = r.taskId;
@@ -342,7 +351,7 @@ function renderCurrent(t) {
   const p = t.progress||{}, nLog=(p.log||[]).length;
   const logSec = nLog ? `<div class="logtoggle" onclick="toggleLog()">${expandedLog?"▾ 收合過程":"▸ 展開過程（"+nLog+" 步）"}</div>${expandedLog?`<div class="loglist">${logHtml(p)}</div>`:""}` : "";
   $("#current").innerHTML = `<div class="card">
-    <div class="goal">${esc(t.goal||"任務")}<span class="wsbadge">📁 ${esc(t.workspace||"default")}</span></div>
+    <div class="goal">${esc(t.goal||"任務")}<span class="wsbadge">📁 ${esc(t.workspace||"default")}</span>${t.pack?`<span class="wsbadge" title="${t.auto?"自動判斷的領域":"指定的領域"}">${t.auto?"🪄":"🧭"} ${esc(packLabel(t.pack))}</span>`:""}</div>
     <span class="status ${statusClass(t.status)}">${statusText(t.status)}${t.rounds?` · ${t.rounds} 輪`:""}</span>
     ${CANCELLABLE.includes(t.status)?`<button class="cancel" onclick="cancelTask('${t.taskId}')">停止</button>`:""}
     ${t.status==="running"||t.status==="queued"?progressHtml(t):""}

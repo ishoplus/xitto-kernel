@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.5
+
+- **領域自動判斷（auto-routing）**：非技術使用者不必懂「該選哪個 pack」——預設「🪄 自動判斷領域」，系統依願望文字自動挑最適合的領域，並顯示「已自動用『研究』領域」+ 可在下拉覆蓋。
+  - **LLM 為主**（一次輕量 `completeSimple` 分流呼叫，maxTokens 12）+ **關鍵字 heuristic 備援**（LLM 不可用／逾時／回垃圾／拋錯都不炸）；**任何不確定一律 general**（最通用，涵蓋八成）。
+  - 資源型領域（data-query 需 DB、notes 需筆記庫）只在明確訊號才選，避免誤分流到跑不起來的領域；分流有 6s 逾時，不拖慢交辦。
+  - 後端：`classifyPack` / `heuristicPack`（可注入 `complete` 測試）；`POST /v1/tasks` 與 `/v1/run`、`/v1/stream` 支援 `pack:"auto"`，回應帶 `pack`+`routed`；任務 view 帶 `auto`。
+  - 許願台：領域下拉預設「自動」，交辦後顯示判定結果，任務卡有領域徽章（🪄自動／🧭指定）。
+  - 測試 +6（202/202）：heuristic 各領域、LLM 採用／別名／落備援／拋錯不炸／不打 LLM 的捷徑。
+
 ## 0.9.4
 
 - **執行中可中途補充（steering）**：任務跑到一半,使用者可隨時插話調整方向/補需求,不必取消重來。
