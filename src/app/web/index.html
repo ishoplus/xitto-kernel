@@ -75,6 +75,13 @@
   .followup { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
   .followup textarea { width:100%; background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:10px; font:inherit; resize:vertical; min-height:52px; margin-bottom:8px; }
   .cont { color:var(--accent); }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:10; }
+  .modalbox { background:var(--card); border:1px solid var(--line); border-radius:14px; width:min(560px,92vw); max-height:80vh; display:flex; flex-direction:column; padding:14px; }
+  .fspath { font:12px ui-monospace,Menlo,monospace; color:var(--dim); margin-bottom:8px; word-break:break-all; }
+  .fslist { flex:1; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+  .fsrow { padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--line); font-size:14px; }
+  .fsrow:hover { background:#0c0e12; } .fsrow.up { color:var(--dim); }
+  .fsbar { display:flex; align-items:center; gap:8px; margin-top:10px; }
   .viewer { margin-top:10px; border:1px solid var(--line); border-radius:10px; padding:12px; background:#0c0e12; }
   .vbar { font-size:12px; color:var(--dim); margin-bottom:8px; }
   .vbar a { color:var(--accent); text-decoration:none; }
@@ -94,8 +101,23 @@
     <span class="sub">說出你想完成的事，交給它去做、做完給你成品</span>
     <span class="spacer"></span>
     <select id="space" title="專案／空間：不同專案的檔案與記憶各自獨立"></select>
+    <button class="ghost" id="browsebtn" title="瀏覽並選一個真實資料夾（本地模式）" style="display:none">📁 選資料夾</button>
     <button class="ghost" id="newspace" title="新專案">＋</button>
   </header>
+
+  <div id="fsmodal" class="modal" style="display:none">
+    <div class="modalbox">
+      <div style="margin-bottom:8px;font-weight:600">選一個資料夾（就地工作）</div>
+      <div class="fspath" id="fspath"></div>
+      <div class="fslist" id="fslist"></div>
+      <div class="fsbar">
+        <button class="ghost" onclick="fsHome()">🏠 家目錄</button>
+        <button class="ghost" onclick="closeFs()">取消</button>
+        <span class="spacer"></span>
+        <button onclick="chooseFs()">✓ 選這個資料夾</button>
+      </div>
+    </div>
+  </div>
 
   <div class="tabs">
     <span class="tab active" id="tab-wish" onclick="switchTab('wish')">許願</span>
@@ -169,6 +191,22 @@ $("#newspace").onclick = () => {
   renderSpaces(); $("#current").innerHTML=""; loadHistory();
 };
 renderSpaces();
+
+// 資料夾瀏覽器（本地模式「用選的」）：伺服器端列資料夾,網頁點進去挑一個
+if(LOCAL) $("#browsebtn").style.display="";
+$("#browsebtn").onclick = ()=>{ $("#fsmodal").style.display="flex"; fsGo(null); };
+let fsPath=null;
+async function fsGo(p){
+  const r=await api("/v1/fs"+(p?("?path="+encodeURIComponent(p)):"")).then(r=>r.json()).catch(()=>({error:"讀取失敗"}));
+  if(r.error){ alert(r.error); return; }
+  fsPath=r.path; window._fsHome=r.home;
+  $("#fspath").textContent="📂 "+r.path;
+  const base=r.path.endsWith("/")?r.path:r.path+"/";
+  $("#fslist").innerHTML=`<div class="fsrow up" onclick="fsGo('${esc(r.parent)}')">⬆ 上一層</div>`+(r.dirs.length?r.dirs.map(d=>`<div class="fsrow" onclick="fsGo('${esc(base+d)}')">📁 ${esc(d)}</div>`).join(""):`<div class="empty" style="padding:10px">（沒有子資料夾，可直接選這個）</div>`);
+}
+function fsHome(){ fsGo(window._fsHome||null); }
+function closeFs(){ $("#fsmodal").style.display="none"; }
+function chooseFs(){ if(!fsPath) return; const p=fsPath; if(!spaces.includes(p)) spaces.push(p); curSpace=p; localStorage.setItem("xk_spaces",JSON.stringify(spaces)); localStorage.setItem("xk_space",curSpace); renderSpaces(); closeFs(); $("#current").innerHTML=""; loadHistory(); }
 
 // 極簡 markdown 渲染（零依賴、可離線；夠用於 agent 產的報告）
 function mdRender(src){

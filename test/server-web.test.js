@@ -46,6 +46,22 @@ test('listWorkspaceFiles：列檔（遞迴）+ 排除內部目錄', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('GET /v1/fs：本地模式列子資料夾；託管模式 403', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'xk-fs-'));
+  mkdirSync(join(root, 'projA')); mkdirSync(join(root, 'projB')); mkdirSync(join(root, '.hidden')); mkdirSync(join(root, 'node_modules'));
+  writeFileSync(join(root, 'file.txt'), 'x');
+  const local = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', local: true, baseDir: join(root, '.srv') });
+  const hosted = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', local: false, baseDir: join(root, '.srv2') });
+  await new Promise((r) => local.listen(0, r)); await new Promise((r) => hosted.listen(0, r));
+  try {
+    const r = await fetch(`http://localhost:${local.address().port}/v1/fs?path=${encodeURIComponent(root)}`, { headers: { authorization: 'Bearer t' } }).then((x) => x.json());
+    assert.deepEqual(r.dirs, ['projA', 'projB']);   // 只列目錄,排除 .hidden / node_modules / 檔案
+    assert.equal(r.path, root);
+    const f = await fetch(`http://localhost:${hosted.address().port}/v1/fs?path=${encodeURIComponent(root)}`, { headers: { authorization: 'Bearer t' } });
+    assert.equal(f.status, 403);                    // 託管模式不給瀏覽主機
+  } finally { await new Promise((r) => local.close(r)); await new Promise((r) => hosted.close(r)); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('GET / 服務許願台網頁，token 注入、公開可載入（免 auth）', async () => {
   const app = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 'webtok-123', baseDir: '.xitto-server-test' });
   await new Promise((r) => app.listen(0, r));

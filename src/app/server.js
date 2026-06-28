@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, readFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, isAbsolute, relative, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { createKernel } from '../kernel/index.js';
 import { loadModel } from './providers.js';
 import { createCodingPack } from '../packs/coding/index.js';
@@ -337,6 +338,16 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       const full = resolveArtifact(workspaceDir(baseDir, ws, local), rel);
       if (!full) return json(res, 400, { error: 'path 不合法' });
       return serveFile(res, full, rel, url.searchParams.get('download'));
+    }
+
+    // 資料夾瀏覽器（僅本地模式）：列某路徑下的子資料夾,給網頁「用選的」挑真實資料夾
+    if (req.method === 'GET' && path === '/v1/fs') {
+      if (!local) return json(res, 403, { error: '僅本地模式可瀏覽資料夾' });
+      const dir = resolve(url.searchParams.get('path') || homedir());
+      try {
+        const dirs = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')).map((e) => e.name).sort();
+        return json(res, 200, { path: dir, parent: dirname(dir), home: homedir(), dirs });
+      } catch (e) { return json(res, 400, { error: '無法讀取：' + e.message }); }
     }
 
     // 工作台：列空間所有檔案（ws 走 query,才能容納本地模式的絕對路徑）
