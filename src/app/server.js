@@ -390,11 +390,19 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       if (streaming) sseHead(res);
       const sse = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
       const t0 = Date.now();
+      // 串流「停止」：client 按停止 → abort fetch → 連線關閉 → 中止 kernel 回合,不再空跑伺服器資源。
+      // 經 onAgent 取得執行中的 agent（同背景任務 /cancel 的 agent.abort() 機制）。
+      let agentRef = null, clientGone = false;
+      const onAgent = streaming ? (a) => { agentRef = a; if (clientGone && a?.abort) { try { a.abort(); } catch { /* 略 */ } } } : undefined;
+      // 偵測 client 斷線（按「停止」）用 res 'close'（串流回應的斷線在 res 上才可靠，req 'close' 不會觸發）
+      if (streaming) res.on('close', () => { clientGone = true; if (agentRef?.abort) { try { agentRef.abort(); } catch { /* 略 */ } } });
       try {
-        const r = await runKernel(body, streaming ? (ev) => { const m = mapEvent(ev); if (m) sse(m); } : undefined);
+        const r = await runKernel(body, streaming ? (ev) => { const m = mapEvent(ev); if (m) sse(m); } : undefined, undefined, onAgent);
+        if (clientGone) return; // 已斷線：history 已在 runKernel 內落地,這裡不再寫回應
         log({ pack: body.pack || 'general', session: r.sessionId, mode: body.mode || 'turn', tokens: r.usage.input + r.usage.output, rounds: r.rounds, ms: Date.now() - t0 });
         if (streaming) { sse({ type: 'done', ...r }); res.end(); } else json(res, 200, r);
       } catch (e) {
+        if (clientGone) return;
         log({ pack: body.pack, error: e.message });
         if (streaming) { sse({ type: 'error', error: e.message }); res.end(); } else json(res, e.message?.startsWith('未知 pack') ? 400 : 500, { error: e.message });
       }
