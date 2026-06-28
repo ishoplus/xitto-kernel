@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.7
+
+- **獨立對話式網頁 `/chat`（與許願台並存）**：同一 kernel 的另一個前端——許願台是「願望→交付物」（`mode:goal`），對話頁是「逐句協作、記得上下文」（`mode:turn` + 固定 `sessionId` 多輪 + SSE 串流）。後端零改動（`/v1/stream` 早已支援 `mode:turn`）。
+  - 零依賴單檔 `src/app/web/chat.html`：對話泡泡、串流游標、工具動作 inline 收合 + 彩色 diff、對話清單／續接（前端持久化 transcript，`sessionId` 綁伺服器 history）、停止、markdown 渲染、IME 安全。
+  - **共用工作區**：與許願台同一組 `localStorage`，五層沉澱跨頁累積。兩頁互加切換連結。
+  - server 加 `/chat`（與 `/chat.html`）路由，沿用 token/packs/local 注入。
+- **串流「停止」真正中止伺服器回合**：對話頁按停止 → abort fetch → 連線關閉 → 中止 kernel 回合，不再讓伺服器空跑（沿用背景任務 `/cancel` 的 `agent.abort()` 機制，經 `onAgent` 取得 agent）。關鍵：串流回應偵測 client 斷線要用 `res 'close'`（`req 'close'` 不會觸發）。實測中止七檔任務只建出 1 檔即停。
+- **白天／夜晚主題切換**：許願台與對話頁右上角加 🌙/☀️ 鈕，主題寫入 `localStorage(xk_theme)` 兩頁共用，首訪預設跟隨系統 `prefers-color-scheme`；head 內早期套用避免載入閃爍。寫死的結構色抽成 CSS 變數，`:root[data-theme=light]` 整組覆蓋為淺色。Chrome headless 實截四張（兩頁×兩色）確認無破版。
+- 測試 202/202。
+
 ## 0.9.6
 
 - **依賴遷移到維護中的 `@earendil-works/pi-ai`（修 moderate 安全漏洞）**：舊 `@mariozechner/pi-ai` 已棄用凍結（停 0.73.1），且 0.70.6 透過 `@anthropic-ai/sdk` 帶 2 個 moderate 漏洞（GHSA-p7fg-763f-g4gf）。
