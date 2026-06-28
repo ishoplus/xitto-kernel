@@ -442,6 +442,11 @@ export function createKernel(pack, config = {}) {
       let sameFeedback = 0;
       for (let round = 1; round <= maxRounds; round++) {
         opts.onRound?.({ round, maxRounds });
+        // 使用者中途補充（steering）：把上一輪之間累積的補充折進這一輪指令（回合內的即時補充走 agent.steer）。
+        if (opts.drainSteer) {
+          const extra = opts.drainSteer();
+          if (extra && extra.length) instruction += '\n\n[使用者中途補充，請納入考量並據此調整]\n' + extra.map((s) => `- ${s}`).join('\n');
+        }
         const r = await api.runTurn(instruction, { history, onEvent: opts.onEvent, onAgent: opts.onAgent });
         history = r.messages;
         if (r.aborted) return { done: false, aborted: true, rounds: round, history };

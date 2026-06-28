@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.4
+
+- **執行中可中途補充（steering）**：任務跑到一半,使用者可隨時插話調整方向/補需求,不必取消重來。
+  - 排隊注入,**不中斷正在跑的工具**——下一個邊界才生效:
+    - agent 串流中 → 即時排進 agent 的 steeringQueue(turn 邊界 drain)
+    - 回合之間(goal loop 的驗收空檔,agent 已收尾)→ 緩衝到 task,kernel 下一輪用 `drainSteer` 折進指令
+    - 兩路互斥,不重複套用
+  - 後端:`createTaskStore.steer(id,text)` + `POST /v1/tasks/:id/steer`;kernel `runGoal` 新增 `opts.drainSteer` 鉤子
+  - 許願台:進行中顯示補充輸入框(Enter 送出)+「✋ 已收到,會在下一步納入」回饋;輸入內容/游標在每 1.2s 輪詢重繪間保留,不洗掉打到一半的字
+  - 測試 +4(196/196):串流即時路徑、回合間緩衝/drain-once、非進行中擋下、drainSteer 折進指令
+
 ## 0.9.3
 
 - **許願台佈局優化（視覺層次 + 互動細節）**：

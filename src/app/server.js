@@ -139,6 +139,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
     else if (ev.type === 'text') { p.phase = 'thinking'; t._textbuf = ((t._textbuf || '') + (ev.delta || '')).slice(-400); p.thinking = t._textbuf.replace(/\s+/g, ' ').trim().slice(-150); }
     else if (ev.type === 'round') { p.round = ev.round; if (ev.maxRounds) p.maxRounds = ev.maxRounds; p.thinking = ''; t._textbuf = ''; }
     else if (ev.type === 'phase') p.phase = ev.phase;
+    else if (ev.type === 'steered') { (p.steers ||= []).push(ev.text); if (p.steers.length > 8) p.steers.shift(); } // 使用者中途補充（給 UI 回饋「已收到」）
     else if (ev.type === 'needs_input') p.phase = 'needs-input';
     else if (ev.type === 'answered') p.phase = 'acting';
     else if (ev.type === 'end') p.phase = ev.status;
@@ -160,7 +161,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
       t.status = 'running'; t.startedAt = new Date().toISOString();
       emit(t, { type: 'status', status: 'running' });
       Promise.resolve()
-        .then(() => runJob(t.spec, (ev) => emit(t, ev), makeAsk(t), (agent) => { t._agent = agent; }))
+        .then(() => runJob(t.spec, (ev) => emit(t, ev), makeAsk(t), (agent) => { t._agent = agent; }, () => { const b = t.steerBuf || []; t.steerBuf = []; return b; }))
         .then((result) => { t.status = 'done'; t.result = result; })
         .catch((e) => { t.status = 'error'; t.error = e.message || String(e); })
         .finally(() => {
@@ -214,6 +215,19 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
       resolve(String(text ?? ''));
       return true;
     },
+    // 中途補充（steering）：任務進行中,使用者插話。agent 正在串流 → 即時排進 steeringQueue（下個 turn 邊界生效,不中斷當前工具）；
+    // 回合之間（goal loop 的 checkGoal 空檔,agent 已收尾）→ 緩衝到 task,由 kernel 下一輪 drainSteer 折進指令。兩路互斥,不重複套用。
+    steer(id, text) {
+      const t = tasks.get(id);
+      if (!t || t.status !== 'running') return false;
+      const msg = String(text ?? '').trim();
+      if (!msg) return false;
+      const live = !!(t._agent && t._agent.state && t._agent.state.isStreaming);
+      if (live) { try { t._agent.steer({ role: 'user', content: [{ type: 'text', text: msg }] }); } catch { (t.steerBuf ||= []).push(msg); } }
+      else (t.steerBuf ||= []).push(msg);
+      emit(t, { type: 'steered', text: msg, queued: !live });
+      return true;
+    },
     stats: () => ({ active, queued: queue.length, total: tasks.size }),
   };
 }
@@ -257,7 +271,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
 
   // 共用：跑一輪/一目標，回傳 { sessionId, text, usage, rounds, done }；onEvent 收原始 kernel 事件；
   // ask（可選）= 澄清通道,讓 agent 在背景任務中暫停問使用者。
-  async function runKernel(spec, onEvent, ask, onAgent) {
+  async function runKernel(spec, onEvent, ask, onAgent, drainSteer) {
     const make = PACKS[spec.pack || 'general'];
     if (!make) throw new Error(`未知 pack「${spec.pack}」，可用：${Object.keys(PACKS).join(', ')}`);
     // 持久工作空間（B 模型）：workdir 綁 workspace（非 sessionId）→ 檔案留存 + 五層沉澱跨成品累積。
@@ -272,7 +286,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
     if (spec.mode === 'goal') {
       // 結果導向：回傳交付物（做了什麼 + 產出的檔案 + 是否達成），對話只是過程
-      const o = await kernel.runOutcome(spec.goal || spec.input || "", { maxRounds: 8, history: sess.history, onEvent: wrapped, onAgent, onRound: (i) => wrapped({ type: 'round', round: i.round, maxRounds: i.maxRounds }) });
+      const o = await kernel.runOutcome(spec.goal || spec.input || "", { maxRounds: 8, history: sess.history, onEvent: wrapped, onAgent, drainSteer, onRound: (i) => wrapped({ type: 'round', round: i.round, maxRounds: i.maxRounds }) });
       sess.history = o.history || []; sessions.set(sessionId, sess); persistSession(sessionId, sess);
       try { rmSync(join(workdir, 'tmp'), { recursive: true, force: true }); } catch { /* 清過程檔,失敗無妨 */ }
       // 溯源：邏輯位置 workspace 永遠記；實體路徑只在本地模式給（託管不洩漏伺服器路徑）
@@ -295,7 +309,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
   const tasks = createTaskStore({
     concurrency,
     persistDir: join(baseDir, 'tasks'),
-    runJob: (spec, emit, ask, onAgent) => runKernel(spec, (ev) => { const m = mapEvent(ev); if (m) emit(m); }, ask, onAgent),
+    runJob: (spec, emit, ask, onAgent, drainSteer) => runKernel(spec, (ev) => { const m = mapEvent(ev); if (m) emit(m); }, ask, onAgent, drainSteer),
     onFinish: (task) => { log({ task: task.id, pack: task.spec.pack, mode: task.spec.mode || 'turn', status: task.status, ms: task.startedAt ? Date.parse(task.finishedAt) - Date.parse(task.startedAt) : 0 }); fireWebhook(task); },
   });
 
@@ -357,6 +371,19 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       tasks.answer(mAns[1], body.answer);
       log({ task: mAns[1], action: 'answer' });
       return json(res, 200, { ok: true, taskId: mAns[1], status: 'running' });
+    }
+
+    // 中途補充（steering）：任務進行中,使用者插話調整方向/補需求。排隊注入,不中斷當前工作,下個邊界生效。
+    const mSteer = path.match(/^\/v1\/tasks\/([^/]+)\/steer$/);
+    if (req.method === 'POST' && mSteer) {
+      const body = await readBody(req);
+      const t = tasks.get(mSteer[1]);
+      if (!t) return json(res, 404, { error: 'task not found' });
+      if (t.status !== 'running') return json(res, 409, { error: '只有進行中的任務可以補充', status: t.status });
+      const ok = tasks.steer(mSteer[1], body.text);
+      if (!ok) return json(res, 400, { error: '補充內容為空或無法送出' });
+      log({ task: mSteer[1], action: 'steer' });
+      return json(res, 200, { ok: true, taskId: mSteer[1] });
     }
 
     // 中斷任務（取消鈕）：控制權在使用者手上,降低「啟動了控制不了的東西」的焦慮
@@ -436,7 +463,7 @@ export function startServer() {
     console.log(`🪄 許願台：http://localhost:${port}/  （瀏覽器打開即用——說出目標、交付成品）`);
     console.log(`xitto-kernel server · model ${model.id} · 沙箱 ${sandbox ? '開' : '關'} · 背景並發 ${concurrency}${local ? ' · 本地模式(顯示檔案位置)' : ''}`);
     console.log(`token: ${token === 'dev-token' ? 'dev-token（請設 XITTO_SERVER_TOKEN）' : '(已設定)'}`);
-    console.log('API：POST /v1/run · /v1/stream · /v1/tasks · /v1/tasks/:id/{answer,cancel}｜GET /v1/tasks[/:id[/events|/file]] · /health');
+    console.log('API：POST /v1/run · /v1/stream · /v1/tasks · /v1/tasks/:id/{answer,steer,cancel}｜GET /v1/tasks[/:id[/events|/file]] · /health');
   });
   return server;
 }

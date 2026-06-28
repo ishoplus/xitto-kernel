@@ -79,6 +79,10 @@
   .qbox { margin-top:12px; padding:12px; background:#1d1c12; border:1px solid var(--warn); border-radius:10px; }
   .qbox .q { color:var(--warn); margin-bottom:8px; }
   .qbox input { width:100%; background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px; font:inherit; }
+  .steerbox { margin-top:12px; padding-top:10px; border-top:1px dashed var(--line); }
+  .steernote { font-size:12.5px; color:var(--ok); margin-bottom:6px; }
+  #steerin { width:100%; background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 11px; font:inherit; outline:none; }
+  #steerin:focus { border-color:var(--accent); }
   h3 { color:var(--dim); font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; margin:28px 0 8px; }
   .hist { border:1px solid transparent; border-radius:8px; padding:8px 10px; margin:3px 0; cursor:pointer; }
   .hist:hover { background:#0c0e12; }
@@ -332,6 +336,8 @@ async function poll() {
 }
 
 function renderCurrent(t) {
+  // 保住 steer 輸入框的內容與游標：輪詢每 1.2s 重繪整張卡,別把使用者正打到一半的補充洗掉
+  const ps=(()=>{const el=document.getElementById("steerin");return el?{v:el.value,f:document.activeElement===el,s:el.selectionStart}:null;})();
   const a = t.result?.artifacts, files = a ? [...(a.created||[]).map(f=>[f,"new"]), ...(a.modified||[]).map(f=>[f,"mod"])] : [];
   const p = t.progress||{}, nLog=(p.log||[]).length;
   const logSec = nLog ? `<div class="logtoggle" onclick="toggleLog()">${expandedLog?"▾ 收合過程":"▸ 展開過程（"+nLog+" 步）"}</div>${expandedLog?`<div class="loglist">${logHtml(p)}</div>`:""}` : "";
@@ -344,6 +350,10 @@ function renderCurrent(t) {
     ${logSec}
     ${t.status==="needs-input"?`<div class="qbox"><div class="q">❓ ${esc(t.pending?.question)}</div>
       <input id="ans" placeholder="輸入你的回答，按 Enter 送出"></div>`:""}
+    ${t.status==="running"?`<div class="steerbox">
+      ${(p.steers||[]).slice(-3).map(s=>`<div class="steernote">✋ 已收到補充，會在下一步納入：${esc(s)}</div>`).join("")}
+      <input id="steerin" placeholder="想補充或調整方向？打字按 Enter——會在下一步納入，不中斷目前工作">
+    </div>`:""}
     ${t.status==="done"?`<div class="summary">${esc(t.result?.text||"")}</div>`:""}
     ${t.status==="error"?`<div class="summary">⚠ ${esc(t.error)}</div>`:""}
     ${files.length?`<div class="files">📦 成品：${files.map(([f,k])=>`<span class="file ${k==="mod"?"mod":""}" onclick="viewFile('${t.taskId}','${encodeURIComponent(f)}','${esc(f)}')">${k==="mod"?"~":"+"} ${esc(f)}</span>`).join("")}</div>`:""}
@@ -363,6 +373,17 @@ function renderCurrent(t) {
       await api("/v1/tasks/"+t.taskId+"/answer", { method:"POST", body: JSON.stringify({ answer: ans }) });
       poll();
     }};
+  }
+  if (t.status==="running") {
+    const si = $("#steerin");
+    if (si) {
+      if (ps) { si.value = ps.v; if (ps.f) { si.focus(); try { si.setSelectionRange(ps.s, ps.s); } catch {} } }  // 還原打到一半的內容/游標
+      si.onkeydown = async (e) => { if (e.key==="Enter" && si.value.trim()) {
+        const txt = si.value.trim(); si.value = ""; si.disabled = true;
+        await api("/v1/tasks/"+t.taskId+"/steer", { method:"POST", body: JSON.stringify({ text: txt }) });
+        si.disabled = false; si.focus();
+      }};
+    }
   }
 }
 
