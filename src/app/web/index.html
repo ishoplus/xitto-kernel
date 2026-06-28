@@ -8,7 +8,14 @@
   :root { --bg:#0f1115; --card:#181b22; --line:#272b34; --fg:#e7e9ee; --dim:#8b919e; --accent:#6ea8fe; --ok:#5fd38a; --warn:#f0c674; --me:#222630; }
   * { box-sizing:border-box; }
   body { margin:0; font:15px/1.6 -apple-system,"PingFang TC","Microsoft JhengHei",system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-  .wrap { max-width:760px; margin:0 auto; padding:28px 18px 80px; }
+  .wrap { max-width:1180px; margin:0 auto; padding:24px 22px 80px; }
+  /* 雙欄佈局：許願頁=主區+歷史側欄；工作台=檔案左+預覽右。窄螢幕自動收成單欄 */
+  .cols { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:26px; align-items:start; }
+  .cols2 { display:grid; grid-template-columns:340px minmax(0,1fr); gap:26px; align-items:start; }
+  .side, .wbleft { position:sticky; top:14px; }
+  .side h3, .wbleft h3 { margin-top:0; }
+  .wbright { position:sticky; top:14px; min-height:120px; }
+  @media (max-width:860px){ .cols,.cols2{ grid-template-columns:1fr; } .side,.wbleft,.wbright{ position:static; } }
   header { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
   header h1 { font-size:22px; margin:0; }
   header .sub { color:var(--dim); font-size:13px; }
@@ -124,26 +131,33 @@
     <span class="tab" id="tab-wb" onclick="switchTab('wb')">📂 工作台</span>
   </div>
 
-  <div id="wishview">
-    <div class="ask">
-      <textarea id="goal" placeholder="例如：把這個資料夾的 .md 檔整理成一份目錄 index.md；或：抓 example.com 的標題寫進 title.txt"></textarea>
-      <div class="row">
-        <select id="pack" title="領域"></select>
-        <span class="spacer"></span>
-        <button id="go">交辦 →</button>
+  <div id="wishview" class="cols">
+    <div class="main">
+      <div class="ask">
+        <textarea id="goal" placeholder="例如：把這個資料夾的 .md 檔整理成一份目錄 index.md；或：抓 example.com 的標題寫進 title.txt"></textarea>
+        <div class="row">
+          <select id="pack" title="領域"></select>
+          <span class="spacer"></span>
+          <button id="go">交辦 →</button>
+        </div>
       </div>
+      <div id="current"></div>
     </div>
-
-    <div id="current"></div>
-
-    <h3>歷史成品</h3>
-    <div id="history"><div class="empty">還沒有任何任務。上面交辦一件事試試。</div></div>
+    <aside class="side">
+      <h3>歷史成品</h3>
+      <div id="history"><div class="empty">還沒有任何任務。<br>左邊交辦一件事試試。</div></div>
+    </aside>
   </div>
 
-  <div id="workbench" style="display:none">
-    <h3>📂 工作台 · 當前專案的所有檔案</h3>
-    <div id="wbfiles"></div>
-    <div class="viewer" id="wbview" style="display:none"></div>
+  <div id="workbench" class="cols2" style="display:none">
+    <div class="wbleft">
+      <h3>📂 工作台</h3>
+      <div id="wbfiles"></div>
+    </div>
+    <div class="wbright">
+      <div id="wbhint" class="empty">← 點左邊的檔案，在這裡預覽</div>
+      <div class="viewer" id="wbview" style="display:none"></div>
+    </div>
   </div>
 </div>
 
@@ -260,7 +274,7 @@ async function renderFile(urlFn, encPath, name, sel){
   v.innerHTML=bar+body;
 }
 function viewFile(id, encPath, name){ return renderFile(taskFileUrl(id), encPath, name, "#fview"); }
-function wbView(encPath, name){ return renderFile(wsFileUrl(curSpace), encPath, name, "#wbview"); }
+function wbView(encPath, name){ const h=$("#wbhint"); if(h) h.style.display="none"; return renderFile(wsFileUrl(curSpace), encPath, name, "#wbview"); }
 
 // 工作台分頁：逐層瀏覽 / 看 / 刪
 function fmtSize(n){ return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"; }
@@ -268,7 +282,7 @@ let wbSub="";
 function wbNav(s){ wbSub=decodeURIComponent(s); loadWorkbench(); }
 function wbUp(){ wbSub=wbSub.includes("/")?wbSub.slice(0,wbSub.lastIndexOf("/")):""; loadWorkbench(); }
 async function loadWorkbench(){
-  $("#wbview").style.display="none";
+  $("#wbview").style.display="none"; { const h=$("#wbhint"); if(h) h.style.display=""; }
   const r=await api("/v1/workspaces/files?ws="+encodeURIComponent(curSpace)+"&sub="+encodeURIComponent(wbSub)).then(r=>r.json()).catch(()=>({dirs:[],files:[]}));
   const root=curSpace.startsWith("/")?curSpace:curSpace;
   let html=`<div class="loc">📂 ${esc(root)}${wbSub?" / "+esc(wbSub):""}</div>`;
