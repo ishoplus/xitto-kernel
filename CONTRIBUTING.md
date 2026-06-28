@@ -1,31 +1,32 @@
 # Contributing
 
-歡迎貢獻！xitto-kernel 是領域無關的 agent 底座。
+**English** · [繁體中文](./CONTRIBUTING.zh-TW.md)
 
-## 開發
+Contributions welcome! xitto-kernel is a domain-agnostic agent foundation.
+
+## Development
 
 ```bash
 npm install
-npm test          # 全部測試（macOS 會跑真實 Seatbelt 隔離測試；其他平台自動 skip）
-npm run demo      # 不靠 LLM 的架構示範
+npm test          # all tests (macOS runs the real Seatbelt isolation tests; other platforms auto-skip)
+npm run demo      # architecture demo without an LLM
 ```
 
-## 原則
+## Principles
 
-- **kernel 必須領域無關**：`src/kernel/` 不可出現任何具體領域的工具名（如寫死 `'edit'`/`'bash'`）。
-  「唯讀 / 會改動 / 可沙箱」一律由工具自帶 metadata（`readOnly` / `mutating` / `sandboxable`）決定。
-- **守衛鏈順序不可繞過**：pack 只能在第 3 格（`preToolPolicy`）插領域守衛，不能跳過權限/沙箱（第 5 格）。
-- **領域邏輯放 pack，不放 kernel**：新領域 = 新增一個 `DomainPack`，kernel 零改動。
-  判準：若某需求要改 kernel 才能支援，代表有領域知識洩漏，應抽成新的插槽或 `KernelServices` 能力。
-- **新增工具請補 metadata**：`mutating` / `readOnly` / `sandboxable`，否則安全行為會錯。
+- **The kernel must stay domain-agnostic**: `src/kernel/` must never contain a concrete domain's tool name (e.g. hard-coded `'edit'`/`'bash'`). Whether a tool is "read-only / mutating / sandboxable" is decided entirely by the tool's own metadata (`readOnly` / `mutating` / `sandboxable`).
+- **The guard-chain order is not bypassable**: a pack may only insert domain guards at slot 3 (`preToolPolicy`); it cannot skip the permission/sandbox slot (slot 5).
+- **Domain logic goes in a pack, not the kernel**: a new domain = adding a `DomainPack`, with zero kernel changes. Litmus test: if a requirement needs a kernel change to support, that's domain knowledge leaking — extract it into a new slot or a `KernelServices` capability instead.
+- **New tools must carry metadata**: `mutating` / `readOnly` / `sandboxable`, otherwise safety behavior will be wrong.
 
-## 提交
+## Submitting
 
-- 改動請附測試（`test/*.test.js`，用 `node --test`）。
-- 動到守衛鏈 / sandbox / agent loop 時，務必確認測試全綠（CI 會在 ubuntu + macOS × node 20/22 跑）。
-- commit message 用中文或英文皆可，講清楚「為什麼」。
+- Include tests for your change (`test/*.test.js`, run with `node --test`).
+- When touching the guard chain / sandbox / agent loop, make sure all tests pass (CI runs on ubuntu + macOS × node 20/22).
+- Commit messages may be in Chinese or English — just be clear about the "why".
+- For security vulnerabilities, do **not** open a public issue — see [SECURITY.md](SECURITY.md).
 
-## 架構文件
+## Architecture docs
 
-先讀 [`docs/01-architecture.md`](docs/01-architecture.md)，再看 [`docs/03-kernel-contract.md`](docs/03-kernel-contract.md)（不變式）。
-做新領域 agent 看 [`docs/06-authoring-a-pack.md`](docs/06-authoring-a-pack.md)。
+Start with [`docs/01-architecture.md`](docs/01-architecture.md), then read [`docs/03-kernel-contract.md`](docs/03-kernel-contract.md) (the invariants).
+To build a new domain agent, see [`docs/06-authoring-a-pack.md`](docs/06-authoring-a-pack.md).
