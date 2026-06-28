@@ -1,6 +1,6 @@
 {
   "name": "xitto-kernel",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "領域無關的 agent 底座（kernel + 可插拔 DomainPack），從 xitto-code 抽象而來",
   "keywords": [
@@ -42,6 +42,7 @@
     "demo": "node examples/demo.js",
     "eval": "node eval/run.js",
     "serve": "node src/app/server.js",
+    "serve:local": "XITTO_SERVER_LOCAL=1 XITTO_SERVER_SANDBOX=off XITTO_SERVER_TOKEN=${XITTO_SERVER_TOKEN:-secret} node src/app/server.js",
     "start": "node bin/xitto-kernel.js"
   },
   "exports": {

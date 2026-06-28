@@ -96,6 +96,8 @@ const o = await kernel.runOutcome('建立 greet.js 並寫個範例驗證');
 **🪄 許願台網頁（給非技術使用者：瀏覽器打開就用）**
 ```bash
 XITTO_SERVER_TOKEN=secret npm run serve   # 然後瀏覽器開 http://localhost:8787/
+# 本地就地模式（可選真實資料夾、就地改檔，沙箱關）：
+npm run serve:local                        # = LOCAL=1 SANDBOX=off,token 預設 secret(可用 XITTO_SERVER_TOKEN 覆寫)
 ```
 不用終端機、不用碰金鑰(伺服器端管)。介面以**結果**為中心,不是聊天:
 - **許願**:打一句「你想完成什麼」→ 交辦(背景跑 goal loop)

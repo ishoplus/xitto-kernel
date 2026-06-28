@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2
+
+- **`npm run serve:local`**：一行啟動本地就地模式（= `XITTO_SERVER_LOCAL=1 XITTO_SERVER_SANDBOX=off`，token 預設 `secret`、可用 `XITTO_SERVER_TOKEN` 覆寫）。不用每次手打那串環境變數。
+
 ## 0.8.1
 
 - **資料夾用「選」的（本地模式）**：不用打路徑。
