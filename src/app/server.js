@@ -3,7 +3,7 @@
 // JSON 或 SSE 串流，以及「背景任務 + 完成通知（webhook）」—— 派任務出去、做完回呼，不用一直盯著。
 // 這是「另一個 app 消費同一組 kernel 事件」—— 不動 kernel 核心。
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, isAbsolute, relative, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -100,11 +100,25 @@ export const mapEvent = (ev) => {
  * @param {(task:object)=>void} [o.onFinish]  每個任務 settle 後呼叫（拿來發 webhook）
  * @param {number} [o.maxEvents]     每任務保留最近幾筆事件（預設 500）
  */
-export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents = 500 } = {}) {
+export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents = 500, persistDir } = {}) {
   const tasks = new Map();   // id -> task
   const queue = [];          // 等待中的 task
   const subs = new Map();    // id -> Set<(ev)=>void>
   let active = 0;
+
+  // 持久化：每個任務落地一個 json（重啟後歷史成品還在）。runtime 欄位（_agent/events…）不存。
+  const snapshot = (t) => ({ id: t.id, status: t.status, spec: t.spec, result: t.result, error: t.error, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, progress: t.progress || null, pending: t.pending || null });
+  const persistTask = (t) => { if (!persistDir) return; try { mkdirSync(persistDir, { recursive: true }); writeFileSync(join(persistDir, t.id + '.json'), JSON.stringify(snapshot(t))); } catch { /* 略 */ } };
+  if (persistDir && existsSync(persistDir)) {
+    for (const f of readdirSync(persistDir).filter((x) => x.endsWith('.json')).sort()) {
+      try {
+        const t = JSON.parse(readFileSync(join(persistDir, f), 'utf8'));
+        if (['running', 'queued', 'needs-input'].includes(t.status)) { t.status = 'interrupted'; t.pending = null; } // 進程已死 → 標中斷
+        t.events = [];
+        tasks.set(t.id, t);
+      } catch { /* 壞檔略 */ }
+    }
+  }
 
   const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', workspace: t.spec.workspace || 'default', goal: t.spec.goal || t.spec.input || '', sessionId: t.result?.sessionId || t.spec.sessionId || null, continued: !!t.spec.sessionId, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null, progress: t.progress || null });
 
@@ -135,6 +149,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
   const makeAsk = (t) => ({ question, options }) => {
     t.status = 'needs-input'; t.pending = { question: String(question || ''), options: options || null };
     emit(t, { type: 'needs_input', question: t.pending.question, options: t.pending.options });
+    persistTask(t);
     return new Promise((resolve) => { t._answer = resolve; });
   };
 
@@ -152,6 +167,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
           if (t._cancelling && t.status !== 'error') t.status = 'cancelled'; // 使用者中斷
           t.finishedAt = new Date().toISOString();
           emit(t, { type: 'end', status: t.status, result: t.result, error: t.error });
+          persistTask(t);
           active--;
           try { onFinish?.(t); } catch { /* webhook 錯不影響佇列 */ }
           pump();
@@ -163,6 +179,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
     enqueue(spec) {
       const t = { id: newId('t'), status: 'queued', spec: spec || {}, events: [], result: null, error: null, createdAt: new Date().toISOString(), startedAt: null, finishedAt: null };
       tasks.set(t.id, t);
+      persistTask(t);
       queue.push(t);
       pump();
       return t;
@@ -180,7 +197,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
       if (t.status === 'queued') {
         const i = queue.indexOf(t); if (i >= 0) queue.splice(i, 1);
         t.status = 'cancelled'; t.finishedAt = new Date().toISOString();
-        emit(t, { type: 'end', status: 'cancelled' });
+        emit(t, { type: 'end', status: 'cancelled' }); persistTask(t);
         return true;
       }
       if (typeof t._answer === 'function') { const r = t._answer; t._answer = null; t.pending = null; r(''); } // 解除待答阻塞
@@ -193,7 +210,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
       const t = tasks.get(id);
       if (!t || typeof t._answer !== 'function') return false;
       const resolve = t._answer; t._answer = null; t.pending = null; t.status = 'running';
-      emit(t, { type: 'answered', answer: String(text ?? '') });
+      emit(t, { type: 'answered', answer: String(text ?? '') }); persistTask(t);
       resolve(String(text ?? ''));
       return true;
     },
@@ -212,8 +229,13 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
  * @returns {import('node:http').Server}
  */
 export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false } = {}) {
-  const sessions = new Map(); // sessionId -> { pack, history }
+  const sessions = new Map(); // sessionId -> { history }
   mkdirSync(baseDir, { recursive: true });
+
+  // 對話 session 持久化（讓「繼續/調整」跨重啟可用）：啟動載回 + 每次更新落地。
+  const sessDir = join(baseDir, 'sessions');
+  try { if (existsSync(sessDir)) for (const f of readdirSync(sessDir).filter((x) => x.endsWith('.json'))) { try { sessions.set(f.replace(/\.json$/, ''), JSON.parse(readFileSync(join(sessDir, f), 'utf8'))); } catch { /* 略 */ } } } catch { /* 略 */ }
+  const persistSession = (id, sess) => { try { mkdirSync(sessDir, { recursive: true }); writeFileSync(join(sessDir, id + '.json'), JSON.stringify({ history: sess.history })); } catch { /* 略 */ } };
 
   const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
   // header bearer 為主；img/iframe/下載這類瀏覽器發起的 GET 無法帶 header,允許 ?token=（同源、PoC）
@@ -251,13 +273,13 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     if (spec.mode === 'goal') {
       // 結果導向：回傳交付物（做了什麼 + 產出的檔案 + 是否達成），對話只是過程
       const o = await kernel.runOutcome(spec.goal || spec.input || '', { history: sess.history, onEvent: wrapped, onAgent, onRound: (i) => wrapped({ type: 'round', round: i.round, maxRounds: i.maxRounds }) });
-      sess.history = o.history || []; sessions.set(sessionId, sess);
+      sess.history = o.history || []; sessions.set(sessionId, sess); persistSession(sessionId, sess);
       try { rmSync(join(workdir, 'tmp'), { recursive: true, force: true }); } catch { /* 清過程檔,失敗無妨 */ }
       // 溯源：邏輯位置 workspace 永遠記；實體路徑只在本地模式給（託管不洩漏伺服器路徑）
       return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: o.summary || lastText(sess.history), usage, rounds: o.rounds, done: o.done, aborted: o.aborted, artifacts: o.artifacts };
     }
     const r = await kernel.runTurn(spec.input || '', { history: sess.history, onEvent: wrapped, onAgent });
-    sess.history = r.messages || r.history || []; sessions.set(sessionId, sess);
+    sess.history = r.messages || r.history || []; sessions.set(sessionId, sess); persistSession(sessionId, sess);
     return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: r.text ?? lastText(sess.history), usage, rounds: r.rounds, done: r.done };
   }
 
@@ -272,6 +294,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
 
   const tasks = createTaskStore({
     concurrency,
+    persistDir: join(baseDir, 'tasks'),
     runJob: (spec, emit, ask, onAgent) => runKernel(spec, (ev) => { const m = mapEvent(ev); if (m) emit(m); }, ask, onAgent),
     onFinish: (task) => { log({ task: task.id, pack: task.spec.pack, mode: task.spec.mode || 'turn', status: task.status, ms: task.startedAt ? Date.parse(task.finishedAt) - Date.parse(task.startedAt) : 0 }); fireWebhook(task); },
   });

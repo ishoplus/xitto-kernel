@@ -315,8 +315,8 @@ $("#go").onclick = async () => {
   poll();
 };
 
-function statusClass(s){ return s==="running"?"running":s==="needs-input"?"needs":s==="done"?"done":(s==="error"||s==="cancelled")?"error":""; }
-function statusText(s){ return ({queued:"排隊中",running:"進行中…","needs-input":"需要你回答",done:"已完成",error:"失敗",cancelled:"已中斷"})[s]||s; }
+function statusClass(s){ return s==="running"?"running":s==="needs-input"?"needs":s==="done"?"done":(s==="error"||s==="cancelled"||s==="interrupted")?"error":""; }
+function statusText(s){ return ({queued:"排隊中",running:"進行中…","needs-input":"需要你回答",done:"已完成",error:"失敗",cancelled:"已中斷",interrupted:"已中斷(重啟)"})[s]||s; }
 const CANCELLABLE = ["queued","running","needs-input"];
 function todosHtml(p){ if(!p||!(p.todos||[]).length) return ""; const ic=s=>s==="completed"?"☑":s==="in_progress"?"◐":"☐"; return `<div class="todos">${p.todos.map(td=>`<div class="todo ${td.status}">${ic(td.status)} ${esc(td.content)}</div>`).join("")}</div>`; }
 async function cancelTask(id){ await api("/v1/tasks/"+id+"/cancel",{method:"POST"}); for(let i=0;i<10;i++){ await new Promise(r=>setTimeout(r,600)); const t=await api("/v1/tasks/"+id).then(r=>r.json()); liveTask=t; renderCurrent(t); if(["done","error","cancelled"].includes(t.status)){loadHistory();break;} } }

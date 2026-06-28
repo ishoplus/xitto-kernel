@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.5
+
+- **許願台重啟後歷史還在（持久化）**：原本任務清單與對話 session 都是 in-memory,重啟全沒。改成落地:
+  - **任務清單** → `.xitto-server/tasks/<id>.json`（每任務一檔,狀態變更時覆寫）,啟動載回 → **歷史成品重啟後自動顯示**
+  - **對話 session** → `.xitto-server/sessions/<id>.json`,啟動載回 → **重啟後仍能「繼續/調整」**（對話脈絡跨重啟）
+  - **重啟收尾**：載入時還停在 `running`/`queued`/`needs-input` 的（agent 已隨進程消失）標 `interrupted`「已中斷(重啟)」
+  - 對標 Claude Code「對話自動落地」；但許願台是**自動顯示歷史**(成品清單),非明確 `--resume`(它是 chat,單位不同)
+  - 1 個新測試（落地/載回/interrupted）+ 真實端到端：跑任務→重啟(新 server 同 baseDir)→歷史顯示 + 接續對話寫出「重啟前只在對話講過的偏好 42」。測試 189/189
+
 ## 0.8.4
 
 - **桌面雙欄佈局（善用寬螢幕）**：原本單條 760px 窄欄、左右大量留白。改用 CSS grid 雙欄：

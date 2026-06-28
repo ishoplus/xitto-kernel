@@ -1,6 +1,9 @@
 // 控制與規劃：取消（abort/排隊移除）+ todo 清單進度。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createTaskStore } from '../src/app/server.js';
 
 const tick = () => new Promise((r) => setImmediate(r));
@@ -65,6 +68,26 @@ test('cancel：待答中 → 解除阻塞 + abort', async () => {
   assert.equal(aborted, true);
   await gate.promise; await tick(); await tick();
   assert.equal(store.get(t.id).status, 'cancelled');
+});
+
+test('持久化：任務落地 + 重啟載回；中途的標 interrupted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xk-persist-'));
+  try {
+    const s1 = createTaskStore({ persistDir: dir, runJob: async () => ({ text: 'ok', artifacts: { created: ['a.txt'], modified: [] } }) });
+    const t = s1.enqueue({ mode: 'goal', goal: '建立 a.txt', workspace: 'w' });
+    await tick(); await tick();
+    assert.equal(s1.get(t.id).status, 'done');
+    assert.ok(readdirSync(dir).includes(t.id + '.json'));   // 落地了
+    // 模擬重啟：新 store 同 persistDir
+    const s2 = createTaskStore({ persistDir: dir, runJob: async () => ({}) });
+    assert.equal(s2.get(t.id).status, 'done');
+    assert.equal(s2.view(t.id).goal, '建立 a.txt');
+    assert.deepEqual(s2.result(t.id).result.artifacts.created, ['a.txt']);   // 成品 metadata 也在
+    // 模擬被殺：手動寫一個 running 的任務檔
+    writeFileSync(join(dir, 'trun.json'), JSON.stringify({ id: 'trun', status: 'running', spec: { mode: 'goal', goal: 'y' }, createdAt: '2026-01-01' }));
+    const s3 = createTaskStore({ persistDir: dir, runJob: async () => ({}) });
+    assert.equal(s3.get('trun').status, 'interrupted');     // 進程已死 → 標中斷
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('view.continued：帶 sessionId（繼續/調整）標記為接續,否則 false', async () => {
