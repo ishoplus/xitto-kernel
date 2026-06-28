@@ -67,6 +67,15 @@ test('cancel：待答中 → 解除阻塞 + abort', async () => {
   assert.equal(store.get(t.id).status, 'cancelled');
 });
 
+test('view.continued：帶 sessionId（繼續/調整）標記為接續,否則 false', async () => {
+  const store = createTaskStore({ runJob: async () => ({}) });
+  const fresh = store.enqueue({ mode: 'goal', goal: 'x' });
+  const follow = store.enqueue({ mode: 'goal', goal: 'y', sessionId: 's-prev' });   // 接續對話
+  assert.equal(store.view(fresh.id).continued, false);
+  assert.equal(store.view(follow.id).continued, true);
+  await tick();
+});
+
 test('progress：todo_write → progress.todos（不算動作步,給 UI 打勾）', async () => {
   const gate = defer();
   const store = createTaskStore({
