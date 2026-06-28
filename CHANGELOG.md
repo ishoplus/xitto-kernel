@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0
+
+- **工作台分頁（看見並管理持久工作區）**：許願台加「許願 | 📂 工作台」**同頁分頁**（不是另開頁面,共用空間/檢視器/認證）。
+  - **許願**=交辦任務的主流程（不變）；**工作台**=列出當前專案累積的**所有檔案**（看/下載/刪）
+  - server 新增 `GET /v1/workspaces/:ws/files`（列檔,排除 .xitto-kernel/tmp/node_modules）、`GET/DELETE /v1/workspaces/:ws/file`（取/刪,防穿越）
+  - 檔案檢視器抽為通用 `renderFile(base,…)`，任務成品與工作台共用；`serveFile` 抽出（content-type/下載）
+  - 讓持久工作空間從「半成品（檔案累積但看不見）」變成可見可管理；刻意保持輕量（檔案清單,非 IDE）
+  - 4 個新測試（safeWs 防穿越 / listWorkspaceFiles 排除內部目錄）+ 真實 server 端到端（兩任務累積→列/取/刪/防穿越）。測試 184/184
+
 ## 0.6.4
 
 - **許願台「展開過程」+ 彩色 diff（借 Claude Code 的工具卡/⌥展開,翻譯成非技術版）**：

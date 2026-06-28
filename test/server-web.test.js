@@ -1,7 +1,10 @@
 // 許願台網頁 + 交付檔案端點：UI 服務（token 注入）、resolveArtifact 防穿越。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServerApp, resolveArtifact } from '../src/app/server.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServerApp, resolveArtifact, listWorkspaceFiles, safeWs } from '../src/app/server.js';
 
 test('resolveArtifact：合法相對路徑 → 解析；穿越/絕對路徑 → null', () => {
   assert.equal(resolveArtifact('/base/s1', 'a.txt'), '/base/s1/a.txt');
@@ -10,6 +13,26 @@ test('resolveArtifact：合法相對路徑 → 解析；穿越/絕對路徑 → 
   assert.equal(resolveArtifact('/base/s1', '/etc/passwd'), null);
   assert.equal(resolveArtifact('/base/s1', ''), null);
   assert.equal(resolveArtifact('/base/s1', null), null);
+});
+
+test('safeWs：消毒 workspace 名稱（防穿越）', () => {
+  assert.equal(safeWs('essay'), 'essay');
+  assert.equal(safeWs('../../etc'), 'etc');
+  assert.equal(safeWs(''), 'default');
+  assert.equal(safeWs('a b/c'), 'abc');
+});
+
+test('listWorkspaceFiles：列檔（遞迴）+ 排除內部目錄', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xk-wb-'));
+  try {
+    writeFileSync(join(dir, 'report.md'), '# r');
+    mkdirSync(join(dir, 'sub')); writeFileSync(join(dir, 'sub', 'a.txt'), 'x');
+    mkdirSync(join(dir, '.xitto-kernel')); writeFileSync(join(dir, '.xitto-kernel', 'memory.md'), 'm'); // 內部,不列
+    mkdirSync(join(dir, 'tmp')); writeFileSync(join(dir, 'tmp', 'scratch'), 's');                       // 過程,不列
+    const files = listWorkspaceFiles(dir).map((f) => f.path).sort();
+    assert.deepEqual(files, ['report.md', 'sub/a.txt']);
+    assert.ok(listWorkspaceFiles(dir).every((f) => typeof f.size === 'number' && typeof f.mtime === 'number'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('GET / 服務許願台網頁，token 注入、公開可載入（免 auth）', async () => {

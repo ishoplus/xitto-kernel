@@ -3,7 +3,7 @@
 // JSON 或 SSE 串流，以及「背景任務 + 完成通知（webhook）」—— 派任務出去、做完回呼，不用一直盯著。
 // 這是「另一個 app 消費同一組 kernel 事件」—— 不動 kernel 核心。
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, isAbsolute, relative, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createKernel } from '../kernel/index.js';
@@ -29,6 +29,23 @@ export function contentTypeFor(name) { const ext = (String(name).split('.').pop(
 
 // 工具參數摘要（給「展開過程」步驟卡）：取最有意義的參數。
 const argSummary = (args) => { if (!args || typeof args !== 'object') return ''; const v = args.command ?? args.path ?? args.pattern ?? args.query ?? args.url ?? args.name ?? args.topic; return (v != null && v !== '') ? String(v).replace(/\s+/g, ' ').slice(0, 80) : ''; };
+
+// workspace 名稱消毒（同 runKernel）。
+export const safeWs = (w) => (String(w || 'default').replace(/[^a-zA-Z0-9_-]/g, '') || 'default');
+
+// 列工作區檔案（給「工作台」分頁）：遞迴,排除內部目錄,回 [{path,size,mtime}]。
+const SKIP_WS = new Set(['.xitto-kernel', 'node_modules', '.git', 'tmp', '.swebench-repos']);
+export function listWorkspaceFiles(dir, base = dir, out = [], depth = 0) {
+  if (depth > 8 || out.length > 2000) return out;
+  let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    if (SKIP_WS.has(e.name)) continue;
+    const full = join(dir, e.name);
+    if (e.isDirectory()) listWorkspaceFiles(full, base, out, depth + 1);
+    else if (e.isFile()) { try { const s = statSync(full); out.push({ path: relative(base, full), size: s.size, mtime: s.mtimeMs }); } catch { /* 略 */ } }
+  }
+  return out;
+}
 
 // 交付檔案路徑解析（防穿越）：rel 必須是 workdir 內的相對路徑,否則回 null。
 export function resolveArtifact(workdir, rel) {
@@ -182,6 +199,17 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
   const log = (o) => console.log(JSON.stringify({ ts: new Date().toISOString(), ...o }));
   const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 1e6) req.destroy(); }); req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch { resolve({}); } }); });
   const sseHead = (res) => res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
+  // 依副檔名給 content-type 回傳檔案（圖片顯示/md 渲染/下載皆走這）。
+  const serveFile = (res, full, rel, download) => {
+    if (!existsSync(full)) return json(res, 404, { error: '檔案不存在' });
+    try {
+      const ct = contentTypeFor(rel);
+      const isText = /^text\/|json|xml|javascript|svg/.test(ct);
+      const headers = { 'content-type': ct + (isText ? '; charset=utf-8' : '') };
+      if (download) headers['content-disposition'] = `attachment; filename="${encodeURIComponent(basename(rel))}"`;
+      res.writeHead(200, headers); return res.end(readFileSync(full));
+    } catch (e) { return json(res, 500, { error: e.message }); }
+  };
 
   // 共用：跑一輪/一目標，回傳 { sessionId, text, usage, rounds, done }；onEvent 收原始 kernel 事件；
   // ask（可選）= 澄清通道,讓 agent 在背景任務中暫停問使用者。
@@ -300,14 +328,27 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       const rel = url.searchParams.get('path');
       const full = resolveArtifact(join(baseDir, 'ws', ws), rel);
       if (!full) return json(res, 400, { error: 'path 不合法' });
-      if (!existsSync(full)) return json(res, 404, { error: '檔案不存在' });
-      try {
-        const ct = contentTypeFor(rel);
-        const isText = /^text\/|json|xml|javascript|svg/.test(ct);
-        const headers = { 'content-type': ct + (isText ? '; charset=utf-8' : '') };
-        if (url.searchParams.get('download')) headers['content-disposition'] = `attachment; filename="${encodeURIComponent(basename(rel))}"`;
-        res.writeHead(200, headers); return res.end(readFileSync(full));
-      } catch (e) { return json(res, 500, { error: e.message }); }
+      return serveFile(res, full, rel, url.searchParams.get('download'));
+    }
+
+    // 工作台：列當前空間所有檔案
+    const mWsList = path.match(/^\/v1\/workspaces\/([^/]+)\/files$/);
+    if (req.method === 'GET' && mWsList) {
+      const ws = safeWs(mWsList[1]); const dir = join(baseDir, 'ws', ws);
+      return json(res, 200, { workspace: ws, files: existsSync(dir) ? listWorkspaceFiles(dir) : [] });
+    }
+
+    // 工作台：取檔（看/下載）/ 刪檔
+    const mWsFile = path.match(/^\/v1\/workspaces\/([^/]+)\/file$/);
+    if (mWsFile && (req.method === 'GET' || req.method === 'DELETE')) {
+      const ws = safeWs(mWsFile[1]); const rel = url.searchParams.get('path');
+      const full = resolveArtifact(join(baseDir, 'ws', ws), rel);
+      if (!full) return json(res, 400, { error: 'path 不合法' });
+      if (req.method === 'DELETE') {
+        try { if (existsSync(full)) rmSync(full); log({ workspace: ws, action: 'delete', path: rel }); return json(res, 200, { ok: true }); }
+        catch (e) { return json(res, 500, { error: e.message }); }
+      }
+      return serveFile(res, full, rel, url.searchParams.get('download'));
     }
 
     // 附掛背景任務的事件流（replay 緩衝 + 即時；已結束則回放後關閉）
