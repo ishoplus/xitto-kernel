@@ -37,6 +37,24 @@ test('progress：從事件累積 round / steps / recent / phase，完成轉 done
   assert.equal(store.view(t.id).progress.phase, 'done');
 });
 
+test('progress：text 事件累積 thinking（思考可見）；tool/round 後清空', async () => {
+  const gate = defer();
+  const store = createTaskStore({
+    runJob: async (spec, emit) => {
+      emit({ type: 'text', delta: '我打算先' });
+      emit({ type: 'text', delta: '讀檔再修改' });
+      await gate.promise;
+      return {};
+    },
+  });
+  const t = store.enqueue({});
+  await tick(); await tick();
+  let p = store.view(t.id).progress;
+  assert.equal(p.phase, 'thinking');
+  assert.match(p.thinking, /讀檔再修改/);
+  gate.resolve();
+});
+
 test('progress：recent 只保留最近 6 個動作', async () => {
   const gate = defer();
   const store = createTaskStore({

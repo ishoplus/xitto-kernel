@@ -32,6 +32,7 @@
   .phase { color:var(--accent); font-size:13px; margin-bottom:5px; }
   .step { font-size:13px; color:var(--dim); padding:1px 0; }
   .step.cur { color:var(--fg); }
+  .step.think { color:var(--warn); font-style:italic; }
   .dots::after { content:""; animation:dots 1.4s steps(4,end) infinite; }
   @keyframes dots { 0%{content:""} 25%{content:"·"} 50%{content:"··"} 75%{content:"···"} }
   .summary { margin-top:10px; white-space:pre-wrap; }
@@ -80,15 +81,19 @@ const esc = (s) => String(s==null?"":s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"
 
 // 把工具動作翻成人話,讓「進行中」變成看得懂的進度
 const TOOL_ZH = { read:"讀取檔案", ls:"查看目錄", glob:"尋找檔案", grep:"搜尋內容", write:"建立檔案", edit:"修改檔案", bash:"執行指令", web_search:"搜尋網路", web_fetch:"讀取網頁", http:"呼叫 API", read_image:"看圖片", skill:"載入技能", skill_save:"記錄技能", skills_check:"複查技能", playbook_update:"記下做法", episode_record:"記下經驗", episode_recall:"回想經驗", memory_save:"記住重點", todo_write:"規劃步驟", spawn_agent:"派出子助手", ask_user:"來問你" };
-const PHASE_ZH = { starting:"啟動中", acting:"執行中", verifying:"驗收中", verified:"驗收通過", fixing:"修正中", "needs-input":"等你回答" };
+const PHASE_ZH = { starting:"啟動中", thinking:"思考中", acting:"執行中", verifying:"驗收中", verified:"驗收通過", fixing:"修正中", "needs-input":"等你回答" };
 const friendlyStep = (a) => { const z = TOOL_ZH[a.name] || a.name; const d = a.args && (a.args.command||a.args.path||a.args.query||a.args.url||a.args.topic||a.args.name) || ""; return z + (d ? ` ${String(d).slice(0,44)}` : ""); };
+const elapsedOf = (t) => t.startedAt ? Math.max(0, Math.round((Date.now() - new Date(t.startedAt).getTime())/1000)) : 0;
 function progressHtml(t) {
-  const p = t.progress;
-  if (!p || (!(p.recent||[]).length && !p.round)) return `<div class="activity"><span class="phase dots">準備中</span></div>`;
-  const head = `${PHASE_ZH[p.phase]||"進行中"}${p.round?` · 第 ${p.round} 輪`:""}${p.steps?` · 已執行 ${p.steps} 個動作`:""}`;
+  const p = t.progress || {};
+  const head = `${PHASE_ZH[p.phase]||"進行中"}${p.round?` · 第 ${p.round} 輪`:""}${p.steps?` · ${p.steps} 個動作`:""} · 已進行 <span id="elapsed">${elapsedOf(t)}s</span>`;
+  const think = p.thinking ? `<div class="step think">💭 ${esc(p.thinking)}…</div>` : "";
   const steps = (p.recent||[]).slice().reverse().map((a,i)=>`<div class="step ${i===0?"cur":""}">${i===0?"▸":"·"} ${esc(friendlyStep(a))}</div>`).join("");
-  return `<div class="activity"><div class="phase dots">${esc(head)}</div>${steps}</div>`;
+  return `<div class="activity"><div class="phase dots">${head}</div>${think}${steps}</div>`;
 }
+// 心跳：每秒更新「已進行 Ns」,即使沒有新事件也讓使用者看到它活著
+let liveTask = null;
+setInterval(() => { if (liveTask && (liveTask.status==="running"||liveTask.status==="queued")) { const el=document.getElementById("elapsed"); if (el) el.textContent = elapsedOf(liveTask)+"s"; } }, 1000);
 
 // 領域選單（非技術使用者預設「通用」）
 const LABELS = { general:"通用", coding:"程式", "data-query":"查資料", notes:"筆記", "deep-research":"研究", devops:"維運" };
@@ -113,10 +118,11 @@ function statusText(s){ return ({queued:"排隊中",running:"進行中…","need
 async function poll() {
   clearTimeout(polling);
   const t = await api("/v1/tasks/"+activeId).then(r=>r.json());
+  liveTask = t;
   renderCurrent(t);
   if (t.status==="done" || t.status==="error") { loadHistory(); return; }
   if (t.status==="needs-input") return; // 等使用者回答
-  polling = setTimeout(poll, 1500);
+  polling = setTimeout(poll, 1200);
 }
 
 function renderCurrent(t) {
@@ -155,7 +161,7 @@ async function loadHistory() {
     <div class="g">${esc(t.goal||t.taskId)} <span class="status ${statusClass(t.status)}">${statusText(t.status)}</span></div>
     <div class="m">${esc(t.createdAt)}</div></div>`).join("") : `<div class="empty">還沒有任何任務。</div>`;
 }
-async function openTask(id){ activeId=id; const t=await api("/v1/tasks/"+id).then(r=>r.json()); renderCurrent(t); if(t.status==="running"||t.status==="queued"){poll();} window.scrollTo({top:0,behavior:"smooth"}); }
+async function openTask(id){ activeId=id; const t=await api("/v1/tasks/"+id).then(r=>r.json()); liveTask=t; renderCurrent(t); if(t.status==="running"||t.status==="queued"){poll();} window.scrollTo({top:0,behavior:"smooth"}); }
 
 loadHistory();
 </script>

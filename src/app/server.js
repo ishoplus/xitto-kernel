@@ -66,9 +66,10 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
     t.events.push(ev);
     if (t.events.length > maxEvents) t.events.shift();
     // 進度追蹤（給 UI 顯示「正在做什麼」,不要只顯示進行中；排除 text 雜訊）
-    const p = (t.progress ||= { steps: 0, round: 0, maxRounds: 0, recent: [], phase: 'starting' });
-    if (ev.type === 'tool') { p.steps++; p.phase = 'acting'; p.recent.push({ name: ev.name, args: ev.args }); if (p.recent.length > 6) p.recent.shift(); }
-    else if (ev.type === 'round') { p.round = ev.round; if (ev.maxRounds) p.maxRounds = ev.maxRounds; }
+    const p = (t.progress ||= { steps: 0, round: 0, maxRounds: 0, recent: [], phase: 'starting', thinking: '' });
+    if (ev.type === 'tool') { p.steps++; p.phase = 'acting'; p.thinking = ''; t._textbuf = ''; p.recent.push({ name: ev.name, args: ev.args }); if (p.recent.length > 6) p.recent.shift(); }
+    else if (ev.type === 'text') { p.phase = 'thinking'; t._textbuf = ((t._textbuf || '') + (ev.delta || '')).slice(-400); p.thinking = t._textbuf.replace(/\s+/g, ' ').trim().slice(-150); }
+    else if (ev.type === 'round') { p.round = ev.round; if (ev.maxRounds) p.maxRounds = ev.maxRounds; p.thinking = ''; t._textbuf = ''; }
     else if (ev.type === 'phase') p.phase = ev.phase;
     else if (ev.type === 'needs_input') p.phase = 'needs-input';
     else if (ev.type === 'answered') p.phase = 'acting';

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.6
+
+- **許願台「活著的證明」**：解決「只顯示進行中、不知道是否真的在跑」。
+  - **每秒心跳時鐘**「已進行 Ns」：UI 端 1 秒 ticker（不靠 poll）,即使沒有新事件也持續跳動 → 看得到它活著
+  - **思考文字可見**：progress 新增 `thinking`——累積 agent 當下串流的文字,在「思考中」階段顯示 💭 它在想什麼
+    （tool/round 後清空；不存進 view 的 buffer 用 `t._textbuf`）
+  - phase 新增 `thinking`；poll 由 1500ms 縮到 1200ms
+  - 真實 live 驗證:時鐘 0→16s 連續跳動,階段 starting→thinking(💭)→acting(建檔→讀檔)→done
+  - 1 個新測試（text 事件累積 thinking、tool/round 清空）。測試 166/166。
+
 ## 0.4.5
 
 - **修：CLI 澄清提問被 spinner 蓋住，導致回答疑似沒被採用**。
