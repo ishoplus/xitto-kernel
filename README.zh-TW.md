@@ -9,7 +9,7 @@
 
 > 領域無關的 agent 底座（**可當依賴套件** — 你的領域 agent 是獨立專案，import kernel 而非 clone，升級不固化）
 
-把 [`xitto-code`](../xitto-code) 這個完整的編碼智能體，抽象成一個**領域無關的 agent kernel** + 可插拔的 **DomainPack**。
+把 `xitto-code` 這個完整的編碼智能體，抽象成一個**領域無關的 agent kernel** + 可插拔的 **DomainPack**。
 同一個 kernel（多步工具循環、守衛鏈、權限/沙箱、provider 抽象）能承載任何領域的 agent；
 「編碼」只是其中一個 DomainPack，換成「資料查詢」「知識庫」「客服/維運」等只需替換 pack。
 互動 CLI 在 app 層（薄）；更豐富的 TUI 或其他前端可作為另一個 app 消費同一組 kernel 事件。
@@ -209,13 +209,13 @@ xitto-kernel/
 │       ├── deep-research/        ✅ 深度研究（多來源搜尋→查證→有引用結論）
 │       └── devops/               ✅ 維運/SRE（shell + bash_bg + 設定 + 日誌 + 健康檢查）
 ├── bin/xitto-kernel.js           ✅ CLI 進入點（run / new-agent）
-├── test/                         ✅ 41 測試全綠（runTurn + Seatbelt 隔離 + 腳手架 + …）
+├── test/                         ✅ 測試全綠（runTurn + Seatbelt 隔離 + 腳手架 + …）
 └── examples/
     ├── demo.js                   ✅ 不靠 LLM：同 kernel、兩領域、守衛真實生效
     └── live.js                   ✅ 真實 LLM（MiniMax）：模型實際呼叫工具完成任務
 ```
 
-**也可跑**：`npm test`（41 綠）、`npm run demo`（不靠 LLM）、`node examples/live.js`（真實 LLM）。
+**也可跑**：`npm test`（200+ 測試全綠）、`npm run demo`（不靠 LLM）、`node examples/live.js`（真實 LLM）。
 **runTurn 已移植**：串流 → 工具呼叫（過 kernel 守衛鏈）→ 回灌 → 再串流的多步循環，能用真實 provider 驅動。
 **真實 sandbox 已接守衛鏈第 5 格**：(A) 靜態策略擋網路/提權/危險命令；(B) macOS Seatbelt 在執行期 OS 級隔離，擋下靜態策略漏掉的混淆越界寫入。`sandboxable` 工具自動包裹，`tool.readOnly` 自動放行——全 metadata 驅動，無領域名單。
 **仍為接縫（後續）**：回合內壓縮、hooks/skills/MCP/subagent、contextFiles 載入、互動權限確認（CLI 目前 headless 放行 mutating、危險命令仍擋）。更豐富的 Ink TUI 可作為另一個 app 消費同一組 kernel 事件。
@@ -237,7 +237,7 @@ xitto-kernel/
 真實 sandbox（靜態策略 + macOS Seatbelt）、pack.verify 自我驗收、pack.contextFiles 載入、
 **跨 session 記憶 + resume**、**互動權限確認**（/auto、--yes）、**/plan 計劃模式 + /undo**、
 **git 能力**（coding pack）、**spawn_agent 子 agent**、**PreToolUse/PostToolUse hooks**、
-**skills 漸進揭露**、**MCP 工具接入**、互動 CLI、腳手架（`new-agent` 產出獨立專案）。75 測試全綠。
+**skills 漸進揭露**、**MCP 工具接入**、互動 CLI、腳手架（`new-agent` 產出獨立專案）。測試全綠（200+）。
 
 **已發佈 npm**：`npm install -g xitto-kernel`；`new-agent` 產出的專案預設依賴 `^0.1.0`（`--local` 用 file: 開發）。
 **可選後續**：Ink 全功能 TUI 可作為另一個 app（目前 CLI 已有輕量串流 markdown + 彩色 diff）。
@@ -260,6 +260,17 @@ xitto-kernel/
 | 工具呼叫 | BFCL 風格 | 軌跡檢查（呼叫對工具/參數）| `node eval/tool-calling-run.js` | 6/6 |
 
 \* 用 MiniMax-M2.7 跑的參考數字（小樣本）；換模型/擴樣本見 `eval/README.md`。scorer 型：`answerMatch` / `stateCheck` / `toolCalled`。
+
+## 安全（Security）
+
+xitto-kernel 跑的 agent 會**執行 LLM 決定的命令、修改檔案**，請當成「跑你沒寫過的程式碼」看待。部署前的關鍵須知：
+
+- **OS 沙箱只有 macOS。** 真正的隔離層是 macOS Seatbelt；在 **Linux/Windows 沒有 OS 級沙箱**——agent 以你的使用者權限執行命令。不信任的任務請在容器/VM 或拋棄式環境裡跑。
+- **範例 HTTP server 是未加固的 PoC。** bearer token 注入頁面供同源呼叫、且無速率限制。**切勿未認證就暴露到公網**——前面要加真實認證與 TLS，優先本機自用。
+- **Prompt injection 是真實攻擊面。** agent 讀到的網頁、檔案、工具輸出可能夾帶惡意指令。危險命令偵測（`rm -rf`、fork bomb、`curl | sh`…）、命令簽章白名單、漸進信任能縮小波及範圍但無法根除。危險命令一律把關；你授予信任前請審視。
+- **金鑰不必落地。** 在 `providers.json` 用環境變數 `${NAME}` 參照 API key，該檔已被 git-ignore。
+
+發現漏洞？請走私密回報——見 [SECURITY.md](SECURITY.md)，**勿開公開 issue**。
 
 ## 貢獻
 

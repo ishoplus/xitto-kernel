@@ -9,7 +9,7 @@
 
 > A domain-agnostic agent foundation (**usable as a dependency** — your domain agent is a standalone project that imports the kernel rather than cloning it, so upgrades don't get frozen in).
 
-Takes [`xitto-code`](../xitto-code), a complete coding agent, and abstracts it into a **domain-agnostic agent kernel** + pluggable **DomainPacks**.
+Takes `xitto-code`, a complete coding agent, and abstracts it into a **domain-agnostic agent kernel** + pluggable **DomainPacks**.
 The same kernel (multi-step tool loop, guard chain, permissions/sandbox, provider abstraction) can host an agent for any domain;
 "coding" is just one DomainPack — swap it for "data query", "knowledge base", "support/ops", etc. by replacing the pack.
 The interactive CLI lives in the app layer (thin); a richer TUI or other frontends can be another app consuming the same kernel events.
@@ -209,13 +209,13 @@ xitto-kernel/
 │       ├── deep-research/        ✅ deep research (multi-source search → verify → cited conclusion)
 │       └── devops/               ✅ ops/SRE (shell + bash_bg + config + logs + health checks)
 ├── bin/xitto-kernel.js           ✅ CLI entry point (run / new-agent)
-├── test/                         ✅ 41 tests all green (runTurn + Seatbelt isolation + scaffolding + …)
+├── test/                         ✅ all tests green (runTurn + Seatbelt isolation + scaffolding + …)
 └── examples/
     ├── demo.js                   ✅ no LLM: same kernel, two domains, guards genuinely in effect
     └── live.js                   ✅ real LLM (MiniMax): the model actually calls tools to finish a task
 ```
 
-**Also runnable**: `npm test` (41 green), `npm run demo` (no LLM), `node examples/live.js` (real LLM).
+**Also runnable**: `npm test` (200+ tests, all green), `npm run demo` (no LLM), `node examples/live.js` (real LLM).
 **runTurn is ported**: the multi-step loop of stream → tool call (through the kernel guard chain) → feed back → stream again, drivable by a real provider.
 **Real sandbox is wired into guard-chain slot 5**: (A) static policy blocks network/privilege-escalation/dangerous commands; (B) macOS Seatbelt provides runtime OS-level isolation, catching obfuscated out-of-bounds writes the static policy missed. `sandboxable` tools are auto-wrapped, `tool.readOnly` is auto-passed — all metadata driven, no domain lists.
 **Still seams (later)**: in-turn compaction, hooks/skills/MCP/subagent, contextFiles loading, interactive permission confirmation (the CLI currently passes mutating tools headlessly; dangerous commands are still blocked). A richer Ink TUI can be another app consuming the same kernel events.
@@ -237,7 +237,7 @@ xitto-kernel/
 real sandbox (static policy + macOS Seatbelt), pack.verify self-acceptance, pack.contextFiles loading,
 **cross-session memory + resume**, **interactive permission confirmation** (/auto, --yes), **/plan plan mode + /undo**,
 **git capabilities** (coding pack), **spawn_agent subagents**, **PreToolUse/PostToolUse hooks**,
-**skills progressive disclosure**, **MCP tool integration**, the interactive CLI, scaffolding (`new-agent` produces a standalone project). 75 tests all green.
+**skills progressive disclosure**, **MCP tool integration**, the interactive CLI, scaffolding (`new-agent` produces a standalone project). All tests green (200+).
 
 **Published on npm**: `npm install -g xitto-kernel`; projects produced by `new-agent` depend on `^0.1.0` by default (`--local` uses file: for development).
 **Optional next**: a full-featured Ink TUI as another app (the CLI already has lightweight streaming markdown + colored diffs).
@@ -260,6 +260,17 @@ Paradigm: **a new-domain agent = a new pack (what it can do) + a new EvalSuite (
 | tool calling | BFCL style | trajectory check (calls the right tool/params) | `node eval/tool-calling-run.js` | 6/6 |
 
 \* Reference numbers run with MiniMax-M2.7 (small sample); for swapping models / expanding the sample see `eval/README.md`. Scorer types: `answerMatch` / `stateCheck` / `toolCalled`.
+
+## Security
+
+xitto-kernel runs an agent that **executes commands and edits files chosen by an LLM**. Treat it like running code you didn't write. Key caveats before you deploy:
+
+- **OS sandbox is macOS-only.** The real isolation layer is macOS Seatbelt. On **Linux/Windows there is no OS-level sandbox** — the agent runs commands with your user's privileges. Run untrusted goals inside a container/VM or a throwaway environment.
+- **The example HTTP server is an unhardened PoC.** The bearer token is injected into the page for same-origin calls and there is no rate limiting. **Never expose it unauthenticated to the public internet** — put real authentication and TLS in front, and prefer running it locally.
+- **Prompt injection is a real surface.** Web pages, files, and tool output the agent reads can carry adversarial instructions. The command-danger detector (`rm -rf`, fork bombs, `curl | sh`, …), the command-signature allowlist, and progressive trust reduce the blast radius but do not eliminate it. Dangerous commands are always gated; review what you grant trust to.
+- **Keys never need to land on disk.** Reference API keys via env vars (`${NAME}`) in `providers.json`, which is git-ignored.
+
+Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY.md). Do not open a public issue.
 
 ## Contributing
 
