@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0
+
+成品管理 + 類型感知呈現 + 專案空間（一次補上三組優化）。
+
+- **成品/過程檔管理**：
+  - 系統提示引導 agent：成品放工作目錄根用好檔名，暫存/草稿放 `tmp/`
+  - `runOutcome` 的成品掃描排除 `tmp/`（過程檔不污染交付清單）；job 完成後 server 自動清 `tmp/`
+- **類型感知的成品呈現**：
+  - file 端點按副檔名給對的 `content-type`（圖片能顯示、md/html 能渲染），支援 `?download=1`、二進位正確回傳
+  - 網頁類型感知檢視：markdown **排版渲染**（零依賴內嵌渲染器）、圖片 `<img>`、HTML 沙箱 iframe、JSON 美化、其餘下載；每個檔有「開新分頁／下載」
+  - `?token=` 查詢參數認證（img/iframe/下載這類無法帶 header 的瀏覽器 GET）
+- **專案／空間（對應 Claude Code 的「目錄」,但可選＋命名＋有預設）**：
+  - 網頁加「專案」下拉 + 新專案；不同空間的**檔案與五層沉澱各自獨立**；歷史按空間過濾
+  - 任務 view 帶 `workspace`；POST `/v1/tasks` 接受 `workspace`（修：原本被 enqueue 丟棄）
+- 3 個新測試（content-type / view.workspace / tmp 不算成品）+ 真實 server 端到端
+  （markdown 成品渲染、tmp 清理、download header、query token、workspace 隔離）。測試 174/174。
+
 ## 0.5.0
 
 - **持久工作空間（許願台成品間的關係）**：每個成品仍是獨立對話,但共用一個持久工作空間。

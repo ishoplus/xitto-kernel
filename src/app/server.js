@@ -3,8 +3,8 @@
 // JSON 或 SSE 串流，以及「背景任務 + 完成通知（webhook）」—— 派任務出去、做完回呼，不用一直盯著。
 // 這是「另一個 app 消費同一組 kernel 事件」—— 不動 kernel 核心。
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { join, dirname, isAbsolute, relative } from 'node:path';
+import { mkdirSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { join, dirname, isAbsolute, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createKernel } from '../kernel/index.js';
 import { loadModel } from './providers.js';
@@ -22,6 +22,10 @@ const PACKS = {
 
 const lastText = (history) => ([...(history || [])].reverse().find((m) => m.role === 'assistant')?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
 const newId = (p = 's') => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+// 交付檔案的 content-type（讓圖片能顯示、md/html 能渲染、其餘可下載）。
+const MIME = { md: 'text/markdown', markdown: 'text/markdown', txt: 'text/plain', log: 'text/plain', json: 'application/json', csv: 'text/csv', html: 'text/html', htm: 'text/html', js: 'text/javascript', mjs: 'text/javascript', ts: 'text/plain', py: 'text/plain', sh: 'text/plain', css: 'text/css', xml: 'application/xml', yaml: 'text/plain', yml: 'text/plain', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+export function contentTypeFor(name) { const ext = (String(name).split('.').pop() || '').toLowerCase(); return MIME[ext] || 'application/octet-stream'; }
 
 // 交付檔案路徑解析（防穿越）：rel 必須是 workdir 內的相對路徑,否則回 null。
 export function resolveArtifact(workdir, rel) {
@@ -60,7 +64,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
   const subs = new Map();    // id -> Set<(ev)=>void>
   let active = 0;
 
-  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', goal: t.spec.goal || t.spec.input || '', sessionId: t.result?.sessionId || t.spec.sessionId || null, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null, progress: t.progress || null });
+  const view = (t) => ({ taskId: t.id, status: t.status, pack: t.spec.pack || 'general', mode: t.spec.mode || 'turn', workspace: t.spec.workspace || 'default', goal: t.spec.goal || t.spec.input || '', sessionId: t.result?.sessionId || t.spec.sessionId || null, createdAt: t.createdAt, startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error, pending: t.pending || null, progress: t.progress || null });
 
   const emit = (t, ev) => {
     t.events.push(ev);
@@ -163,7 +167,8 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
   mkdirSync(baseDir, { recursive: true });
 
   const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-  const authed = (req) => !token || (req.headers.authorization === `Bearer ${token}`);
+  // header bearer 為主；img/iframe/下載這類瀏覽器發起的 GET 無法帶 header,允許 ?token=（同源、PoC）
+  const authed = (req) => { if (!token) return true; if (req.headers.authorization === `Bearer ${token}`) return true; try { return new URL(req.url, 'http://x').searchParams.get('token') === token; } catch { return false; } };
   const log = (o) => console.log(JSON.stringify({ ts: new Date().toISOString(), ...o }));
   const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 1e6) req.destroy(); }); req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch { resolve({}); } }); });
   const sseHead = (res) => res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -186,6 +191,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       // 結果導向：回傳交付物（做了什麼 + 產出的檔案 + 是否達成），對話只是過程
       const o = await kernel.runOutcome(spec.goal || spec.input || '', { history: sess.history, onEvent: wrapped, onAgent, onRound: (i) => wrapped({ type: 'round', round: i.round, maxRounds: i.maxRounds }) });
       sess.history = o.history || []; sessions.set(sessionId, sess);
+      try { rmSync(join(workdir, 'tmp'), { recursive: true, force: true }); } catch { /* 清過程檔,失敗無妨 */ }
       return { sessionId, workspace, text: o.summary || lastText(sess.history), usage, rounds: o.rounds, done: o.done, aborted: o.aborted, artifacts: o.artifacts };
     }
     const r = await kernel.runTurn(spec.input || '', { history: sess.history, onEvent: wrapped, onAgent });
@@ -245,7 +251,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       const body = await readBody(req);
       if (!PACKS[body.pack || 'general']) return json(res, 400, { error: `未知 pack「${body.pack}」，可用：${Object.keys(PACKS).join(', ')}` });
       if (body.webhook && !/^https?:\/\//.test(body.webhook)) return json(res, 400, { error: 'webhook 需為 http(s) URL' });
-      const t = tasks.enqueue({ pack: body.pack, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook });
+      const t = tasks.enqueue({ pack: body.pack, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook, workspace: body.workspace });
       log({ task: t.id, action: 'enqueue', pack: body.pack || 'general', mode: body.mode || 'turn' });
       return json(res, 202, { taskId: t.id, status: t.status, ...tasks.stats() });
     }
@@ -280,11 +286,17 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     if (req.method === 'GET' && mFile) {
       const t = tasks.get(mFile[1]); const ws = t?.result?.workspace;
       if (!ws) return json(res, 404, { error: '無交付物（任務尚未完成?）' });
-      const full = resolveArtifact(join(baseDir, 'ws', ws), url.searchParams.get('path'));
+      const rel = url.searchParams.get('path');
+      const full = resolveArtifact(join(baseDir, 'ws', ws), rel);
       if (!full) return json(res, 400, { error: 'path 不合法' });
       if (!existsSync(full)) return json(res, 404, { error: '檔案不存在' });
-      try { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(readFileSync(full)); }
-      catch (e) { return json(res, 500, { error: e.message }); }
+      try {
+        const ct = contentTypeFor(rel);
+        const isText = /^text\/|json|xml|javascript|svg/.test(ct);
+        const headers = { 'content-type': ct + (isText ? '; charset=utf-8' : '') };
+        if (url.searchParams.get('download')) headers['content-disposition'] = `attachment; filename="${encodeURIComponent(basename(rel))}"`;
+        res.writeHead(200, headers); return res.end(readFileSync(full));
+      } catch (e) { return json(res, 500, { error: e.message }); }
     }
 
     // 附掛背景任務的事件流（replay 緩衝 + 即時；已結束則回放後關閉）

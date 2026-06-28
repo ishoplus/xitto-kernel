@@ -45,7 +45,7 @@ function loadContextFiles(cwd, names) {
 }
 
 // 交付物偵測：掃工作目錄前後快照,diff 出「產出/改動的檔案」（pack 無關,連 bash 寫的也抓得到）。
-const SKIP_SCAN = new Set(['.xitto-kernel', 'node_modules', '.git', '.swebench-repos', '.xitto-server']);
+const SKIP_SCAN = new Set(['.xitto-kernel', 'node_modules', '.git', '.swebench-repos', '.xitto-server', 'tmp']);
 function scanWorkdir(dir, base = dir, acc = new Map(), depth = 0) {
   if (depth > 8 || acc.size > 5000) return acc;
   let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return acc; }
@@ -71,6 +71,9 @@ const DEFAULT_PLAYBOOK_GUIDE =
 
 const DEFAULT_EPISODE_GUIDE =
   '完成有價值的任務後，用 episode_record 記一筆情節(做了什麼+結果+tags)；遇到相似任務時系統會自動召回最相關的幾筆供參考，也可主動用 episode_recall 查。';
+
+const DEFAULT_OUTPUT_GUIDE =
+  '產出檔案時：最終成品放工作目錄根、用清楚好懂的檔名(如 report.md、budget.csv，別用 tmp_3.txt)；中間/暫存檔(下載、草稿、解壓內容、爬到的原始資料)一律放 tmp/ 目錄——那是過程檔，不算成品也可能被清掉。';
 
 // 把 sandboxable 工具的命令在執行期包進 Seatbelt（macOS OS 級隔離）。
 // 非 macOS / 沙箱關閉 / 無 command → wrapWithSeatbelt 回 null，跑原命令（仍受第 5 格靜態策略保護）。
@@ -221,6 +224,7 @@ export function createKernel(pack, config = {}) {
     pack.systemPrompt +
     loadContextFiles(cwd, pack.contextFiles) +          // 注入領域規範檔（CLAUDE.md 等）
     '\n\n# 記憶與專案手冊\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) + '\n' + DEFAULT_PLAYBOOK_GUIDE + '\n' + DEFAULT_EPISODE_GUIDE +
+    '\n\n# 成品與暫存\n' + DEFAULT_OUTPUT_GUIDE +
     (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '') +
     (pbText ? `\n\n# 專案手冊（這個專案怎麼做事，跨 session 累積）\n${pbText}` : '') +
     (askUserTool ? '\n\n# 詢問\n盡量自主完成目標。只在缺少關鍵資訊、無法合理推斷、或決策會明顯改變結果時，才用 ask_user 問使用者；能用合理預設就別問。' : '') +
