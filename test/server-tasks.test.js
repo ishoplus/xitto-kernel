@@ -8,7 +8,7 @@ const defer = () => { let resolve; const promise = new Promise((r) => { resolve 
 
 test('mapEvent 壓縮 kernel 事件為對外事件', () => {
   assert.deepEqual(mapEvent({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' } }), { type: 'tool', name: 'bash', args: { command: 'ls' } });
-  assert.deepEqual(mapEvent({ type: 'tool_execution_end', toolName: 'bash', isError: true }), { type: 'tool_end', name: 'bash', isError: true });
+  assert.deepEqual(mapEvent({ type: 'tool_execution_end', toolName: 'bash', isError: true }), { type: 'tool_end', name: 'bash', isError: true, diff: undefined });
   assert.deepEqual(mapEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hi' } }), { type: 'text', delta: 'hi' });
   assert.equal(mapEvent({ type: 'message_end' }), null);
 });

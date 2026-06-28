@@ -42,6 +42,15 @@
   .wsbadge { display:inline-block; font-size:12px; color:var(--dim); margin-left:8px; }
   .loc { margin-top:10px; font-size:12px; color:var(--dim); }
   .loc code { background:#0c0e12; border:1px solid var(--line); border-radius:6px; padding:2px 7px; color:var(--fg); cursor:pointer; }
+  .logtoggle { margin-top:12px; font-size:13px; color:var(--accent); cursor:pointer; user-select:none; }
+  .loglist { margin-top:6px; border-left:2px solid var(--line); padding-left:12px; }
+  .logstep { font-size:13px; color:var(--fg); padding:3px 0; }
+  .logstep.err { color:#f08a8a; }
+  .logstep .dim { color:var(--dim); }
+  .diff { margin:5px 0 6px 14px; font:12px/1.5 ui-monospace,Menlo,monospace; }
+  .dh { color:var(--dim); font-size:11px; margin-bottom:2px; }
+  .dl { white-space:pre-wrap; }
+  .dl.add { color:var(--ok); } .dl.del { color:#f08a8a; }
   .dots::after { content:""; animation:dots 1.4s steps(4,end) infinite; }
   @keyframes dots { 0%{content:""} 25%{content:"·"} 50%{content:"··"} 75%{content:"···"} }
   .summary { margin-top:10px; white-space:pre-wrap; }
@@ -146,6 +155,22 @@ function mdRender(src){
 }
 const IMG=/\.(png|jpe?g|gif|webp|svg)$/i, MD=/\.(md|markdown)$/i, HTMLF=/\.html?$/i, JSONF=/\.json$/i;
 const fileUrl=(id,path,extra="")=>"/v1/tasks/"+id+"/file?path="+encodeURIComponent(path)+"&token="+encodeURIComponent(TOKEN)+extra;
+// 彩色 diff（綠 +／紅 -）：渲染 kernel 算好的 _diff
+function diffHtml(d){
+  if(!d) return "";
+  if(d.tooBig) return `<div class="diff"><span class="dh">+${d.added} -${d.removed} 行（差異過大，省略）</span></div>`;
+  const ch=(d.lines||[]).filter(l=>l.t!==" ").slice(0,40);
+  if(!ch.length) return "";
+  return `<div class="diff"><div class="dh">+${d.added} -${d.removed}</div>${ch.map(l=>`<div class="dl ${l.t==="+"?"add":"del"}">${esc(l.t+" "+l.s)}</div>`).join("")}</div>`;
+}
+// 完整步驟卡（展開過程）：人話動作 + 編輯的彩色 diff
+function logHtml(p){
+  if(!p||!(p.log||[]).length) return `<div class="empty">（尚無步驟）</div>`;
+  return p.log.map(s=>`<div class="logstep ${s.isError?"err":""}">▸ ${esc(TOOL_ZH[s.name]||s.name)}${s.summary?` <span class="dim">${esc(s.summary)}</span>`:""}${s.diff?diffHtml(s.diff):""}</div>`).join("");
+}
+let expandedLog=false;
+function toggleLog(){ expandedLog=!expandedLog; if(liveTask) renderCurrent(liveTask); }
+
 async function viewFile(id, encPath, name){
   const path=decodeURIComponent(encPath); const v=$("#fview"); v.style.display="block";
   const bar=`<div class="vbar">📄 ${esc(name)} · <a href="${fileUrl(id,path)}" target="_blank">開新分頁</a> · <a href="${fileUrl(id,path,'&download=1')}">下載</a></div>`;
@@ -192,12 +217,15 @@ async function poll() {
 
 function renderCurrent(t) {
   const a = t.result?.artifacts, files = a ? [...(a.created||[]).map(f=>[f,"new"]), ...(a.modified||[]).map(f=>[f,"mod"])] : [];
+  const p = t.progress||{}, nLog=(p.log||[]).length;
+  const logSec = nLog ? `<div class="logtoggle" onclick="toggleLog()">${expandedLog?"▾ 收合過程":"▸ 展開過程（"+nLog+" 步）"}</div>${expandedLog?`<div class="loglist">${logHtml(p)}</div>`:""}` : "";
   $("#current").innerHTML = `<div class="card">
     <div class="goal">${esc(t.goal||"任務")}<span class="wsbadge">📁 ${esc(t.workspace||"default")}</span></div>
     <span class="status ${statusClass(t.status)}">${statusText(t.status)}${t.rounds?` · ${t.rounds} 輪`:""}</span>
     ${CANCELLABLE.includes(t.status)?`<button class="cancel" onclick="cancelTask('${t.taskId}')">停止</button>`:""}
     ${t.status==="running"||t.status==="queued"?progressHtml(t):""}
     ${todosHtml(t.progress)}
+    ${logSec}
     ${t.status==="needs-input"?`<div class="qbox"><div class="q">❓ ${esc(t.pending?.question)}</div>
       <input id="ans" placeholder="輸入你的回答，按 Enter 送出"></div>`:""}
     ${t.status==="done"?`<div class="summary">${esc(t.result?.text||"")}</div>`:""}

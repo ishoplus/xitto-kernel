@@ -27,6 +27,9 @@ const newId = (p = 's') => p + Date.now().toString(36) + Math.random().toString(
 const MIME = { md: 'text/markdown', markdown: 'text/markdown', txt: 'text/plain', log: 'text/plain', json: 'application/json', csv: 'text/csv', html: 'text/html', htm: 'text/html', js: 'text/javascript', mjs: 'text/javascript', ts: 'text/plain', py: 'text/plain', sh: 'text/plain', css: 'text/css', xml: 'application/xml', yaml: 'text/plain', yml: 'text/plain', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
 export function contentTypeFor(name) { const ext = (String(name).split('.').pop() || '').toLowerCase(); return MIME[ext] || 'application/octet-stream'; }
 
+// 工具參數摘要（給「展開過程」步驟卡）：取最有意義的參數。
+const argSummary = (args) => { if (!args || typeof args !== 'object') return ''; const v = args.command ?? args.path ?? args.pattern ?? args.query ?? args.url ?? args.name ?? args.topic; return (v != null && v !== '') ? String(v).replace(/\s+/g, ' ').slice(0, 80) : ''; };
+
 // 交付檔案路徑解析（防穿越）：rel 必須是 workdir 內的相對路徑,否則回 null。
 export function resolveArtifact(workdir, rel) {
   if (typeof rel !== 'string' || !rel || isAbsolute(rel)) return null;
@@ -41,7 +44,7 @@ const webHtml = () => (_webHtml ??= readFileSync(join(dirname(fileURLToPath(impo
 // 把原始 kernel 事件壓成精簡的對外事件（串流端與背景任務共用，避免重複映射）
 export const mapEvent = (ev) => {
   if (ev.type === 'tool_execution_start') return { type: 'tool', name: ev.toolName, args: ev.args };
-  if (ev.type === 'tool_execution_end') return { type: 'tool_end', name: ev.toolName, isError: !!ev.isError };
+  if (ev.type === 'tool_execution_end') return { type: 'tool_end', name: ev.toolName, isError: !!ev.isError, diff: ev.result?._diff || undefined };
   if (ev.type === 'message_update' && ev.assistantMessageEvent?.type === 'text_delta') return { type: 'text', delta: ev.assistantMessageEvent.delta };
   if (ev.type === 'round') return { type: 'round', round: ev.round, maxRounds: ev.maxRounds };
   if (ev.type === 'verify_start') return { type: 'phase', phase: 'verifying' };
@@ -70,9 +73,16 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
     t.events.push(ev);
     if (t.events.length > maxEvents) t.events.shift();
     // 進度追蹤（給 UI 顯示「正在做什麼」,不要只顯示進行中；排除 text 雜訊）
-    const p = (t.progress ||= { steps: 0, round: 0, maxRounds: 0, recent: [], phase: 'starting', thinking: '', todos: [] });
+    const p = (t.progress ||= { steps: 0, round: 0, maxRounds: 0, recent: [], phase: 'starting', thinking: '', todos: [], log: [] });
     if (ev.type === 'tool' && ev.name === 'todo_write') { if (Array.isArray(ev.args?.todos)) p.todos = ev.args.todos; } // 待辦清單（給 UI 打勾）
-    else if (ev.type === 'tool') { p.steps++; p.phase = 'acting'; p.thinking = ''; t._textbuf = ''; p.recent.push({ name: ev.name, args: ev.args }); if (p.recent.length > 6) p.recent.shift(); }
+    else if (ev.type === 'tool') {
+      p.steps++; p.phase = 'acting'; p.thinking = ''; t._textbuf = '';
+      p.recent.push({ name: ev.name, args: ev.args }); if (p.recent.length > 6) p.recent.shift();
+      if (p.log.length < 100) p.log.push({ name: ev.name, summary: argSummary(ev.args) }); // 完整步驟（給「展開過程」）
+    } else if (ev.type === 'tool_end') {
+      const last = p.log[p.log.length - 1];
+      if (last && last.name === ev.name && !('isError' in last)) { last.isError = ev.isError; if (ev.diff) last.diff = ev.diff; }
+    }
     else if (ev.type === 'text') { p.phase = 'thinking'; t._textbuf = ((t._textbuf || '') + (ev.delta || '')).slice(-400); p.thinking = t._textbuf.replace(/\s+/g, ' ').trim().slice(-150); }
     else if (ev.type === 'round') { p.round = ev.round; if (ev.maxRounds) p.maxRounds = ev.maxRounds; p.thinking = ''; t._textbuf = ''; }
     else if (ev.type === 'phase') p.phase = ev.phase;
