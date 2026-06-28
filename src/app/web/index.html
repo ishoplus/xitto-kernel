@@ -102,7 +102,8 @@
   .fspath { font:12px ui-monospace,Menlo,monospace; color:var(--dim); margin-bottom:8px; word-break:break-all; }
   .fslist { flex:1; overflow:auto; border:1px solid var(--line); border-radius:8px; }
   .fsrow { padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--line); font-size:14px; }
-  .fsrow:hover { background:#0c0e12; } .fsrow.up { color:var(--dim); }
+  .fsrow:hover { background:#0c0e12; } .fsrow.up { color:var(--dim); } .fsrow.hid { color:var(--dim); }
+  .fshidden { font-size:12.5px; color:var(--dim); display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none; } .fshidden input { cursor:pointer; }
   .fsbar { display:flex; align-items:center; gap:8px; margin-top:10px; }
   .viewer { margin-top:10px; border:1px solid var(--line); border-radius:10px; padding:12px; background:#0c0e12; }
   .vbar { font-size:12px; color:var(--dim); margin-bottom:8px; }
@@ -137,6 +138,7 @@
       <div class="fslist" id="fslist"></div>
       <div class="fsbar">
         <button class="ghost" onclick="fsHome()">🏠 家目錄</button>
+        <label class="fshidden"><input type="checkbox" id="fshidden" onchange="fsToggleHidden()"> 顯示隱藏資料夾</label>
         <button class="ghost" onclick="closeFs()">取消</button>
         <span class="spacer"></span>
         <button onclick="chooseFs()">✓ 選這個資料夾</button>
@@ -223,16 +225,18 @@ renderSpaces();
 
 // 資料夾瀏覽器（本地模式「用選的」）：伺服器端列資料夾,網頁點進去挑一個
 if(LOCAL) $("#browsebtn").style.display="";
-$("#browsebtn").onclick = ()=>{ $("#fsmodal").style.display="flex"; fsGo(null); };
-let fsPath=null;
+$("#browsebtn").onclick = ()=>{ $("#fsmodal").style.display="flex"; $("#fshidden").checked=fsShowHidden; fsGo(null); };
+let fsPath=null, fsShowHidden=localStorage.getItem("xk_fshidden")==="1";
 async function fsGo(p){
-  const r=await api("/v1/fs"+(p?("?path="+encodeURIComponent(p)):"")).then(r=>r.json()).catch(()=>({error:"讀取失敗"}));
+  const qs=[]; if(p) qs.push("path="+encodeURIComponent(p)); if(fsShowHidden) qs.push("hidden=1");
+  const r=await api("/v1/fs"+(qs.length?("?"+qs.join("&")):"")).then(r=>r.json()).catch(()=>({error:"讀取失敗"}));
   if(r.error){ alert(r.error); return; }
   fsPath=r.path; window._fsHome=r.home;
   $("#fspath").textContent="📂 "+r.path;
   const base=r.path.endsWith("/")?r.path:r.path+"/";
-  $("#fslist").innerHTML=`<div class="fsrow up" onclick="fsGo('${esc(r.parent)}')">⬆ 上一層</div>`+(r.dirs.length?r.dirs.map(d=>`<div class="fsrow" onclick="fsGo('${esc(base+d)}')">📁 ${esc(d)}</div>`).join(""):`<div class="empty" style="padding:10px">（沒有子資料夾，可直接選這個）</div>`);
+  $("#fslist").innerHTML=`<div class="fsrow up" onclick="fsGo('${esc(r.parent)}')">⬆ 上一層</div>`+(r.dirs.length?r.dirs.map(d=>`<div class="fsrow${d.startsWith(".")?" hid":""}" onclick="fsGo('${esc(base+d)}')">📁 ${esc(d)}</div>`).join(""):`<div class="empty" style="padding:10px">（沒有子資料夾，可直接選這個）</div>`);
 }
+function fsToggleHidden(){ fsShowHidden=$("#fshidden").checked; localStorage.setItem("xk_fshidden", fsShowHidden?"1":"0"); fsGo(fsPath); }
 function fsHome(){ fsGo(window._fsHome||null); }
 function closeFs(){ $("#fsmodal").style.display="none"; }
 function chooseFs(){ if(!fsPath) return; const p=fsPath; if(!spaces.includes(p)) spaces.push(p); curSpace=p; localStorage.setItem("xk_spaces",JSON.stringify(spaces)); localStorage.setItem("xk_space",curSpace); renderSpaces(); closeFs(); $("#current").innerHTML=""; refreshAll(); }
@@ -334,12 +338,21 @@ const CANCELLABLE = ["queued","running","needs-input"];
 function todosHtml(p){ if(!p||!(p.todos||[]).length) return ""; const ic=s=>s==="completed"?"☑":s==="in_progress"?"◐":"☐"; return `<div class="todos">${p.todos.map(td=>`<div class="todo ${td.status}">${ic(td.status)} ${esc(td.content)}</div>`).join("")}</div>`; }
 async function cancelTask(id){ await api("/v1/tasks/"+id+"/cancel",{method:"POST"}); for(let i=0;i<10;i++){ await new Promise(r=>setTimeout(r,600)); const t=await api("/v1/tasks/"+id).then(r=>r.json()); liveTask=t; renderCurrent(t); if(["done","error","cancelled"].includes(t.status)){loadHistory();break;} } }
 
+// IME 組字旗標：中文/日文輸入法組字期間,暫停輪詢重繪,避免重建 input 把未確認的拼音(不在 value 裏)洗掉
+let composing = false;
+function wireComposition(el){
+  if(!el) return;
+  el.addEventListener("compositionstart", ()=>{ composing=true; });
+  el.addEventListener("compositionend", ()=>{ composing=false; });
+}
+
 async function poll() {
   clearTimeout(polling);
   const t = await api("/v1/tasks/"+activeId).then(r=>r.json());
   liveTask = t;
-  renderCurrent(t);
-  if (t.status==="done" || t.status==="error") { loadHistory(); loadFiles(); return; }
+  const terminal = t.status==="done" || t.status==="error";
+  if (!composing || terminal) renderCurrent(t); // 組字中暫停重繪(任務已結束則仍須更新一次)
+  if (terminal) { loadHistory(); loadFiles(); return; }
   if (t.status==="needs-input") return; // 等使用者回答
   polling = setTimeout(poll, 1200);
 }
@@ -376,8 +389,8 @@ function renderCurrent(t) {
     </div>`:""}
   </div>`;
   if (t.status==="needs-input") {
-    const inp = $("#ans"); inp.focus();
-    inp.onkeydown = async (e) => { if (e.key==="Enter" && inp.value.trim()) {
+    const inp = $("#ans"); inp.focus(); wireComposition(inp);
+    inp.onkeydown = async (e) => { if (e.key==="Enter" && !e.isComposing && inp.value.trim()) {
       const ans = inp.value.trim(); inp.disabled = true;
       await api("/v1/tasks/"+t.taskId+"/answer", { method:"POST", body: JSON.stringify({ answer: ans }) });
       poll();
@@ -387,7 +400,8 @@ function renderCurrent(t) {
     const si = $("#steerin");
     if (si) {
       if (ps) { si.value = ps.v; if (ps.f) { si.focus(); try { si.setSelectionRange(ps.s, ps.s); } catch {} } }  // 還原打到一半的內容/游標
-      si.onkeydown = async (e) => { if (e.key==="Enter" && si.value.trim()) {
+      wireComposition(si);
+      si.onkeydown = async (e) => { if (e.key==="Enter" && !e.isComposing && si.value.trim()) {
         const txt = si.value.trim(); si.value = ""; si.disabled = true;
         await api("/v1/tasks/"+t.taskId+"/steer", { method:"POST", body: JSON.stringify({ text: txt }) });
         si.disabled = false; si.focus();

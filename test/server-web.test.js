@@ -74,6 +74,9 @@ test('GET /v1/fs：本地模式列子資料夾；託管模式 403', async () => 
     const r = await fetch(`http://localhost:${local.address().port}/v1/fs?path=${encodeURIComponent(root)}`, { headers: { authorization: 'Bearer t' } }).then((x) => x.json());
     assert.deepEqual(r.dirs, ['projA', 'projB']);   // 只列目錄,排除 .hidden / node_modules / 檔案
     assert.equal(r.path, root);
+    const rh = await fetch(`http://localhost:${local.address().port}/v1/fs?path=${encodeURIComponent(root)}&hidden=1`, { headers: { authorization: 'Bearer t' } }).then((x) => x.json());
+    assert.ok(rh.dirs.includes('.hidden'));        // hidden=1 顯示隱藏資料夾
+    assert.ok(!rh.dirs.includes('node_modules'));  // node_modules 仍一律排除
     const f = await fetch(`http://localhost:${hosted.address().port}/v1/fs?path=${encodeURIComponent(root)}`, { headers: { authorization: 'Bearer t' } });
     assert.equal(f.status, 403);                    // 託管模式不給瀏覽主機
   } finally { await new Promise((r) => local.close(r)); await new Promise((r) => hosted.close(r)); rmSync(root, { recursive: true, force: true }); }

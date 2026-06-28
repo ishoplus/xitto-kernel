@@ -458,8 +458,9 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     if (req.method === 'GET' && path === '/v1/fs') {
       if (!local) return json(res, 403, { error: '僅本地模式可瀏覽資料夾' });
       const dir = resolve(url.searchParams.get('path') || homedir());
+      const showHidden = url.searchParams.get('hidden') === '1'; // 預設藏 dot 開頭；前端勾「顯示隱藏資料夾」才帶 hidden=1
       try {
-        const dirs = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')).map((e) => e.name).sort();
+        const dirs = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name !== 'node_modules' && (showHidden || !e.name.startsWith('.'))).map((e) => e.name).sort();
         return json(res, 200, { path: dir, parent: dirname(dir), home: homedir(), dirs });
       } catch (e) { return json(res, 400, { error: '無法讀取：' + e.message }); }
     }
