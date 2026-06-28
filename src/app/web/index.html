@@ -180,7 +180,7 @@ let spaces = JSON.parse(localStorage.getItem("xk_spaces")||'["default"]');
 let curSpace = localStorage.getItem("xk_space")||"default";
 const spaceLabel=s=>s.startsWith("/")?("📁 "+(s.split("/").filter(Boolean).pop()||s)):s;
 function renderSpaces(){ $("#space").innerHTML = spaces.map(s=>`<option value="${esc(s)}" ${s===curSpace?"selected":""}>${esc(spaceLabel(s))}</option>`).join(""); }
-$("#space").onchange = () => { curSpace=$("#space").value; localStorage.setItem("xk_space",curSpace); $("#current").innerHTML=""; loadHistory(); if($("#workbench").style.display!=="none") loadWorkbench(); };
+$("#space").onchange = () => { curSpace=$("#space").value; localStorage.setItem("xk_space",curSpace); $("#current").innerHTML=""; loadHistory(); if($("#workbench").style.display!=="none"){ wbSub=""; loadWorkbench(); } };
 $("#newspace").onclick = () => {
   const raw=(prompt(LOCAL?"新專案：輸入名稱，或貼上一個真實資料夾的絕對路徑（本地模式會就地改該資料夾的檔，像 Claude Code）":"新專案名稱（英數/底線/連字號）：")||"").trim();
   if(!raw) return;
@@ -262,14 +262,21 @@ async function renderFile(urlFn, encPath, name, sel){
 function viewFile(id, encPath, name){ return renderFile(taskFileUrl(id), encPath, name, "#fview"); }
 function wbView(encPath, name){ return renderFile(wsFileUrl(curSpace), encPath, name, "#wbview"); }
 
-// 工作台分頁：列檔 / 刪檔 / 切換
+// 工作台分頁：逐層瀏覽 / 看 / 刪
 function fmtSize(n){ return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"; }
+let wbSub="";
+function wbNav(s){ wbSub=decodeURIComponent(s); loadWorkbench(); }
+function wbUp(){ wbSub=wbSub.includes("/")?wbSub.slice(0,wbSub.lastIndexOf("/")):""; loadWorkbench(); }
 async function loadWorkbench(){
   $("#wbview").style.display="none";
-  const r=await api("/v1/workspaces/files?ws="+encodeURIComponent(curSpace)).then(r=>r.json()).catch(()=>({files:[]}));
-  const files=(r.files||[]).sort((a,b)=>b.mtime-a.mtime);
-  const loc = curSpace.startsWith("/") ? `<div class="loc">📂 就地資料夾：<code>${esc(curSpace)}</code></div>` : "";
-  $("#wbfiles").innerHTML = loc + (files.length ? files.map(f=>`<div class="wbrow"><span class="wbname" onclick="wbView('${encodeURIComponent(f.path)}','${esc(f.path)}')">📄 ${esc(f.path)}</span><span class="wbmeta">${fmtSize(f.size)}</span><span class="wbdel" title="刪除" onclick="wbDelete('${encodeURIComponent(f.path)}','${esc(f.path)}')">🗑</span></div>`).join("") : `<div class="empty">這個專案還沒有檔案。去「許願」交辦一件事吧。</div>`);
+  const r=await api("/v1/workspaces/files?ws="+encodeURIComponent(curSpace)+"&sub="+encodeURIComponent(wbSub)).then(r=>r.json()).catch(()=>({dirs:[],files:[]}));
+  const root=curSpace.startsWith("/")?curSpace:curSpace;
+  let html=`<div class="loc">📂 ${esc(root)}${wbSub?" / "+esc(wbSub):""}</div>`;
+  if(wbSub) html+=`<div class="wbrow up" onclick="wbUp()"><span class="wbname">⬆ 上一層</span></div>`;
+  html+=(r.dirs||[]).map(d=>`<div class="wbrow" onclick="wbNav('${encodeURIComponent((wbSub?wbSub+'/':'')+d)}')"><span class="wbname">📁 ${esc(d)}/</span></div>`).join("");
+  html+=(r.files||[]).map(f=>{const full=(wbSub?wbSub+'/':'')+f.name;return `<div class="wbrow"><span class="wbname" onclick="wbView('${encodeURIComponent(full)}','${esc(f.name)}')">📄 ${esc(f.name)}</span><span class="wbmeta">${fmtSize(f.size)}</span><span class="wbdel" title="刪除" onclick="wbDelete('${encodeURIComponent(full)}','${esc(f.name)}')">🗑</span></div>`;}).join("");
+  if(!(r.dirs||[]).length && !(r.files||[]).length) html+=`<div class="empty">（${wbSub?"這個資料夾是空的":"這個專案還沒有檔案，去「許願」交辦一件事吧"}）</div>`;
+  $("#wbfiles").innerHTML=html;
 }
 async function wbDelete(encPath, name){ if(!confirm("刪除 "+name+"？此動作無法復原。")) return; await api("/v1/workspaces/file?ws="+encodeURIComponent(curSpace)+"&path="+encodeURIComponent(decodeURIComponent(encPath)),{method:"DELETE"}); loadWorkbench(); }
 function switchTab(name){
@@ -278,7 +285,7 @@ function switchTab(name){
   $("#workbench").style.display=wish?"none":"";
   $("#tab-wish").classList.toggle("active",wish);
   $("#tab-wb").classList.toggle("active",!wish);
-  if(!wish) loadWorkbench();
+  if(!wish){ wbSub=""; loadWorkbench(); }
 }
 
 let activeId = null, polling = null;

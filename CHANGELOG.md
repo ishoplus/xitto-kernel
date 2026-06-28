@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.3
+
+- **工作台改逐層瀏覽（不一次攤平整個專案）**：原本 `listWorkspaceFiles` 會遞迴把所有檔案攤成一長串,對真實專案太雜。改成像檔案總管:只列當前目錄的子資料夾+檔案,點資料夾才進去,有「上一層」。
+  - 新增 `listDir(wsDir, sub)`（列單層,排除內部目錄,防穿越）；`/v1/workspaces/files` 改吃 `sub=` 逐層
+  - 網頁工作台改可導航（麵包屑 + 進子資料夾 + 上一層）；切換空間/分頁時重置到根
+  - 1 個新測試（listDir 不遞迴/子目錄分開/防穿越）+ 真實 server 端到端（根→src→src/utils）。測試 188/188
+
 ## 0.8.2
 
 - **`npm run serve:local`**：一行啟動本地就地模式（= `XITTO_SERVER_LOCAL=1 XITTO_SERVER_SANDBOX=off`，token 預設 `secret`、可用 `XITTO_SERVER_TOKEN` 覆寫）。不用每次手打那串環境變數。

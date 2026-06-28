@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServerApp, resolveArtifact, listWorkspaceFiles, safeWs, workspaceDir } from '../src/app/server.js';
+import { createServerApp, resolveArtifact, listWorkspaceFiles, listDir, safeWs, workspaceDir } from '../src/app/server.js';
 
 test('resolveArtifact：合法相對路徑 → 解析；穿越/絕對路徑 → null', () => {
   assert.equal(resolveArtifact('/base/s1', 'a.txt'), '/base/s1/a.txt');
@@ -43,6 +43,23 @@ test('listWorkspaceFiles：列檔（遞迴）+ 排除內部目錄', () => {
     const files = listWorkspaceFiles(dir).map((f) => f.path).sort();
     assert.deepEqual(files, ['report.md', 'sub/a.txt']);
     assert.ok(listWorkspaceFiles(dir).every((f) => typeof f.size === 'number' && typeof f.mtime === 'number'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('listDir：逐層列（不遞迴）+ 子目錄分開 + 排除內部 + 防穿越', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xk-ld-'));
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'x');
+    mkdirSync(join(dir, 'sub')); writeFileSync(join(dir, 'sub', 'b.txt'), 'y');
+    mkdirSync(join(dir, '.xitto-kernel')); mkdirSync(join(dir, 'node_modules'));
+    const root = listDir(dir, '');
+    assert.deepEqual(root.dirs, ['sub']);                       // 排除 .xitto-kernel / node_modules
+    assert.deepEqual(root.files.map((f) => f.name), ['a.txt']); // 不含 sub/b.txt（不遞迴攤平）
+    assert.equal(root.sub, '');
+    const sub = listDir(dir, 'sub');
+    assert.deepEqual(sub.files.map((f) => f.name), ['b.txt']);
+    assert.equal(sub.sub, 'sub');
+    assert.equal(listDir(dir, '../../etc'), null);              // 防穿越
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

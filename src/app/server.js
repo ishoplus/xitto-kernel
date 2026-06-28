@@ -54,6 +54,21 @@ export function listWorkspaceFiles(dir, base = dir, out = [], depth = 0) {
   return out;
 }
 
+// 列單一層級（給工作台逐層瀏覽,不一次遞迴攤平整個專案）：回 { sub, dirs:[], files:[{name,size,mtime}] }。
+export function listDir(wsDir, sub) {
+  const rel = String(sub || '').replace(/^\/+|\/+$/g, '');
+  const dir = rel === '' ? wsDir : resolveArtifact(wsDir, rel);
+  if (!dir || !existsSync(dir)) return null;
+  const dirs = [], files = [];
+  let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+  for (const e of entries) {
+    if (SKIP_WS.has(e.name)) continue;
+    if (e.isDirectory()) dirs.push(e.name);
+    else if (e.isFile()) { try { const s = statSync(join(dir, e.name)); files.push({ name: e.name, size: s.size, mtime: s.mtimeMs }); } catch { /* 略 */ } }
+  }
+  return { sub: rel, dirs: dirs.sort(), files: files.sort((a, b) => b.mtime - a.mtime) };
+}
+
 // 交付檔案路徑解析（防穿越）：rel 必須是 workdir 內的相對路徑,否則回 null。
 export function resolveArtifact(workdir, rel) {
   if (typeof rel !== 'string' || !rel || isAbsolute(rel)) return null;
@@ -350,10 +365,10 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       } catch (e) { return json(res, 400, { error: '無法讀取：' + e.message }); }
     }
 
-    // 工作台：列空間所有檔案（ws 走 query,才能容納本地模式的絕對路徑）
+    // 工作台：逐層列檔（sub=子目錄,不一次遞迴攤平整個專案；ws 走 query 以容納本地絕對路徑）
     if (req.method === 'GET' && path === '/v1/workspaces/files') {
       const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
-      return json(res, 200, { files: existsSync(dir) ? listWorkspaceFiles(dir) : [] });
+      return json(res, 200, listDir(dir, url.searchParams.get('sub') || '') || { sub: '', dirs: [], files: [] });
     }
     // 工作台：取檔（看/下載）/ 刪檔
     if (path === '/v1/workspaces/file' && (req.method === 'GET' || req.method === 'DELETE')) {
