@@ -4,30 +4,36 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>xitto · 對話</title>
+<script>
+  // 早期套用主題（避免載入閃爍）：localStorage(xk_theme) 優先，否則跟隨系統
+  (function(){ try { var t = localStorage.getItem("xk_theme") || (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); document.documentElement.setAttribute("data-theme", t); } catch(e){} })();
+</script>
 <style>
-  :root { --bg:#0f1115; --card:#181b22; --line:#272b34; --fg:#e7e9ee; --dim:#8b919e; --accent:#6ea8fe; --ok:#5fd38a; --warn:#f0c674; --me:#243044; }
+  /* 深色（預設）。淺色見 [data-theme=light]；切換鈕寫入 localStorage(xk_theme,兩頁共用)，預設跟隨系統 */
+  :root { --bg:#0f1115; --card:#181b22; --line:#272b34; --fg:#e7e9ee; --dim:#8b919e; --accent:#6ea8fe; --ok:#5fd38a; --warn:#f0c674; --me:#243044; --inset:#0c0e12; --code:#1a1d24; --btnfg:#08101f; --danger:#f08a8a; --warnbg:#1d1c12; }
+  :root[data-theme="light"] { --bg:#f6f7f9; --card:#ffffff; --line:#e3e6eb; --fg:#1d2230; --dim:#6b7280; --accent:#2563eb; --ok:#1a8a4d; --warn:#b07a12; --me:#e8eefc; --inset:#eef1f5; --code:#eef1f5; --btnfg:#ffffff; --danger:#d62f2f; --warnbg:#fdf6e3; }
   * { box-sizing:border-box; }
   html,body { height:100%; }
   body { margin:0; font:15px/1.6 -apple-system,"PingFang TC","Microsoft JhengHei",system-ui,sans-serif; background:var(--bg); color:var(--fg); }
   /* 全高雙欄：左對話列表 + 右對話視窗（與許願台的「成品/檔案」佈局刻意不同：這裡以對話 thread 為主） */
   .app { display:grid; grid-template-columns:280px minmax(0,1fr); height:100vh; }
-  .side { border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; background:#0c0e12; }
+  .side { border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; background:var(--inset); }
   .side h1 { font-size:17px; margin:0; display:flex; align-items:center; gap:8px; }
   .side .sub { color:var(--dim); font-size:12px; margin-top:2px; }
   .sidehead { padding:16px 14px 12px; border-bottom:1px solid var(--line); }
   .topctl { display:flex; align-items:center; gap:6px; margin-top:12px; }
   .prjlabel { color:var(--dim); font-size:12px; }
   select, button, textarea, input { font:inherit; }
-  select { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; max-width:150px; }
-  button { background:var(--accent); color:#08101f; border:0; border-radius:8px; padding:9px 16px; font-weight:600; cursor:pointer; }
+  select { background:var(--inset); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; max-width:150px; }
+  button { background:var(--accent); color:var(--btnfg); border:0; border-radius:8px; padding:9px 16px; font-weight:600; cursor:pointer; }
   button.ghost { background:transparent; color:var(--dim); border:1px solid var(--line); font-weight:500; }
   button.ghost:hover { color:var(--fg); }
   button:disabled { opacity:.5; cursor:default; }
   .newbtn { width:100%; margin-top:12px; }
   .chats { flex:1; overflow:auto; padding:8px; }
   .chatitem { border:1px solid transparent; border-radius:8px; padding:9px 10px; margin:2px 0; cursor:pointer; }
-  .chatitem:hover { background:#181b22; }
-  .chatitem.active { background:#181b22; border-color:var(--accent); }
+  .chatitem:hover { background:var(--card); }
+  .chatitem.active { background:var(--card); border-color:var(--accent); }
   .chatitem .t { font-size:13.5px; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chatitem .m { color:var(--dim); font-size:11px; margin-top:2px; display:flex; gap:6px; }
   .chatdel { float:right; opacity:0; cursor:pointer; } .chatitem:hover .chatdel { opacity:.6; } .chatdel:hover { opacity:1; }
@@ -49,19 +55,19 @@
   .cursor::after { content:"▍"; color:var(--accent); animation:blink 1s steps(2) infinite; }
   @keyframes blink { 50%{opacity:0;} }
   .md { line-height:1.7; } .md h1,.md h2,.md h3,.md h4 { margin:.7em 0 .3em; line-height:1.3; }
-  .md code { background:#1a1d24; padding:1px 5px; border-radius:4px; font-size:.9em; }
-  .md pre.code { background:#1a1d24; padding:10px; border-radius:8px; overflow:auto; }
+  .md code { background:var(--code); padding:1px 5px; border-radius:4px; font-size:.9em; }
+  .md pre.code { background:var(--code); padding:10px; border-radius:8px; overflow:auto; }
   .md ul { margin:.3em 0 .3em 1.2em; } .md a { color:var(--accent); } .md p { margin:.5em 0; }
   /* 過程（工具動作）：對話泡泡內收合，預設安靜，想看才展開——像 Claude Code 的 ⏺/⎿ + ctrl+r */
-  .proc { margin:8px 0 2px; border:1px solid var(--line); border-radius:10px; background:#13161d; }
+  .proc { margin:8px 0 2px; border:1px solid var(--line); border-radius:10px; background:var(--inset); }
   .proctoggle { padding:7px 12px; font-size:13px; color:var(--accent); cursor:pointer; user-select:none; display:flex; align-items:center; gap:6px; }
   .proclist { padding:2px 12px 10px; border-top:1px solid var(--line); }
   .pstep { font-size:13px; color:var(--fg); padding:3px 0; }
-  .pstep.err { color:#f08a8a; } .pstep .dim { color:var(--dim); }
+  .pstep.err { color:var(--danger); } .pstep .dim { color:var(--dim); }
   .pstep .spin { color:var(--accent); }
   .diff { margin:4px 0 6px 14px; font:12px/1.5 ui-monospace,Menlo,monospace; }
   .dh { color:var(--dim); font-size:11px; margin-bottom:2px; }
-  .dl { white-space:pre-wrap; } .dl.add { color:var(--ok); } .dl.del { color:#f08a8a; }
+  .dl { white-space:pre-wrap; } .dl.add { color:var(--ok); } .dl.del { color:var(--danger); }
   .phase { color:var(--dim); font-size:12.5px; font-style:italic; margin:4px 0; }
   .phase.dots::after { content:""; animation:dots 1.4s steps(4,end) infinite; }
   @keyframes dots { 0%{content:""} 25%{content:"·"} 50%{content:"··"} 75%{content:"···"} }
@@ -73,8 +79,8 @@
   .cbox textarea { flex:1; background:transparent; color:var(--fg); border:0; outline:none; resize:none; font:inherit; max-height:200px; min-height:24px; }
   .crow { display:flex; align-items:center; gap:10px; margin-top:8px; color:var(--dim); font-size:12px; }
   .crow .spacer { flex:1; }
-  .stopbtn { background:transparent; color:#f08a8a; border:1px solid #5b3030; padding:6px 12px; font-size:13px; }
-  .stopbtn:hover { background:#2a1818; }
+  .stopbtn { background:transparent; color:var(--danger); border:1px solid rgba(240,138,138,.45); padding:6px 12px; font-size:13px; }
+  .stopbtn:hover { background:rgba(240,138,138,.14); }
   @media (max-width:760px){ .app{ grid-template-columns:1fr; } .side{ display:none; } }
 </style>
 </head>
@@ -82,7 +88,7 @@
 <div class="app">
   <aside class="side">
     <div class="sidehead">
-      <h1>💬 xitto 對話</h1>
+      <h1>💬 xitto 對話<span class="spacer" style="flex:1"></span><button class="ghost" id="theme" title="切換白天／夜晚" style="padding:4px 9px;font-size:15px">🌙</button></h1>
       <div class="sub">逐句協作，記得上下文</div>
       <div class="topctl">
         <span class="prjlabel">專案</span>
@@ -121,6 +127,11 @@ const LOCAL = __LOCAL__;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s==null?"":s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 const api = (p, opts={}) => fetch(p, { ...opts, headers: { authorization:"Bearer "+TOKEN, "content-type":"application/json", ...(opts.headers||{}) } });
+
+// 白天／夜晚切換（xk_theme 兩頁共用；鈕顯示「將切到」的圖示）
+function applyTheme(t){ document.documentElement.setAttribute("data-theme", t); const b=$("#theme"); if(b) b.textContent = t==="light" ? "🌙" : "☀️"; }
+applyTheme(localStorage.getItem("xk_theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+$("#theme").onclick = () => { const t = document.documentElement.getAttribute("data-theme")==="light" ? "dark" : "light"; localStorage.setItem("xk_theme", t); applyTheme(t); };
 
 // 工具動作翻人話（與許願台一致）
 const TOOL_ZH = { read:"讀取檔案", ls:"查看目錄", glob:"尋找檔案", grep:"搜尋內容", write:"建立檔案", edit:"修改檔案", bash:"執行指令", web_search:"搜尋網路", web_fetch:"讀取網頁", http:"呼叫 API", read_image:"看圖片", skill:"載入技能", skill_save:"記錄技能", skills_check:"複查技能", playbook_update:"記下做法", episode_record:"記下經驗", episode_recall:"回想經驗", memory_save:"記住重點", todo_write:"規劃步驟", spawn_agent:"派出子助手", ask_user:"來問你" };
