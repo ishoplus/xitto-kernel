@@ -30,6 +30,9 @@ const SYSTEM_PROMPT = [
 export function createCodingPack({ cwd = process.cwd() } = {}) {
   const readFiles = new Set(); // 已 read 過的絕對路徑（read 工具寫入、read-before-edit 守衛讀取）
   const abs = (p) => (isAbsolute(p) ? p : join(cwd, p));
+  // 寫檔限制在工作目錄內：逃逸 cwd（如 /tmp、/app）回 null。讀檔不限制。
+  const within = (p) => { const full = abs(p); const r = relative(cwd, full); return (r === '' || (!r.startsWith('..') && !isAbsolute(r))) ? full : null; };
+  const escapeErr = (path) => txt({ error: `只能寫在工作目錄內：${cwd}`, hint: '請用相對路徑（如 report.md）', path });
   const bg = createBackgroundTools(cwd); // bash_bg / bash_output / bash_kill
 
   const readTool = {
@@ -64,7 +67,7 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     name: 'write', label: '寫檔', description: '建立或覆寫檔案', mutating: true,
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
     execute: async (_id, { path, content }) => {
-      const p = abs(path);
+      const p = within(path); if (!p) return escapeErr(path);
       writeFileSync(p, content ?? '', 'utf8');
       readFiles.add(p); // 寫過即視為已知內容
       return txt({ written: path, bytes: Buffer.byteLength(content ?? '') });
@@ -76,7 +79,7 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     description: '把檔案中的 oldText 換成 newText。oldText 必須唯一（出現多次會失敗，請加上下文；或設 replaceAll:true 全部取代）。',
     parameters: { type: 'object', properties: { path: { type: 'string' }, oldText: { type: 'string' }, newText: { type: 'string' }, replaceAll: { type: 'boolean' } }, required: ['path', 'oldText', 'newText'] },
     execute: async (_id, { path, oldText, newText, replaceAll }) => {
-      const p = abs(path);
+      const p = within(path); if (!p) return escapeErr(path);
       if (!existsSync(p)) return txt({ error: '檔案不存在', path });
       const before = readFileSync(p, 'utf8');
       const occurrences = before.split(oldText).length - 1;

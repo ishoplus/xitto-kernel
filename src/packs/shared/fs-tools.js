@@ -1,7 +1,7 @@
 // 共用檔案/shell 工具（read/ls/write/edit/bash）+ read-before-edit 守衛。
 // 多個 pack（coding/devops…）共用；read 附行號、edit 唯一性檢查、bash 用 spawnSync 捕捉 stderr。
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
@@ -13,6 +13,9 @@ const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s 
 export function createFsTools(cwd) {
   const readFiles = new Set();
   const abs = (p) => (isAbsolute(p) ? p : join(cwd, p));
+  // 寫檔限制在工作目錄內：逃逸 cwd（如 /tmp、/app）回 null。讀檔不限制。
+  const within = (p) => { const full = abs(p); const r = relative(cwd, full); return (r === '' || (!r.startsWith('..') && !isAbsolute(r))) ? full : null; };
+  const escapeErr = (path) => txt({ error: `只能寫在工作目錄內：${cwd}`, hint: '請用相對路徑（如 report.md）', path });
 
   const read = {
     name: 'read', label: '讀檔', readOnly: true,
@@ -38,14 +41,14 @@ export function createFsTools(cwd) {
   const write = {
     name: 'write', label: '寫檔', mutating: true, description: '建立或覆寫檔案',
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
-    execute: async (_id, { path, content }) => { const p = abs(path); writeFileSync(p, content ?? '', 'utf8'); readFiles.add(p); return txt({ written: path, bytes: Buffer.byteLength(content ?? '') }); },
+    execute: async (_id, { path, content }) => { const p = within(path); if (!p) return escapeErr(path); writeFileSync(p, content ?? '', 'utf8'); readFiles.add(p); return txt({ written: path, bytes: Buffer.byteLength(content ?? '') }); },
   };
   const edit = {
     name: 'edit', label: '編輯', mutating: true,
     description: '把 oldText 換成 newText。oldText 須唯一（多次出現需 replaceAll）。',
     parameters: { type: 'object', properties: { path: { type: 'string' }, oldText: { type: 'string' }, newText: { type: 'string' }, replaceAll: { type: 'boolean' } }, required: ['path', 'oldText', 'newText'] },
     execute: async (_id, { path, oldText, newText, replaceAll }) => {
-      const p = abs(path);
+      const p = within(path); if (!p) return escapeErr(path);
       if (!existsSync(p)) return txt({ error: '檔案不存在', path });
       const before = readFileSync(p, 'utf8');
       const n = before.split(oldText).length - 1;

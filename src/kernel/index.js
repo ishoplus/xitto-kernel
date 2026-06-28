@@ -236,6 +236,7 @@ export function createKernel(pack, config = {}) {
     pack.systemPrompt +
     loadContextFiles(cwd, pack.contextFiles) +          // 注入領域規範檔（CLAUDE.md 等）
     '\n\n# 記憶與專案手冊\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) + '\n' + DEFAULT_PLAYBOOK_GUIDE + '\n' + DEFAULT_EPISODE_GUIDE +
+    '\n\n# 工作目錄\n你的工作目錄是：' + cwd + '\n所有檔案請用相對路徑寫在這個目錄內（如 report.md、data/x.csv）。除非使用者明確要求，絕對不要寫到此目錄之外（例如 /tmp、/app、/workspace、系統根目錄）——寫在外面使用者拿不到成品。' +
     '\n\n# 成品與暫存\n' + DEFAULT_OUTPUT_GUIDE +
     (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '') +
     (pbText ? `\n\n# 專案手冊（這個專案怎麼做事，跨 session 累積）\n${pbText}` : '') +
