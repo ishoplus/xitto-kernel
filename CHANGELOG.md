@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.6
+
+- **依賴遷移到維護中的 `@earendil-works/pi-ai`（修 moderate 安全漏洞）**：舊 `@mariozechner/pi-ai` 已棄用凍結（停 0.73.1），且 0.70.6 透過 `@anthropic-ai/sdk` 帶 2 個 moderate 漏洞（GHSA-p7fg-763f-g4gf）。
+  - 改用 `@earendil-works/pi-ai@^0.80.2`，import 指向其 `/compat` 相容入口——保留 `streamSimple`/`completeSimple` 同簽名，**邏輯零改**。
+  - 驗證：`npm audit` 0 漏洞、無 deprecation 警告、202 測試綠、`examples/live.js`（streamSimple）與 `checkGoal`（completeSimple）live 實打通過。
+  - `/compat` 為官方過渡層，未來移除時需做 `createModels()` 深層遷移（追蹤 #7）。
+- **許願台：本地資料夾選擇器支援隱藏資料夾**：加「顯示隱藏資料夾」開關（`/v1/fs` 支援 `hidden=1`，`node_modules` 仍一律排除）；偏好記 localStorage，隱藏資料夾以暗色標示。
+- **修：執行中追加（steer）/ 回答（needs-input）框無法輸入中文**：Enter 判斷加 `!isComposing`（IME 確認候選字不再被誤送）；組字期間暫停 1.2s 輪詢重繪，避免重建 input 洗掉未確認的拼音。
+- **開源治理與門面**：
+  - README 英文化為預設（`README.md`），繁中移至 `README.zh-TW.md`，兩者互相連結。
+  - 新增 `SECURITY.md`（私密漏洞回報 + 威脅模型）、`CODE_OF_CONDUCT.md`（Contributor Covenant 2.1）、Issue/PR 模板、`dependabot.yml`。
+  - CI 加固：`npm install`→`npm ci`、加 `permissions: contents:read` 最小權限。
+  - 修正 README 過時測試數字、移除失效的 `../xitto-code` 連結。
+- 測試 202/202。
+
 ## 0.9.5
 
 - **領域自動判斷（auto-routing）**：非技術使用者不必懂「該選哪個 pack」——預設「🪄 自動判斷領域」，系統依願望文字自動挑最適合的領域，並顯示「已自動用『研究』領域」+ 可在下拉覆蓋。
