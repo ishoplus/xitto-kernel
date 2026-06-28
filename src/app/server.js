@@ -4,7 +4,7 @@
 // 這是「另一個 app 消費同一組 kernel 事件」—— 不動 kernel 核心。
 import { createServer } from 'node:http';
 import { mkdirSync, readFileSync, existsSync, rmSync } from 'node:fs';
-import { join, dirname, isAbsolute, relative, basename } from 'node:path';
+import { join, dirname, isAbsolute, relative, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createKernel } from '../kernel/index.js';
 import { loadModel } from './providers.js';
@@ -162,7 +162,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
  * @param {number} [o.concurrency]  背景任務同時數（預設 2）
  * @returns {import('node:http').Server}
  */
-export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-server', sandbox = true, concurrency = 2 } = {}) {
+export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false } = {}) {
   const sessions = new Map(); // sessionId -> { pack, history }
   mkdirSync(baseDir, { recursive: true });
 
@@ -192,11 +192,12 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       const o = await kernel.runOutcome(spec.goal || spec.input || '', { history: sess.history, onEvent: wrapped, onAgent, onRound: (i) => wrapped({ type: 'round', round: i.round, maxRounds: i.maxRounds }) });
       sess.history = o.history || []; sessions.set(sessionId, sess);
       try { rmSync(join(workdir, 'tmp'), { recursive: true, force: true }); } catch { /* 清過程檔,失敗無妨 */ }
-      return { sessionId, workspace, text: o.summary || lastText(sess.history), usage, rounds: o.rounds, done: o.done, aborted: o.aborted, artifacts: o.artifacts };
+      // 溯源：邏輯位置 workspace 永遠記；實體路徑只在本地模式給（託管不洩漏伺服器路徑）
+      return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: o.summary || lastText(sess.history), usage, rounds: o.rounds, done: o.done, aborted: o.aborted, artifacts: o.artifacts };
     }
     const r = await kernel.runTurn(spec.input || '', { history: sess.history, onEvent: wrapped, onAgent });
     sess.history = r.messages || r.history || []; sessions.set(sessionId, sess);
-    return { sessionId, workspace, text: r.text ?? lastText(sess.history), usage, rounds: r.rounds, done: r.done };
+    return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: r.text ?? lastText(sess.history), usage, rounds: r.rounds, done: r.done };
   }
 
   // 完成通知：POST 結果到 spec.webhook（http/https），單次嘗試、失敗記日誌不重試（PoC）
@@ -322,11 +323,12 @@ export function startServer() {
   const token = process.env.XITTO_SERVER_TOKEN || 'dev-token';
   const sandbox = process.env.XITTO_SERVER_SANDBOX !== 'off';
   const concurrency = Number(process.env.XITTO_SERVER_CONCURRENCY || 2);
+  const local = process.env.XITTO_SERVER_LOCAL === '1' || process.env.XITTO_SERVER_LOCAL === 'true';
   const { model, getApiKey } = loadModel(process.env.XITTO_MODEL);
-  const server = createServerApp({ model, getApiKey, token, sandbox, concurrency });
+  const server = createServerApp({ model, getApiKey, token, sandbox, concurrency, local });
   server.listen(port, () => {
     console.log(`🪄 許願台：http://localhost:${port}/  （瀏覽器打開即用——說出目標、交付成品）`);
-    console.log(`xitto-kernel server · model ${model.id} · 沙箱 ${sandbox ? '開' : '關'} · 背景並發 ${concurrency}`);
+    console.log(`xitto-kernel server · model ${model.id} · 沙箱 ${sandbox ? '開' : '關'} · 背景並發 ${concurrency}${local ? ' · 本地模式(顯示檔案位置)' : ''}`);
     console.log(`token: ${token === 'dev-token' ? 'dev-token（請設 XITTO_SERVER_TOKEN）' : '(已設定)'}`);
     console.log('API：POST /v1/run · /v1/stream · /v1/tasks · /v1/tasks/:id/{answer,cancel}｜GET /v1/tasks[/:id[/events|/file]] · /health');
   });

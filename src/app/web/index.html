@@ -39,6 +39,9 @@
   .todo.completed { color:var(--ok); }
   button.cancel { margin-left:10px; padding:3px 12px; font-size:12px; background:transparent; color:#f08a8a; border:1px solid #5b3030; }
   button.cancel:hover { background:#2a1818; }
+  .wsbadge { display:inline-block; font-size:12px; color:var(--dim); margin-left:8px; }
+  .loc { margin-top:10px; font-size:12px; color:var(--dim); }
+  .loc code { background:#0c0e12; border:1px solid var(--line); border-radius:6px; padding:2px 7px; color:var(--fg); cursor:pointer; }
   .dots::after { content:""; animation:dots 1.4s steps(4,end) infinite; }
   @keyframes dots { 0%{content:""} 25%{content:"·"} 50%{content:"··"} 75%{content:"···"} }
   .summary { margin-top:10px; white-space:pre-wrap; }
@@ -190,7 +193,7 @@ async function poll() {
 function renderCurrent(t) {
   const a = t.result?.artifacts, files = a ? [...(a.created||[]).map(f=>[f,"new"]), ...(a.modified||[]).map(f=>[f,"mod"])] : [];
   $("#current").innerHTML = `<div class="card">
-    <div class="goal">${esc(t.goal||"任務")}</div>
+    <div class="goal">${esc(t.goal||"任務")}<span class="wsbadge">📁 ${esc(t.workspace||"default")}</span></div>
     <span class="status ${statusClass(t.status)}">${statusText(t.status)}${t.rounds?` · ${t.rounds} 輪`:""}</span>
     ${CANCELLABLE.includes(t.status)?`<button class="cancel" onclick="cancelTask('${t.taskId}')">停止</button>`:""}
     ${t.status==="running"||t.status==="queued"?progressHtml(t):""}
@@ -200,6 +203,7 @@ function renderCurrent(t) {
     ${t.status==="done"?`<div class="summary">${esc(t.result?.text||"")}</div>`:""}
     ${t.status==="error"?`<div class="summary">⚠ ${esc(t.error)}</div>`:""}
     ${files.length?`<div class="files">📦 成品：${files.map(([f,k])=>`<span class="file ${k==="mod"?"mod":""}" onclick="viewFile('${t.taskId}','${encodeURIComponent(f)}','${esc(f)}')">${k==="mod"?"~":"+"} ${esc(f)}</span>`).join("")}</div>`:""}
+    ${t.result&&t.result.workspaceDir?`<div class="loc">📂 檔案位置：<code title="點擊複製" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(t.result.workspaceDir)}')">${esc(t.result.workspaceDir)}</code></div>`:""}
     <div class="viewer" id="fview" style="display:none"></div>
   </div>`;
   if (t.status==="needs-input") {

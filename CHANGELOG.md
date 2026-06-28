@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1
+
+- **成品溯源/位置**：分邏輯與實體兩層。
+  - **邏輯位置(workspace)**：成品卡永遠標出 `📁 所屬空間`,一眼知道每份成品屬於哪個專案
+  - **實體路徑**：預設**不外露**(託管不洩漏伺服器絕對路徑);僅**本地模式**(`XITTO_SERVER_LOCAL=1` 或 `createServerApp({local:true})`)在 result 附 `workspaceDir`,網頁顯示「📂 檔案位置」(點擊複製,供到 Finder/Explorer 找檔)
+  - 真實 live 驗證:本地模式回絕對路徑 `/…/ws/<workspace>`、託管模式 `workspaceDir` 為 undefined。測試 174/174。
+
 ## 0.6.0
 
 成品管理 + 類型感知呈現 + 專案空間（一次補上三組優化）。
