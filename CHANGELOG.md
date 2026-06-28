@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0
+
+- **本地就地模式（許願台像 Claude Code 改你選的真實資料夾）**：打通「隔離(許願台)」與「就地(Claude Code)」兩個檔案模型。
+  - `XITTO_SERVER_LOCAL=1` 時,workspace 可為**真實資料夾的絕對路徑** → 任務**就地改該資料夾的檔**(無隔離副本);網頁「新專案」可貼路徑
+  - 新增 `workspaceDir(baseDir, ws, local)`：local + 絕對路徑 → 就地；**否則(含託管收到絕對路徑)→ 消毒成管理空間,不逃逸**
+  - 工作台端點改 query `?ws=`（容納絕對路徑）；in-place 資料夾不存在 → 400
+  - 網頁注入 `__LOCAL__`；空間下拉以 `📁` 標真實資料夾
+  - 4 個新測試（workspaceDir 就地/不逃逸/管理）+ 真實 server 端到端
+    （local：就地改 /tmp/myproj/calc.js 的 a-b→a+b、無副本；hosted：絕對路徑被消毒不逃逸）。測試 186/186
+
 ## 0.7.1
 
 - **成品迭代「繼續／調整」（迭代有脈絡）**：在許願台補上迭代閉環。

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServerApp, resolveArtifact, listWorkspaceFiles, safeWs } from '../src/app/server.js';
+import { createServerApp, resolveArtifact, listWorkspaceFiles, safeWs, workspaceDir } from '../src/app/server.js';
 
 test('resolveArtifact：合法相對路徑 → 解析；穿越/絕對路徑 → null', () => {
   assert.equal(resolveArtifact('/base/s1', 'a.txt'), '/base/s1/a.txt');
@@ -20,6 +20,17 @@ test('safeWs：消毒 workspace 名稱（防穿越）', () => {
   assert.equal(safeWs('../../etc'), 'etc');
   assert.equal(safeWs(''), 'default');
   assert.equal(safeWs('a b/c'), 'abc');
+});
+
+test('workspaceDir：本地+絕對路徑→就地；託管收絕對路徑→消毒不逃逸；相對名→管理空間', () => {
+  // 本地模式 + 絕對路徑 → 就地（像 Claude Code 改你選的真實資料夾）
+  assert.equal(workspaceDir('/base', '/real/folder', true), '/real/folder');
+  // 託管模式收到絕對路徑 → 消毒成管理空間,不逃逸到主機
+  assert.equal(workspaceDir('/base', '/real/folder', false), join('/base', 'ws', 'realfolder'));
+  // 本地 + 相對名 → 仍是管理空間
+  assert.equal(workspaceDir('/base', 'essay', true), join('/base', 'ws', 'essay'));
+  // 預設
+  assert.equal(workspaceDir('/base', '', false), join('/base', 'ws', 'default'));
 });
 
 test('listWorkspaceFiles：列檔（遞迴）+ 排除內部目錄', () => {

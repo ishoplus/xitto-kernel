@@ -30,8 +30,14 @@ export function contentTypeFor(name) { const ext = (String(name).split('.').pop(
 // 工具參數摘要（給「展開過程」步驟卡）：取最有意義的參數。
 const argSummary = (args) => { if (!args || typeof args !== 'object') return ''; const v = args.command ?? args.path ?? args.pattern ?? args.query ?? args.url ?? args.name ?? args.topic; return (v != null && v !== '') ? String(v).replace(/\s+/g, ' ').slice(0, 80) : ''; };
 
-// workspace 名稱消毒（同 runKernel）。
+// workspace 名稱消毒（防穿越）。
 export const safeWs = (w) => (String(w || 'default').replace(/[^a-zA-Z0-9_-]/g, '') || 'default');
+
+// 解析 workspace → 真實目錄。本地模式 + 絕對路徑 → 就地用該真實資料夾（像 Claude Code）；
+// 否則（含託管模式收到絕對路徑）→ 消毒成管理空間 ws/<name>，不會逃逸到主機任意路徑。
+export function workspaceDir(baseDir, ws, local) {
+  return (local && isAbsolute(String(ws || ''))) ? String(ws) : join(baseDir, 'ws', safeWs(ws));
+}
 
 // 列工作區檔案（給「工作台」分頁）：遞迴,排除內部目錄,回 [{path,size,mtime}]。
 const SKIP_WS = new Set(['.xitto-kernel', 'node_modules', '.git', 'tmp', '.swebench-repos']);
@@ -217,8 +223,9 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     const make = PACKS[spec.pack || 'general'];
     if (!make) throw new Error(`未知 pack「${spec.pack}」，可用：${Object.keys(PACKS).join(', ')}`);
     // 持久工作空間（B 模型）：workdir 綁 workspace（非 sessionId）→ 檔案留存 + 五層沉澱跨成品累積。
-    const workspace = (spec.workspace || 'default').replace(/[^a-zA-Z0-9_-]/g, '') || 'default';
-    const workdir = join(baseDir, 'ws', workspace); mkdirSync(workdir, { recursive: true });
+    // 本地模式 + workspace 是絕對路徑 → 就地用該真實資料夾（像 Claude Code 改你現有的檔）。
+    const workspace = spec.workspace || 'default';
+    const workdir = workspaceDir(baseDir, workspace, local); mkdirSync(workdir, { recursive: true });
     // history 仍綁 sessionId（每個成品獨立對話：無 sessionId → 全新,不續接,避免 context 暴脹/混淆）
     const sessionId = spec.sessionId || newId();
     const sess = sessions.get(sessionId) || { history: [] };
@@ -262,7 +269,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
       let html; try { html = webHtml(); } catch { return json(res, 500, { error: 'web UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(html.replace(/__SERVER_TOKEN__/g, token || '').replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, token || '').replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false'));
     }
 
     if (!authed(req)) return json(res, 401, { error: 'unauthorized（帶 Authorization: Bearer <token>）' });
@@ -290,6 +297,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       const body = await readBody(req);
       if (!PACKS[body.pack || 'general']) return json(res, 400, { error: `未知 pack「${body.pack}」，可用：${Object.keys(PACKS).join(', ')}` });
       if (body.webhook && !/^https?:\/\//.test(body.webhook)) return json(res, 400, { error: 'webhook 需為 http(s) URL' });
+      if (local && body.workspace && isAbsolute(body.workspace) && !existsSync(body.workspace)) return json(res, 400, { error: `資料夾不存在：${body.workspace}` });
       const t = tasks.enqueue({ pack: body.pack, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook, workspace: body.workspace });
       log({ task: t.id, action: 'enqueue', pack: body.pack || 'general', mode: body.mode || 'turn' });
       return json(res, 202, { taskId: t.id, status: t.status, ...tasks.stats() });
@@ -326,26 +334,24 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       const t = tasks.get(mFile[1]); const ws = t?.result?.workspace;
       if (!ws) return json(res, 404, { error: '無交付物（任務尚未完成?）' });
       const rel = url.searchParams.get('path');
-      const full = resolveArtifact(join(baseDir, 'ws', ws), rel);
+      const full = resolveArtifact(workspaceDir(baseDir, ws, local), rel);
       if (!full) return json(res, 400, { error: 'path 不合法' });
       return serveFile(res, full, rel, url.searchParams.get('download'));
     }
 
-    // 工作台：列當前空間所有檔案
-    const mWsList = path.match(/^\/v1\/workspaces\/([^/]+)\/files$/);
-    if (req.method === 'GET' && mWsList) {
-      const ws = safeWs(mWsList[1]); const dir = join(baseDir, 'ws', ws);
-      return json(res, 200, { workspace: ws, files: existsSync(dir) ? listWorkspaceFiles(dir) : [] });
+    // 工作台：列空間所有檔案（ws 走 query,才能容納本地模式的絕對路徑）
+    if (req.method === 'GET' && path === '/v1/workspaces/files') {
+      const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
+      return json(res, 200, { files: existsSync(dir) ? listWorkspaceFiles(dir) : [] });
     }
-
     // 工作台：取檔（看/下載）/ 刪檔
-    const mWsFile = path.match(/^\/v1\/workspaces\/([^/]+)\/file$/);
-    if (mWsFile && (req.method === 'GET' || req.method === 'DELETE')) {
-      const ws = safeWs(mWsFile[1]); const rel = url.searchParams.get('path');
-      const full = resolveArtifact(join(baseDir, 'ws', ws), rel);
+    if (path === '/v1/workspaces/file' && (req.method === 'GET' || req.method === 'DELETE')) {
+      const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
+      const rel = url.searchParams.get('path');
+      const full = resolveArtifact(dir, rel);
       if (!full) return json(res, 400, { error: 'path 不合法' });
       if (req.method === 'DELETE') {
-        try { if (existsSync(full)) rmSync(full); log({ workspace: ws, action: 'delete', path: rel }); return json(res, 200, { ok: true }); }
+        try { if (existsSync(full)) rmSync(full); log({ action: 'delete', path: rel }); return json(res, 200, { ok: true }); }
         catch (e) { return json(res, 500, { error: e.message }); }
       }
       return serveFile(res, full, rel, url.searchParams.get('download'));

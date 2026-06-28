@@ -128,6 +128,7 @@
 <script>
 const TOKEN = "__SERVER_TOKEN__";
 const PACKS = __PACKS__;
+const LOCAL = __LOCAL__;  // 本地模式：可把專案指向真實資料夾（就地工作,像 Claude Code）
 const $ = (s) => document.querySelector(s);
 const api = (p, opts={}) => fetch(p, { ...opts, headers: { authorization:"Bearer "+TOKEN, "content-type":"application/json", ...(opts.headers||{}) } });
 const esc = (s) => String(s==null?"":s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
@@ -155,9 +156,18 @@ $("#pack").innerHTML = PACKS.map(p=>`<option value="${p}" ${p==="general"?"selec
 // 專案／空間（對應 Claude Code 的「目錄」,但可選＋命名＋有預設；不同空間的檔案與沉澱各自獨立）
 let spaces = JSON.parse(localStorage.getItem("xk_spaces")||'["default"]');
 let curSpace = localStorage.getItem("xk_space")||"default";
-function renderSpaces(){ $("#space").innerHTML = spaces.map(s=>`<option ${s===curSpace?"selected":""}>${esc(s)}</option>`).join(""); }
+const spaceLabel=s=>s.startsWith("/")?("📁 "+(s.split("/").filter(Boolean).pop()||s)):s;
+function renderSpaces(){ $("#space").innerHTML = spaces.map(s=>`<option value="${esc(s)}" ${s===curSpace?"selected":""}>${esc(spaceLabel(s))}</option>`).join(""); }
 $("#space").onchange = () => { curSpace=$("#space").value; localStorage.setItem("xk_space",curSpace); $("#current").innerHTML=""; loadHistory(); if($("#workbench").style.display!=="none") loadWorkbench(); };
-$("#newspace").onclick = () => { const n=(prompt("新專案名稱（英數/底線/連字號）：")||"").trim().replace(/[^a-zA-Z0-9_-]/g,""); if(!n)return; if(!spaces.includes(n))spaces.push(n); curSpace=n; localStorage.setItem("xk_spaces",JSON.stringify(spaces)); localStorage.setItem("xk_space",curSpace); renderSpaces(); $("#current").innerHTML=""; loadHistory(); };
+$("#newspace").onclick = () => {
+  const raw=(prompt(LOCAL?"新專案：輸入名稱，或貼上一個真實資料夾的絕對路徑（本地模式會就地改該資料夾的檔，像 Claude Code）":"新專案名稱（英數/底線/連字號）：")||"").trim();
+  if(!raw) return;
+  const n = (LOCAL && raw.startsWith("/")) ? raw : raw.replace(/[^a-zA-Z0-9_-]/g,"");
+  if(!n) return;
+  if(!spaces.includes(n)) spaces.push(n);
+  curSpace=n; localStorage.setItem("xk_spaces",JSON.stringify(spaces)); localStorage.setItem("xk_space",curSpace);
+  renderSpaces(); $("#current").innerHTML=""; loadHistory();
+};
 renderSpaces();
 
 // 極簡 markdown 渲染（零依賴、可離線；夠用於 agent 產的報告）
@@ -177,8 +187,10 @@ function mdRender(src){
   return out.join("");
 }
 const IMG=/\.(png|jpe?g|gif|webp|svg)$/i, MD=/\.(md|markdown)$/i, HTMLF=/\.html?$/i, JSONF=/\.json$/i;
-// base = "/v1/tasks/<id>" 或 "/v1/workspaces/<ws>"
-const fileUrlAt=(base,path,extra="")=>base+"/file?path="+encodeURIComponent(path)+"&token="+encodeURIComponent(TOKEN)+extra;
+// 取檔 URL 產生器（任務成品走 /tasks/<id>，工作台走 /workspaces?ws=，後者 ws 可為本地絕對路徑）
+const TOK="&token="+encodeURIComponent(TOKEN);
+const taskFileUrl=id=>(path,extra="")=>"/v1/tasks/"+id+"/file?path="+encodeURIComponent(path)+TOK+extra;
+const wsFileUrl=ws=>(path,extra="")=>"/v1/workspaces/file?ws="+encodeURIComponent(ws)+"&path="+encodeURIComponent(path)+TOK+extra;
 // 彩色 diff（綠 +／紅 -）：渲染 kernel 算好的 _diff
 function diffHtml(d){
   if(!d) return "";
@@ -195,13 +207,13 @@ function logHtml(p){
 let expandedLog=false;
 function toggleLog(){ expandedLog=!expandedLog; if(liveTask) renderCurrent(liveTask); }
 
-async function renderFile(base, encPath, name, sel){
+async function renderFile(urlFn, encPath, name, sel){
   const path=decodeURIComponent(encPath); const v=document.querySelector(sel); v.style.display="block";
-  const bar=`<div class="vbar">📄 ${esc(name)} · <a href="${fileUrlAt(base,path)}" target="_blank">開新分頁</a> · <a href="${fileUrlAt(base,path,'&download=1')}">下載</a></div>`;
-  if(IMG.test(name)){ v.innerHTML=bar+`<img class="vimg" src="${fileUrlAt(base,path)}">`; return; }
-  if(HTMLF.test(name)){ v.innerHTML=bar+`<iframe class="vframe" sandbox src="${fileUrlAt(base,path)}"></iframe>`; return; }
+  const bar=`<div class="vbar">📄 ${esc(name)} · <a href="${urlFn(path)}" target="_blank">開新分頁</a> · <a href="${urlFn(path,'&download=1')}">下載</a></div>`;
+  if(IMG.test(name)){ v.innerHTML=bar+`<img class="vimg" src="${urlFn(path)}">`; return; }
+  if(HTMLF.test(name)){ v.innerHTML=bar+`<iframe class="vframe" sandbox src="${urlFn(path)}"></iframe>`; return; }
   v.innerHTML=bar+`<div class="empty">載入中…</div>`;
-  const txt=await fetch(fileUrlAt(base,path)).then(r=>r.ok?r.text():null).catch(()=>null);
+  const txt=await fetch(urlFn(path)).then(r=>r.ok?r.text():null).catch(()=>null);
   if(txt==null){ v.innerHTML=bar+`<div class="empty">（無法以文字呈現，請下載）</div>`; return; }
   let body;
   if(MD.test(name)) body=`<div class="md">${mdRender(txt)}</div>`;
@@ -209,18 +221,19 @@ async function renderFile(base, encPath, name, sel){
   else body=`<pre class="viewer-pre">${esc(txt)}</pre>`;
   v.innerHTML=bar+body;
 }
-function viewFile(id, encPath, name){ return renderFile("/v1/tasks/"+id, encPath, name, "#fview"); }
-function wbView(encPath, name){ return renderFile("/v1/workspaces/"+encodeURIComponent(curSpace), encPath, name, "#wbview"); }
+function viewFile(id, encPath, name){ return renderFile(taskFileUrl(id), encPath, name, "#fview"); }
+function wbView(encPath, name){ return renderFile(wsFileUrl(curSpace), encPath, name, "#wbview"); }
 
 // 工作台分頁：列檔 / 刪檔 / 切換
 function fmtSize(n){ return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"; }
 async function loadWorkbench(){
   $("#wbview").style.display="none";
-  const r=await api("/v1/workspaces/"+encodeURIComponent(curSpace)+"/files").then(r=>r.json()).catch(()=>({files:[]}));
+  const r=await api("/v1/workspaces/files?ws="+encodeURIComponent(curSpace)).then(r=>r.json()).catch(()=>({files:[]}));
   const files=(r.files||[]).sort((a,b)=>b.mtime-a.mtime);
-  $("#wbfiles").innerHTML = files.length ? files.map(f=>`<div class="wbrow"><span class="wbname" onclick="wbView('${encodeURIComponent(f.path)}','${esc(f.path)}')">📄 ${esc(f.path)}</span><span class="wbmeta">${fmtSize(f.size)}</span><span class="wbdel" title="刪除" onclick="wbDelete('${encodeURIComponent(f.path)}','${esc(f.path)}')">🗑</span></div>`).join("") : `<div class="empty">這個專案（${esc(curSpace)}）還沒有檔案。去「許願」交辦一件事吧。</div>`;
+  const loc = curSpace.startsWith("/") ? `<div class="loc">📂 就地資料夾：<code>${esc(curSpace)}</code></div>` : "";
+  $("#wbfiles").innerHTML = loc + (files.length ? files.map(f=>`<div class="wbrow"><span class="wbname" onclick="wbView('${encodeURIComponent(f.path)}','${esc(f.path)}')">📄 ${esc(f.path)}</span><span class="wbmeta">${fmtSize(f.size)}</span><span class="wbdel" title="刪除" onclick="wbDelete('${encodeURIComponent(f.path)}','${esc(f.path)}')">🗑</span></div>`).join("") : `<div class="empty">這個專案還沒有檔案。去「許願」交辦一件事吧。</div>`);
 }
-async function wbDelete(encPath, name){ if(!confirm("刪除 "+name+"？此動作無法復原。")) return; await api("/v1/workspaces/"+encodeURIComponent(curSpace)+"/file?path="+encodeURIComponent(decodeURIComponent(encPath)),{method:"DELETE"}); loadWorkbench(); }
+async function wbDelete(encPath, name){ if(!confirm("刪除 "+name+"？此動作無法復原。")) return; await api("/v1/workspaces/file?ws="+encodeURIComponent(curSpace)+"&path="+encodeURIComponent(decodeURIComponent(encPath)),{method:"DELETE"}); loadWorkbench(); }
 function switchTab(name){
   const wish=name==="wish";
   $("#wishview").style.display=wish?"":"none";
