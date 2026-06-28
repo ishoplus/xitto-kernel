@@ -124,6 +124,8 @@ export function resolveArtifact(workdir, rel) {
 
 let _webHtml;
 const webHtml = () => (_webHtml ??= readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'web', 'index.html'), 'utf8'));
+let _chatHtml;
+const chatHtml = () => (_chatHtml ??= readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'web', 'chat.html'), 'utf8'));
 
 // 把原始 kernel 事件壓成精簡的對外事件（串流端與背景任務共用，避免重複映射）
 export const mapEvent = (ev) => {
@@ -366,6 +368,14 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     // 「許願台」網頁（公開可載入；token 注入頁面供同源 API 呼叫——PoC/本地自用,正式部署請前置真實認證）
     if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
       let html; try { html = webHtml(); } catch { return json(res, 500, { error: 'web UI 未找到' }); }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end(html.replace(/__SERVER_TOKEN__/g, token || '').replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false'));
+    }
+
+    // 「對話」網頁：同一 kernel 的另一個前端——對話式（mode:turn + 固定 sessionId 多輪、SSE 串流），
+    // 與許願台（mode:goal、交付物導向）做出區別。共用同一組工作區（五層沉澱跨頁累積）。
+    if (req.method === 'GET' && (path === '/chat' || path === '/chat.html')) {
+      let html; try { html = chatHtml(); } catch { return json(res, 500, { error: 'chat UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       return res.end(html.replace(/__SERVER_TOKEN__/g, token || '').replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false'));
     }
