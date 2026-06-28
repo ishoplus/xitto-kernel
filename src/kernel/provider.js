@@ -1,6 +1,6 @@
 // Provider 呼叫適配 — kernel 怎麼正確地調用 LLM provider（與「provider 設定」不同，後者屬 app）。
 // 預設 streamFn 包 pi-ai 的 streamSimple，並處理 anthropic 相容端點的 prompt caching 相容性。
-import { streamSimple } from '@mariozechner/pi-ai';
+import { streamSimple } from '@earendil-works/pi-ai/compat';
 
 // 該 model 是否該關掉 prompt caching：'none' = 關閉。
 // pi-ai 對所有 anthropic-messages provider 預設加 cache_control，但只有「真正的 Anthropic」端點支援；

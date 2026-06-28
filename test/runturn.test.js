@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AssistantMessageEventStream } from '@mariozechner/pi-ai';
+import { AssistantMessageEventStream } from '@earendil-works/pi-ai/compat';
 import { createKernel } from '../src/kernel/index.js';
 import { createCodingPack } from '../src/packs/coding/index.js';
 

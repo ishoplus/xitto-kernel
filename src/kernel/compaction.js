@@ -1,6 +1,6 @@
 // 回合內上下文壓縮 — kernel 內建。上下文逼近 model 視窗時，把較舊對話摘要成一段、保留最近數輪，
 // 避免長對話爆窗。對標 xitto-code compaction.js（自足版：以字元/4 粗估 tokens，不依賴 pi-coding-agent）。
-import { completeSimple } from '@mariozechner/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { cacheRetentionFor } from './provider.js';
 
 export const DEFAULT_COMPACTION = { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 };

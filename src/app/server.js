@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync
 import { join, dirname, isAbsolute, relative, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { completeSimple } from '@mariozechner/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { createKernel } from '../kernel/index.js';
 import { cacheRetentionFor } from '../kernel/provider.js';
 import { loadModel } from './providers.js';

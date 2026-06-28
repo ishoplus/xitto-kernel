@@ -1,6 +1,6 @@
 // 目標驅動自主循環 — kernel 內建（領域無關）。給目標 → 反覆 runTurn + LLM 自我驗收，
 // 直到達成 / 到上限 / 無進展。對標 xitto-code 的 /loop。checkGoal 用 LLM 判斷是否完成。
-import { completeSimple } from '@mariozechner/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { cacheRetentionFor } from './provider.js';
 
 const JUDGE_SYS = '你是嚴格的驗收員。依「目標」與「對話進展」判斷目標是否已達成。' +

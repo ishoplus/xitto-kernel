@@ -57,7 +57,7 @@
     "./packs/devops": "./src/packs/devops/index.js"
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.70.6",
+    "@earendil-works/pi-ai": "^0.80.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cli-highlight": "^2.1.11",
     "ink": "^5.2.1",

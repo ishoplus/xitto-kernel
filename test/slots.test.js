@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AssistantMessageEventStream } from '@mariozechner/pi-ai';
+import { AssistantMessageEventStream } from '@earendil-works/pi-ai/compat';
 import { createKernel } from '../src/kernel/index.js';
 
 const FAKE_MODEL = { id: 'fake', provider: 'fake', api: 'openai-completions', baseUrl: '', input: ['text'], output: ['text'], contextWindow: 32000, maxTokens: 4096, cost: {} };
