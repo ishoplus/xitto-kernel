@@ -50,6 +50,7 @@ export class Agent {
     };
     this.listeners = new Set();
     this.streamFn = options.streamFn;               // 必傳(xitto 都注入；缺則無法串流)
+    this.maxSteps = options.maxSteps || 80;          // 單回合硬上限：防 agent 無限呼叫工具繞圈
     this.getApiKey = options.getApiKey;
     this.beforeToolCall = options.beforeToolCall;
     this.afterToolCall = options.afterToolCall;
@@ -135,6 +136,7 @@ export class Agent {
     const newMessages = [];
     let pending = initialMessages.slice();
     let firstTurn = true;
+    let steps = 0;
     while (true) {
       let hasMoreToolCalls = true;
       while (hasMoreToolCalls || pending.length) {
@@ -149,6 +151,10 @@ export class Agent {
         // abort 守衛：迴圈邊界若已中止，立即走 handleRunFailure(aborted)。
         // 真實 provider 由 fetch signal 中止串流；此守衛確保 fake/工具觸發的 abort 也確定性收尾。
         if (signal.aborted) throw new Error('Aborted');
+        // 硬上限：單回合工具呼叫太多 → 注入一句「別再用工具,直接用現有資訊作結」,逼它收尾
+        if (steps === this.maxSteps - 1) this._state.messages.push({ role: 'user', content: [{ type: 'text', text: `[系統] 已達工具呼叫上限（${this.maxSteps} 步）。請停止使用任何工具，直接根據目前已知資訊給出結論或說明卡在哪、缺什麼，然後結束。` }] });
+        if (steps >= this.maxSteps) { await this.emit({ type: 'agent_end', messages: newMessages }); return; }
+        steps++;
         const message = await this.streamAssistant(signal);
         newMessages.push(message);
         if (message.stopReason === 'error' || message.stopReason === 'aborted') {

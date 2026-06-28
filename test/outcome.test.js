@@ -57,6 +57,22 @@ test('runOutcome：改動既有檔 → 列入 modified；無變動 → 兩者皆
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
+test('runGoal：驗收一直判未達成(查不到的目標) → 在幾輪內停止,不空轉到上限', async () => {
+  const cwd = tmp();
+  try {
+    // fake：每回合只回文字（不改檔）；checkGoal 永遠未達成、回饋相同 → 模擬「繞圈」
+    const fakeStream = (_m, ctx) => {
+      const msg = { role: 'assistant', content: [{ type: 'text', text: '我又查了一下，還是找不到。' }], usage: { input: 1, output: 1 } };
+      return { async *[Symbol.asyncIterator]() { yield { type: 'done', partial: msg }; }, result: async () => msg };
+    };
+    const k = createKernel(createGeneralPack({ cwd }), { cwd, model, getApiKey: () => 'k', streamFn: fakeStream, checkGoal: async () => ({ done: false, remaining: '尚未找到該資訊（不存在）' }) });
+    const g = await k.runGoal('查一個不存在的資訊', { maxRounds: 12 });
+    assert.equal(g.done, false);
+    assert.ok(g.stalled, '應判定 stalled（繞圈）而非跑到上限');
+    assert.ok(g.rounds <= 4, '應在幾輪內停,而非 12。實際：' + g.rounds);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('runOutcome：.xitto-kernel 內部沉澱檔不算交付物', async () => {
   const cwd = tmp();
   try {

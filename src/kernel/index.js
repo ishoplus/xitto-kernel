@@ -438,6 +438,7 @@ export function createKernel(pack, config = {}) {
       let lastRemaining = null;
       let noProgress = 0;
       let verifyErrors = 0;
+      let sameFeedback = 0;
       for (let round = 1; round <= maxRounds; round++) {
         opts.onRound?.({ round, maxRounds });
         const r = await api.runTurn(instruction, { history, onEvent: opts.onEvent, onAgent: opts.onAgent });
@@ -459,7 +460,9 @@ export function createKernel(pack, config = {}) {
         }
         verifyErrors = 0;
         const rem = normalizeFeedback(v.remaining);
-        if (!r.turnModified && rem && rem === lastRemaining) return { done: false, stalled: true, rounds: round, history };
+        // 驗收回饋重複 = agent 在繞圈（即使一直有動作也沒朝驗收要求收斂,如查不到的資訊一直換來源）→ 連 2 次相同就停,別空轉到上限
+        if (rem && rem === lastRemaining) { if (++sameFeedback >= 2) return { done: false, stalled: true, rounds: round, history }; }
+        else sameFeedback = 0;
         lastRemaining = rem;
         instruction = `目標尚未達成。驗收回饋：${v.remaining}\n請繼續完成目標：${goal}`;
       }
