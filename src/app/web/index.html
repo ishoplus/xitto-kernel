@@ -12,10 +12,11 @@
   /* 雙欄佈局：許願頁=主區+歷史側欄；工作台=檔案左+預覽右。窄螢幕自動收成單欄 */
   .cols { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:26px; align-items:start; }
   .cols2 { display:grid; grid-template-columns:340px minmax(0,1fr); gap:26px; align-items:start; }
-  .side, .wbleft { position:sticky; top:14px; }
+  /* 側欄/檔案列/預覽各自獨立內捲（max-height+overflow），避免 sticky 太高時底部捲不到 */
+  .side, .wbleft, .wbright { position:sticky; top:14px; max-height:calc(100vh - 28px); overflow:auto; }
   .side h3, .wbleft h3 { margin-top:0; }
-  .wbright { position:sticky; top:14px; min-height:120px; }
-  @media (max-width:860px){ .cols,.cols2{ grid-template-columns:1fr; } .side,.wbleft,.wbright{ position:static; } }
+  .wbright { min-height:120px; }
+  @media (max-width:860px){ .cols,.cols2{ grid-template-columns:1fr; } .side,.wbleft,.wbright{ position:static; max-height:none; overflow:visible; } }
   header { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
   header h1 { font-size:22px; margin:0; }
   header .sub { color:var(--dim); font-size:13px; }
