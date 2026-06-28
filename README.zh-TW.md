@@ -14,6 +14,10 @@
 「編碼」只是其中一個 DomainPack，換成「資料查詢」「知識庫」「客服/維運」等只需替換 pack。
 互動 CLI 在 app 層（薄）；更豐富的 TUI 或其他前端可作為另一個 app 消費同一組 kernel 事件。
 
+![xitto 許願台 — 說一句話、看它做事、拿成品](https://raw.githubusercontent.com/ishoplus/xitto-kernel/main/assets/wishboard.png)
+
+> 🪄 **許願台** 網頁（其中一個前端）：打一句話 → 背景自動跑 → 看得到即時過程（階段、步驟、彩色 diff），做完直接拿成品。
+
 ## 一句話
 
 > **kernel 提供「怎麼跑一個 agent」，DomainPack 提供「這個 agent 會什麼、守什麼」。**

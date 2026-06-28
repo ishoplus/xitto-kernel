@@ -14,6 +14,10 @@ The same kernel (multi-step tool loop, guard chain, permissions/sandbox, provide
 "coding" is just one DomainPack — swap it for "data query", "knowledge base", "support/ops", etc. by replacing the pack.
 The interactive CLI lives in the app layer (thin); a richer TUI or other frontends can be another app consuming the same kernel events.
 
+![xitto Wishboard — say what you want, watch it work, collect the deliverable](https://raw.githubusercontent.com/ishoplus/xitto-kernel/main/assets/wishboard.png)
+
+> The 🪄 **Wishboard** web UI (one of the frontends): type one line → it runs in the background → you watch the live process (phase, steps, colored diffs) and collect the deliverable.
+
 ## In one line
 
 > **The kernel provides "how to run an agent"; a DomainPack provides "what this agent can do, and what it guards."**
