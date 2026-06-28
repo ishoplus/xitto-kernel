@@ -27,7 +27,7 @@ export function findCutIndex(messages, keepRecent) {
 async function summarize(older, model, reserveTokens, apiKey) {
   const text = older.map((m) => `${m.role}: ${asText(m).slice(0, 1500)}`).join('\n').slice(0, 24000);
   const ctx = {
-    systemPrompt: '把以下對話濃縮成要點摘要：決策、已確認的事實、待辦、檔案/狀態改動，供後續延續。只輸出摘要本身。',
+    systemPrompt: '把以下對話濃縮成要點摘要：決策、已確認的事實、待辦、檔案/狀態改動，供後續延續。用對話本身的語言書寫。只輸出摘要本身。',
     messages: [{ role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() }],
   };
   const res = await completeSimple(model, ctx, { maxTokens: Math.floor(0.8 * (reserveTokens || 2000)), apiKey, cacheRetention: cacheRetentionFor(model) });

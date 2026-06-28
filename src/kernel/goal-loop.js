@@ -4,7 +4,7 @@ import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { cacheRetentionFor } from './provider.js';
 
 const JUDGE_SYS = '你是嚴格的驗收員。依「目標」與「對話進展」判斷目標是否已達成。' +
-  '只輸出 JSON：{"done": true|false, "remaining": "若未達成，還差什麼（一句）"}。不要任何多餘文字。';
+  '只輸出 JSON：{"done": true|false, "remaining": "若未達成，還差什麼（一句，用「目標」的語言書寫）"}。不要任何多餘文字。';
 
 const asText = (m) => (Array.isArray(m.content) ? m.content.filter((c) => c.type === 'text').map((c) => c.text).join(' ') : String(m?.content || ''));
 

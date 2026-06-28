@@ -76,6 +76,40 @@ const DEFAULT_EPISODE_GUIDE =
 const DEFAULT_OUTPUT_GUIDE =
   '產出檔案時：最終成品放工作目錄根、用清楚好懂的檔名(如 report.md、budget.csv，別用 tmp_3.txt)；中間/暫存檔(下載、草稿、解壓內容、爬到的原始資料)一律放 tmp/ 目錄——那是過程檔，不算成品也可能被清掉。';
 
+// 語系驅動的語言提示：依使用者輸入偵測語系，注入「該語言」的具體指令（具體「全程用 X」> 通用「跟隨使用者」，
+// 能壓過中文 prompt 的體量）。這些指令使用者永遠看不到；輸出語言跟著使用者走 → 中文需求全程中文、English all in English。
+function detectLang(text = '') {
+  const s = String(text);
+  if (/[぀-ヿ]/.test(s)) return 'ja';                  // 日文假名
+  if (/[가-힯]/.test(s)) return 'ko';                  // 韓文諺文
+  if (/[㐀-䶿一-鿿]/.test(s)) return 'zh';     // 漢字 → 視為中文
+  return 'en';
+}
+const LANG_DIRECTIVE = {
+  zh: '【語言】全程使用繁體中文：你的回覆、思考、進度與驗收敘述、摘要、成品檔案內容一律用繁體中文（除非使用者明確要求其他語言）。',
+  en: '[Language] Respond ONLY in English for everything: your replies, reasoning, progress/verification narration, summaries, and deliverable file contents (unless the user explicitly asks for another language).',
+  ja: '[言語] 返信・思考・進捗・検証の説明・要約・成果物の内容はすべて日本語で出力してください（ユーザーが他の言語を明示しない限り）。',
+  ko: '[언어] 답변·사고·진행/검증 설명·요약·결과물 내용을 모두 한국어로 작성하세요(사용자가 다른 언어를 명시하지 않는 한).',
+};
+const langDirectiveFor = (lang) => (LANG_DIRECTIVE[lang] || `[Language] Respond only in "${lang}" for all output unless the user asks otherwise.`) + '\n\n';
+
+// goal loop 指令外殼：依語系給模板，別對英文目標餵中文鷹架（鷹架語言也會帶偏輸出）。zh/en 為主，其餘退 en。
+const GOAL_TEMPLATES = {
+  zh: {
+    start: (g) => `目標：${g}\n\n請著手完成這個目標；可自由使用工具（讀寫檔/跑命令/抓網頁/子 agent…）。完成後簡述你做了什麼、如何驗證。`,
+    retry: (g, rem) => `目標尚未達成。驗收回饋：${rem}\n請繼續完成目標：${g}`,
+    broken: (g) => `（驗收暫時無法判定）請繼續完成目標並自我檢查：${g}`,
+    steerHead: '\n\n[使用者中途補充，請納入考量並據此調整]\n',
+  },
+  en: {
+    start: (g) => `Goal: ${g}\n\nGet this goal done; use any tools you need (read/write files, run commands, fetch the web, sub-agents…). When finished, briefly state what you did and how you verified it.`,
+    retry: (g, rem) => `The goal is not done yet. Reviewer feedback: ${rem}\nKeep working to complete the goal: ${g}`,
+    broken: (g) => `(Verification temporarily unavailable.) Keep completing the goal and self-check: ${g}`,
+    steerHead: '\n\n[Mid-task additions from the user — take them into account and adjust]\n',
+  },
+};
+const goalTemplatesFor = (lang) => GOAL_TEMPLATES[lang] || GOAL_TEMPLATES.en;
+
 // 把 sandboxable 工具的命令在執行期包進 Seatbelt（macOS OS 級隔離）。
 // 非 macOS / 沙箱關閉 / 無 command → wrapWithSeatbelt 回 null，跑原命令（仍受第 5 格靜態策略保護）。
 function wrapSandboxable(tool, { cwd, getSandbox, getSandboxConfig }) {
@@ -344,8 +378,10 @@ export function createKernel(pack, config = {}) {
       const streamFn = config.streamFn || (await import('./provider.js')).defaultStreamFn();
       const model = config.model;
 
+      // 語系驅動：偵測語言→注入該語言的具體指令在最前面（opts.lang > config.lang > 自動偵測）。
+      const lang = opts.lang || config.lang || detectLang(input);
       // 自動相關性召回：把與本輪 input 最相關的過往情節注入 prompt（只 top-K,不全量倒）
-      const turnSystemPrompt = systemPrompt + (config.recallEpisodes === false ? '' : episodes.recallSection(input));
+      const turnSystemPrompt = langDirectiveFor(lang) + systemPrompt + (config.recallEpisodes === false ? '' : episodes.recallSection(input));
 
       const agent = new Agent({
         initialState: {
@@ -434,8 +470,11 @@ export function createKernel(pack, config = {}) {
       if (!config.model) throw new Error('runGoal 需要 config.model。');
       const maxRounds = opts.maxRounds || 12;
       const NO_PROGRESS_CAP = 3;
+      // 語系從「原始目標」鎖定整個 outcome（別讓中途中文回饋把英文任務帶偏）。opts.lang > config.lang > 偵測。
+      const lang = opts.lang || config.lang || detectLang(goal);
+      const T = goalTemplatesFor(lang);
       let history = opts.history || [];
-      let instruction = `目標：${goal}\n\n請著手完成這個目標；可自由使用工具（讀寫檔/跑命令/抓網頁/子 agent…）。完成後簡述你做了什麼、如何驗證。`;
+      let instruction = T.start(goal);
       let lastRemaining = null;
       let noProgress = 0;
       let verifyErrors = 0;
@@ -445,9 +484,9 @@ export function createKernel(pack, config = {}) {
         // 使用者中途補充（steering）：把上一輪之間累積的補充折進這一輪指令（回合內的即時補充走 agent.steer）。
         if (opts.drainSteer) {
           const extra = opts.drainSteer();
-          if (extra && extra.length) instruction += '\n\n[使用者中途補充，請納入考量並據此調整]\n' + extra.map((s) => `- ${s}`).join('\n');
+          if (extra && extra.length) instruction += T.steerHead + extra.map((s) => `- ${s}`).join('\n');
         }
-        const r = await api.runTurn(instruction, { history, onEvent: opts.onEvent, onAgent: opts.onAgent });
+        const r = await api.runTurn(instruction, { history, onEvent: opts.onEvent, onAgent: opts.onAgent, lang });
         history = r.messages;
         if (r.aborted) return { done: false, aborted: true, rounds: round, history };
         let apiKey; try { apiKey = await config.getApiKey(config.model.provider); } catch { /* 略 */ }
@@ -461,7 +500,7 @@ export function createKernel(pack, config = {}) {
         if (v.error) {
           verifyErrors += 1;
           if (verifyErrors >= 3) return { done: false, verifyBroken: true, rounds: round, history };
-          instruction = `（驗收暫時無法判定）請繼續完成目標並自我檢查：${goal}`;
+          instruction = T.broken(goal);
           continue;
         }
         verifyErrors = 0;
@@ -470,7 +509,7 @@ export function createKernel(pack, config = {}) {
         if (rem && rem === lastRemaining) { if (++sameFeedback >= 2) return { done: false, stalled: true, rounds: round, history }; }
         else sameFeedback = 0;
         lastRemaining = rem;
-        instruction = `目標尚未達成。驗收回饋：${v.remaining}\n請繼續完成目標：${goal}`;
+        instruction = T.retry(goal, v.remaining);
       }
       return { done: false, maxedOut: true, rounds: maxRounds, history };
     },
