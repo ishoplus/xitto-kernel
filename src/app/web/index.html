@@ -9,14 +9,17 @@
   * { box-sizing:border-box; }
   body { margin:0; font:15px/1.6 -apple-system,"PingFang TC","Microsoft JhengHei",system-ui,sans-serif; background:var(--bg); color:var(--fg); }
   .wrap { max-width:1180px; margin:0 auto; padding:24px 22px 80px; }
-  /* 雙欄佈局：許願頁=主區+歷史側欄；工作台=檔案左+預覽右。窄螢幕自動收成單欄 */
-  .cols { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:26px; align-items:start; }
-  .cols2 { display:grid; grid-template-columns:340px minmax(0,1fr); gap:26px; align-items:start; }
-  /* 側欄/檔案列/預覽各自獨立內捲（max-height+overflow），避免 sticky 太高時底部捲不到 */
-  .side, .wbleft, .wbright { position:sticky; top:14px; max-height:calc(100vh - 28px); overflow:auto; }
-  .side h3, .wbleft h3 { margin-top:0; }
-  .wbright { min-height:120px; }
-  @media (max-width:860px){ .cols,.cols2{ grid-template-columns:1fr; } .side,.wbleft,.wbright{ position:static; max-height:none; overflow:visible; } }
+  /* 單頁佈局：頂部許願 + 左欄(歷史+檔案) + 主區(當前任務/成品/預覽共用)。窄螢幕收單欄 */
+  .layout { display:grid; grid-template-columns:300px minmax(0,1fr); gap:24px; align-items:start; margin-top:18px; }
+  .nav { position:sticky; top:14px; max-height:calc(100vh - 28px); display:flex; flex-direction:column; gap:16px; }
+  .navsec { display:flex; flex-direction:column; min-height:0; }
+  .navsec h3 { margin:0 0 8px; }
+  .hist-sec #history, .file-sec #wbfiles { overflow:auto; }      /* 兩段各自內捲,都到得了底 */
+  .hist-sec { flex:0 1 auto; max-height:42vh; } .hist-sec #history { max-height:38vh; }
+  .file-sec { flex:1 1 auto; min-height:0; } .file-sec #wbfiles { flex:1; }
+  .work { min-width:0; }
+  .welcome { padding:40px 16px; text-align:center; line-height:2; }
+  @media (max-width:860px){ .layout{ grid-template-columns:1fr; } .nav{ position:static; max-height:none; } .hist-sec,.hist-sec #history,.file-sec #wbfiles{ max-height:none; } }
   header { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
   header h1 { font-size:22px; margin:0; }
   header .sub { color:var(--dim); font-size:13px; }
@@ -73,9 +76,6 @@
   .hist:hover { border-color:var(--accent); }
   .hist .g { font-size:14px; } .hist .m { color:var(--dim); font-size:12px; }
   .empty { color:var(--dim); font-size:13px; }
-  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:14px 0 4px; }
-  .tab { padding:8px 16px; font-size:14px; color:var(--dim); cursor:pointer; border-bottom:2px solid transparent; }
-  .tab.active { color:var(--fg); border-bottom-color:var(--accent); }
   .wbrow { display:flex; align-items:center; gap:10px; padding:9px 12px; background:var(--card); border:1px solid var(--line); border-radius:8px; margin:6px 0; }
   .wbname { flex:1; color:var(--accent); cursor:pointer; font-size:14px; }
   .wbmeta { color:var(--dim); font-size:12px; }
@@ -127,38 +127,30 @@
     </div>
   </div>
 
-  <div class="tabs">
-    <span class="tab active" id="tab-wish" onclick="switchTab('wish')">許願</span>
-    <span class="tab" id="tab-wb" onclick="switchTab('wb')">📂 工作台</span>
+  <div class="ask">
+    <textarea id="goal" placeholder="說出你想完成的事⋯例如：把這個資料夾的 .md 整理成目錄 index.md；或抓 example.com 標題寫進 title.txt"></textarea>
+    <div class="row">
+      <select id="pack" title="領域"></select>
+      <span class="spacer"></span>
+      <button id="go">交辦 →</button>
+    </div>
   </div>
 
-  <div id="wishview" class="cols">
-    <div class="main">
-      <div class="ask">
-        <textarea id="goal" placeholder="例如：把這個資料夾的 .md 檔整理成一份目錄 index.md；或：抓 example.com 的標題寫進 title.txt"></textarea>
-        <div class="row">
-          <select id="pack" title="領域"></select>
-          <span class="spacer"></span>
-          <button id="go">交辦 →</button>
-        </div>
-      </div>
-      <div id="current"></div>
-    </div>
-    <aside class="side">
-      <h3>歷史成品</h3>
-      <div id="history"><div class="empty">還沒有任何任務。<br>左邊交辦一件事試試。</div></div>
+  <div class="layout">
+    <aside class="nav">
+      <section class="navsec hist-sec">
+        <h3>歷史成品</h3>
+        <div id="history"><div class="empty">還沒有任何任務。上面交辦一件事試試。</div></div>
+      </section>
+      <section class="navsec file-sec">
+        <h3>📂 檔案</h3>
+        <div id="wbfiles"></div>
+      </section>
     </aside>
-  </div>
-
-  <div id="workbench" class="cols2" style="display:none">
-    <div class="wbleft">
-      <h3>📂 工作台</h3>
-      <div id="wbfiles"></div>
-    </div>
-    <div class="wbright">
-      <div id="wbhint" class="empty">← 點左邊的檔案，在這裡預覽</div>
-      <div class="viewer" id="wbview" style="display:none"></div>
-    </div>
+    <main class="work">
+      <div id="current"><div class="empty welcome">👋 上面說出你想完成的事，交給它去做。<br>左邊看歷史成品與工作區檔案，點任一個在這裡展開。</div></div>
+      <div class="viewer" id="fview" style="display:none"></div>
+    </main>
   </div>
 </div>
 
@@ -195,7 +187,8 @@ let spaces = JSON.parse(localStorage.getItem("xk_spaces")||'["default"]');
 let curSpace = localStorage.getItem("xk_space")||"default";
 const spaceLabel=s=>s.startsWith("/")?("📁 "+(s.split("/").filter(Boolean).pop()||s)):s;
 function renderSpaces(){ $("#space").innerHTML = spaces.map(s=>`<option value="${esc(s)}" ${s===curSpace?"selected":""}>${esc(spaceLabel(s))}</option>`).join(""); }
-$("#space").onchange = () => { curSpace=$("#space").value; localStorage.setItem("xk_space",curSpace); $("#current").innerHTML=""; loadHistory(); if($("#workbench").style.display!=="none"){ wbSub=""; loadWorkbench(); } };
+function refreshAll(){ $("#fview").style.display="none"; wbSub=""; loadHistory(); loadFiles(); }
+$("#space").onchange = () => { curSpace=$("#space").value; localStorage.setItem("xk_space",curSpace); $("#current").innerHTML=""; refreshAll(); };
 $("#newspace").onclick = () => {
   const raw=(prompt(LOCAL?"新專案：輸入名稱，或貼上一個真實資料夾的絕對路徑（本地模式會就地改該資料夾的檔，像 Claude Code）":"新專案名稱（英數/底線/連字號）：")||"").trim();
   if(!raw) return;
@@ -203,7 +196,7 @@ $("#newspace").onclick = () => {
   if(!n) return;
   if(!spaces.includes(n)) spaces.push(n);
   curSpace=n; localStorage.setItem("xk_spaces",JSON.stringify(spaces)); localStorage.setItem("xk_space",curSpace);
-  renderSpaces(); $("#current").innerHTML=""; loadHistory();
+  renderSpaces(); $("#current").innerHTML=""; refreshAll();
 };
 renderSpaces();
 
@@ -221,7 +214,7 @@ async function fsGo(p){
 }
 function fsHome(){ fsGo(window._fsHome||null); }
 function closeFs(){ $("#fsmodal").style.display="none"; }
-function chooseFs(){ if(!fsPath) return; const p=fsPath; if(!spaces.includes(p)) spaces.push(p); curSpace=p; localStorage.setItem("xk_spaces",JSON.stringify(spaces)); localStorage.setItem("xk_space",curSpace); renderSpaces(); closeFs(); $("#current").innerHTML=""; loadHistory(); }
+function chooseFs(){ if(!fsPath) return; const p=fsPath; if(!spaces.includes(p)) spaces.push(p); curSpace=p; localStorage.setItem("xk_spaces",JSON.stringify(spaces)); localStorage.setItem("xk_space",curSpace); renderSpaces(); closeFs(); $("#current").innerHTML=""; refreshAll(); }
 
 // 極簡 markdown 渲染（零依賴、可離線；夠用於 agent 產的報告）
 function mdRender(src){
@@ -275,33 +268,23 @@ async function renderFile(urlFn, encPath, name, sel){
   v.innerHTML=bar+body;
 }
 function viewFile(id, encPath, name){ return renderFile(taskFileUrl(id), encPath, name, "#fview"); }
-function wbView(encPath, name){ const h=$("#wbhint"); if(h) h.style.display="none"; return renderFile(wsFileUrl(curSpace), encPath, name, "#wbview"); }
+function wbView(encPath, name){ return renderFile(wsFileUrl(curSpace), encPath, name, "#fview"); }
 
-// 工作台分頁：逐層瀏覽 / 看 / 刪
+// 左欄檔案瀏覽器：逐層瀏覽 / 看（→ 主區 #fview） / 刪
 function fmtSize(n){ return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"; }
 let wbSub="";
-function wbNav(s){ wbSub=decodeURIComponent(s); loadWorkbench(); }
-function wbUp(){ wbSub=wbSub.includes("/")?wbSub.slice(0,wbSub.lastIndexOf("/")):""; loadWorkbench(); }
-async function loadWorkbench(){
-  $("#wbview").style.display="none"; { const h=$("#wbhint"); if(h) h.style.display=""; }
+function wbNav(s){ wbSub=decodeURIComponent(s); loadFiles(); }
+function wbUp(){ wbSub=wbSub.includes("/")?wbSub.slice(0,wbSub.lastIndexOf("/")):""; loadFiles(); }
+async function loadFiles(){
   const r=await api("/v1/workspaces/files?ws="+encodeURIComponent(curSpace)+"&sub="+encodeURIComponent(wbSub)).then(r=>r.json()).catch(()=>({dirs:[],files:[]}));
-  const root=curSpace.startsWith("/")?curSpace:curSpace;
-  let html=`<div class="loc">📂 ${esc(root)}${wbSub?" / "+esc(wbSub):""}</div>`;
+  let html=wbSub?`<div class="loc">📂 ${esc(wbSub)}</div>`:"";
   if(wbSub) html+=`<div class="wbrow up" onclick="wbUp()"><span class="wbname">⬆ 上一層</span></div>`;
   html+=(r.dirs||[]).map(d=>`<div class="wbrow" onclick="wbNav('${encodeURIComponent((wbSub?wbSub+'/':'')+d)}')"><span class="wbname">📁 ${esc(d)}/</span></div>`).join("");
   html+=(r.files||[]).map(f=>{const full=(wbSub?wbSub+'/':'')+f.name;return `<div class="wbrow"><span class="wbname" onclick="wbView('${encodeURIComponent(full)}','${esc(f.name)}')">📄 ${esc(f.name)}</span><span class="wbmeta">${fmtSize(f.size)}</span><span class="wbdel" title="刪除" onclick="wbDelete('${encodeURIComponent(full)}','${esc(f.name)}')">🗑</span></div>`;}).join("");
-  if(!(r.dirs||[]).length && !(r.files||[]).length) html+=`<div class="empty">（${wbSub?"這個資料夾是空的":"這個專案還沒有檔案，去「許願」交辦一件事吧"}）</div>`;
+  if(!(r.dirs||[]).length && !(r.files||[]).length) html+=`<div class="empty">（${wbSub?"空資料夾":"還沒有檔案"}）</div>`;
   $("#wbfiles").innerHTML=html;
 }
-async function wbDelete(encPath, name){ if(!confirm("刪除 "+name+"？此動作無法復原。")) return; await api("/v1/workspaces/file?ws="+encodeURIComponent(curSpace)+"&path="+encodeURIComponent(decodeURIComponent(encPath)),{method:"DELETE"}); loadWorkbench(); }
-function switchTab(name){
-  const wish=name==="wish";
-  $("#wishview").style.display=wish?"":"none";
-  $("#workbench").style.display=wish?"none":"";
-  $("#tab-wish").classList.toggle("active",wish);
-  $("#tab-wb").classList.toggle("active",!wish);
-  if(!wish){ wbSub=""; loadWorkbench(); }
-}
+async function wbDelete(encPath, name){ if(!confirm("刪除 "+name+"？此動作無法復原。")) return; await api("/v1/workspaces/file?ws="+encodeURIComponent(curSpace)+"&path="+encodeURIComponent(decodeURIComponent(encPath)),{method:"DELETE"}); loadFiles(); }
 
 let activeId = null, polling = null;
 
@@ -312,6 +295,7 @@ $("#go").onclick = async () => {
   $("#go").disabled = false;
   if (r.error) { alert(r.error); return; }
   $("#goal").value = "";
+  $("#fview").style.display="none"; expandedLog=false;
   activeId = r.taskId;
   poll();
 };
@@ -327,7 +311,7 @@ async function poll() {
   const t = await api("/v1/tasks/"+activeId).then(r=>r.json());
   liveTask = t;
   renderCurrent(t);
-  if (t.status==="done" || t.status==="error") { loadHistory(); return; }
+  if (t.status==="done" || t.status==="error") { loadHistory(); loadFiles(); return; }
   if (t.status==="needs-input") return; // 等使用者回答
   polling = setTimeout(poll, 1200);
 }
@@ -349,7 +333,6 @@ function renderCurrent(t) {
     ${t.status==="error"?`<div class="summary">⚠ ${esc(t.error)}</div>`:""}
     ${files.length?`<div class="files">📦 成品：${files.map(([f,k])=>`<span class="file ${k==="mod"?"mod":""}" onclick="viewFile('${t.taskId}','${encodeURIComponent(f)}','${esc(f)}')">${k==="mod"?"~":"+"} ${esc(f)}</span>`).join("")}</div>`:""}
     ${t.result&&t.result.workspaceDir?`<div class="loc">📂 檔案位置：<code title="點擊複製" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(t.result.workspaceDir)}')">${esc(t.result.workspaceDir)}</code></div>`:""}
-    <div class="viewer" id="fview" style="display:none"></div>
     ${t.status==="done"?`<div class="followup">
       <button class="ghost" onclick="toggleFollowup()">↳ 繼續／調整這個成果</button>
       <div id="fubox" style="display:none;margin-top:8px">
@@ -386,7 +369,7 @@ async function loadHistory() {
 }
 async function openTask(id){ activeId=id; const t=await api("/v1/tasks/"+id).then(r=>r.json()); liveTask=t; renderCurrent(t); if(t.status==="running"||t.status==="queued"){poll();} window.scrollTo({top:0,behavior:"smooth"}); }
 
-loadHistory();
+loadHistory(); loadFiles();
 </script>
 </body>
 </html>
