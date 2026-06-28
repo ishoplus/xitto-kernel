@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0
+
+- **持久工作空間（許願台成品間的關係）**：每個成品仍是獨立對話,但共用一個持久工作空間。
+  - server workdir 改綁 `workspace`（`.xitto-server/ws/<workspace>`,預設 `default`）而非每 job 丟棄式 sessionId
+  - 效果:① 檔案留存,後續任務能接續前面成果;② **五層沉澱跨成品累積**(偏好/技能/經驗/信任)——越用越懂你
+  - history 仍每 job 獨立（不續接,避免 context 暴脹）;`workspace` 可在 POST 指定（多使用者隔離）
+  - 交付檔案端點與 webhook 改用 workspace 解析；result 帶 `workspace`
+- **待辦打勾**：`todo_write` 的清單進 `progress.todos`,UI 顯示 ☐/◐/☑（把「未知時長」變「可見剩餘步數」,對標 Claude Code）
+- **可中斷（取消鈕）**：`POST /v1/tasks/:id/cancel` → abort 進行中 agent / 移除排隊 / 解除待答；UI「停止」鈕;狀態 `cancelled`
+- 5 個新測試（取消 running/queued/已結束/待答 + todo 進度）+ 真實 server 端到端
+  （Job2 接續 Job1 的檔案與記憶、todo 打勾、長任務中途取消）
+- 緣由:對標 Claude Code 處理「等待焦慮」——liveness(心跳)+ transparency(進度/待辦)+ control(可中斷)
+
 ## 0.4.6
 
 - **許願台「活著的證明」**：解決「只顯示進行中、不知道是否真的在跑」。

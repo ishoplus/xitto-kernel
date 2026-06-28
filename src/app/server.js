@@ -66,8 +66,9 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
     t.events.push(ev);
     if (t.events.length > maxEvents) t.events.shift();
     // 進度追蹤（給 UI 顯示「正在做什麼」,不要只顯示進行中；排除 text 雜訊）
-    const p = (t.progress ||= { steps: 0, round: 0, maxRounds: 0, recent: [], phase: 'starting', thinking: '' });
-    if (ev.type === 'tool') { p.steps++; p.phase = 'acting'; p.thinking = ''; t._textbuf = ''; p.recent.push({ name: ev.name, args: ev.args }); if (p.recent.length > 6) p.recent.shift(); }
+    const p = (t.progress ||= { steps: 0, round: 0, maxRounds: 0, recent: [], phase: 'starting', thinking: '', todos: [] });
+    if (ev.type === 'tool' && ev.name === 'todo_write') { if (Array.isArray(ev.args?.todos)) p.todos = ev.args.todos; } // 待辦清單（給 UI 打勾）
+    else if (ev.type === 'tool') { p.steps++; p.phase = 'acting'; p.thinking = ''; t._textbuf = ''; p.recent.push({ name: ev.name, args: ev.args }); if (p.recent.length > 6) p.recent.shift(); }
     else if (ev.type === 'text') { p.phase = 'thinking'; t._textbuf = ((t._textbuf || '') + (ev.delta || '')).slice(-400); p.thinking = t._textbuf.replace(/\s+/g, ' ').trim().slice(-150); }
     else if (ev.type === 'round') { p.round = ev.round; if (ev.maxRounds) p.maxRounds = ev.maxRounds; p.thinking = ''; t._textbuf = ''; }
     else if (ev.type === 'phase') p.phase = ev.phase;
@@ -91,10 +92,11 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
       t.status = 'running'; t.startedAt = new Date().toISOString();
       emit(t, { type: 'status', status: 'running' });
       Promise.resolve()
-        .then(() => runJob(t.spec, (ev) => emit(t, ev), makeAsk(t)))
+        .then(() => runJob(t.spec, (ev) => emit(t, ev), makeAsk(t), (agent) => { t._agent = agent; }))
         .then((result) => { t.status = 'done'; t.result = result; })
         .catch((e) => { t.status = 'error'; t.error = e.message || String(e); })
         .finally(() => {
+          if (t._cancelling && t.status !== 'error') t.status = 'cancelled'; // 使用者中斷
           t.finishedAt = new Date().toISOString();
           emit(t, { type: 'end', status: t.status, result: t.result, error: t.error });
           active--;
@@ -117,6 +119,22 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
     result: (id) => { const t = tasks.get(id); return t ? { ...view(t), result: t.result } : null; },
     list: () => [...tasks.values()].map(view),
     subscribe(id, fn) { let s = subs.get(id); if (!s) { s = new Set(); subs.set(id, s); } s.add(fn); return () => s.delete(fn); },
+    // 中斷任務（取消鈕）：排隊中 → 直接移除；進行中 → abort agent；待答中 → 解除阻塞後 abort。
+    cancel(id) {
+      const t = tasks.get(id);
+      if (!t || ['done', 'error', 'cancelled'].includes(t.status)) return false;
+      t._cancelling = true;
+      if (t.status === 'queued') {
+        const i = queue.indexOf(t); if (i >= 0) queue.splice(i, 1);
+        t.status = 'cancelled'; t.finishedAt = new Date().toISOString();
+        emit(t, { type: 'end', status: 'cancelled' });
+        return true;
+      }
+      if (typeof t._answer === 'function') { const r = t._answer; t._answer = null; t.pending = null; r(''); } // 解除待答阻塞
+      if (t._agent && typeof t._agent.abort === 'function') { try { t._agent.abort(); } catch { /* 略 */ } }
+      emit(t, { type: 'cancelling' });
+      return true;
+    },
     // 回答一個待答任務 → 解除暫停、續跑。回 true 表示有對應的待答問題。
     answer(id, text) {
       const t = tasks.get(id);
@@ -152,24 +170,27 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
 
   // 共用：跑一輪/一目標，回傳 { sessionId, text, usage, rounds, done }；onEvent 收原始 kernel 事件；
   // ask（可選）= 澄清通道,讓 agent 在背景任務中暫停問使用者。
-  async function runKernel(spec, onEvent, ask) {
+  async function runKernel(spec, onEvent, ask, onAgent) {
     const make = PACKS[spec.pack || 'general'];
     if (!make) throw new Error(`未知 pack「${spec.pack}」，可用：${Object.keys(PACKS).join(', ')}`);
+    // 持久工作空間（B 模型）：workdir 綁 workspace（非 sessionId）→ 檔案留存 + 五層沉澱跨成品累積。
+    const workspace = (spec.workspace || 'default').replace(/[^a-zA-Z0-9_-]/g, '') || 'default';
+    const workdir = join(baseDir, 'ws', workspace); mkdirSync(workdir, { recursive: true });
+    // history 仍綁 sessionId（每個成品獨立對話：無 sessionId → 全新,不續接,避免 context 暴脹/混淆）
     const sessionId = spec.sessionId || newId();
-    const sess = sessions.get(sessionId) || { pack: spec.pack || 'general', history: [] };
-    const workdir = join(baseDir, sessionId); mkdirSync(workdir, { recursive: true });
-    const kernel = createKernel(make({ cwd: workdir }), { cwd: workdir, model, getApiKey, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes', ...(ask ? { askUser: ask } : {}) });
+    const sess = sessions.get(sessionId) || { history: [] };
+    const kernel = createKernel(make({ cwd: workdir }), { cwd: workdir, model, getApiKey, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes', autoExtractMemory: true, ...(ask ? { askUser: ask } : {}) });
     const usage = { input: 0, output: 0 };
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
     if (spec.mode === 'goal') {
       // 結果導向：回傳交付物（做了什麼 + 產出的檔案 + 是否達成），對話只是過程
-      const o = await kernel.runOutcome(spec.goal || spec.input || '', { history: sess.history, onEvent: wrapped, onRound: (i) => wrapped({ type: 'round', round: i.round, maxRounds: i.maxRounds }) });
+      const o = await kernel.runOutcome(spec.goal || spec.input || '', { history: sess.history, onEvent: wrapped, onAgent, onRound: (i) => wrapped({ type: 'round', round: i.round, maxRounds: i.maxRounds }) });
       sess.history = o.history || []; sessions.set(sessionId, sess);
-      return { sessionId, text: o.summary || lastText(sess.history), usage, rounds: o.rounds, done: o.done, artifacts: o.artifacts };
+      return { sessionId, workspace, text: o.summary || lastText(sess.history), usage, rounds: o.rounds, done: o.done, aborted: o.aborted, artifacts: o.artifacts };
     }
-    const r = await kernel.runTurn(spec.input || '', { history: sess.history, onEvent: wrapped });
+    const r = await kernel.runTurn(spec.input || '', { history: sess.history, onEvent: wrapped, onAgent });
     sess.history = r.messages || r.history || []; sessions.set(sessionId, sess);
-    return { sessionId, text: r.text ?? lastText(sess.history), usage, rounds: r.rounds, done: r.done };
+    return { sessionId, workspace, text: r.text ?? lastText(sess.history), usage, rounds: r.rounds, done: r.done };
   }
 
   // 完成通知：POST 結果到 spec.webhook（http/https），單次嘗試、失敗記日誌不重試（PoC）
@@ -183,7 +204,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
 
   const tasks = createTaskStore({
     concurrency,
-    runJob: (spec, emit, ask) => runKernel(spec, (ev) => { const m = mapEvent(ev); if (m) emit(m); }, ask),
+    runJob: (spec, emit, ask, onAgent) => runKernel(spec, (ev) => { const m = mapEvent(ev); if (m) emit(m); }, ask, onAgent),
     onFinish: (task) => { log({ task: task.id, pack: task.spec.pack, mode: task.spec.mode || 'turn', status: task.status, ms: task.startedAt ? Date.parse(task.finishedAt) - Date.parse(task.startedAt) : 0 }); fireWebhook(task); },
   });
 
@@ -246,12 +267,20 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       return json(res, 200, { ok: true, taskId: mAns[1], status: 'running' });
     }
 
+    // 中斷任務（取消鈕）：控制權在使用者手上,降低「啟動了控制不了的東西」的焦慮
+    const mCancel = path.match(/^\/v1\/tasks\/([^/]+)\/cancel$/);
+    if (req.method === 'POST' && mCancel) {
+      const ok = tasks.cancel(mCancel[1]);
+      log({ task: mCancel[1], action: 'cancel', ok });
+      return ok ? json(res, 200, { ok: true, taskId: mCancel[1] }) : json(res, 409, { error: '無法中斷（任務不存在或已結束）' });
+    }
+
     // 取交付物檔案內容（讓「成品」可被瀏覽/下載）
     const mFile = path.match(/^\/v1\/tasks\/([^/]+)\/file$/);
     if (req.method === 'GET' && mFile) {
-      const t = tasks.get(mFile[1]); const sid = t?.result?.sessionId;
-      if (!sid) return json(res, 404, { error: '無交付物（任務尚未完成?）' });
-      const full = resolveArtifact(join(baseDir, sid), url.searchParams.get('path'));
+      const t = tasks.get(mFile[1]); const ws = t?.result?.workspace;
+      if (!ws) return json(res, 404, { error: '無交付物（任務尚未完成?）' });
+      const full = resolveArtifact(join(baseDir, 'ws', ws), url.searchParams.get('path'));
       if (!full) return json(res, 400, { error: 'path 不合法' });
       if (!existsSync(full)) return json(res, 404, { error: '檔案不存在' });
       try { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(readFileSync(full)); }
@@ -287,7 +316,7 @@ export function startServer() {
     console.log(`🪄 許願台：http://localhost:${port}/  （瀏覽器打開即用——說出目標、交付成品）`);
     console.log(`xitto-kernel server · model ${model.id} · 沙箱 ${sandbox ? '開' : '關'} · 背景並發 ${concurrency}`);
     console.log(`token: ${token === 'dev-token' ? 'dev-token（請設 XITTO_SERVER_TOKEN）' : '(已設定)'}`);
-    console.log('API：POST /v1/run · /v1/stream · /v1/tasks · /v1/tasks/:id/answer｜GET /v1/tasks[/:id[/events|/file]] · /health');
+    console.log('API：POST /v1/run · /v1/stream · /v1/tasks · /v1/tasks/:id/{answer,cancel}｜GET /v1/tasks[/:id[/events|/file]] · /health');
   });
   return server;
 }
