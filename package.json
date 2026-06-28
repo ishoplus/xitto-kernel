@@ -34,6 +34,7 @@
     "bin",
     "docs",
     "README.md",
+    "README.zh-TW.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
