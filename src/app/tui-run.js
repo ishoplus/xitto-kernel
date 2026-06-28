@@ -8,8 +8,27 @@ import { createKernel } from '../kernel/index.js';
 import { createStore, mountTui, gutter } from './tui.js';
 import { md } from './md-render.js';
 
-const summarize = (args) => { const s = JSON.stringify(args ?? {}); return s.length > 60 ? s.slice(0, 57) + '…' : s; };
-const Y = (s) => `\x1b[33m${s}\x1b[39m`; const G = (s) => `\x1b[90m${s}\x1b[39m`; const R = (s) => `\x1b[31m${s}\x1b[39m`; const C = (s) => `\x1b[36m${s}\x1b[39m`;
+// 取最有意義的參數當摘要（像 Claude Code：bash(npm test) 而非 bash({"command":...})）
+export const summarize = (args) => {
+  if (!args || typeof args !== 'object') return '';
+  const v = args.command ?? args.path ?? args.pattern ?? args.query ?? args.url ?? args.name ?? args.topic ?? args.file;
+  if (v != null && v !== '') return String(v).replace(/\s+/g, ' ').slice(0, 60);
+  const s = JSON.stringify(args); return s === '{}' ? '' : (s.length > 60 ? s.slice(0, 57) + '…' : s);
+};
+const Y = (s) => `\x1b[33m${s}\x1b[39m`; const G = (s) => `\x1b[90m${s}\x1b[39m`; const R = (s) => `\x1b[31m${s}\x1b[39m`; const C = (s) => `\x1b[36m${s}\x1b[39m`; const Gn = (s) => `\x1b[32m${s}\x1b[39m`;
+
+// 工具卡（對標 Claude Code）：⏺ name(args) 標頭 + ⎿ 多行結果,過長摺疊成「… +N 行」。純函數,可測。
+export function toolBlock(name, summary, result, isError) {
+  const head = Y(`⏺ ${name}`) + (summary ? G(`(${summary})`) : '');
+  const raw = (result?.content || []).map((c) => c.text || '').join('\n').replace(/\s+$/, '');
+  if (!raw.trim()) return head + '\n' + (isError ? R('  ⎿ ✗') : Gn('  ⎿ ✓'));
+  const lines = raw.split('\n');
+  const MAX = isError ? 12 : 6;
+  const shown = lines.slice(0, MAX).map((l, i) => '  ' + (i === 0 ? '⎿ ' : '  ') + l.slice(0, 200));
+  let out = head + '\n' + (isError ? R : G)(shown.join('\n'));
+  if (lines.length > MAX) out += '\n' + G(`     … +${lines.length - MAX} 行`);
+  return out;
+}
 
 const SLASH = { '/help': '說明', '/goal': '目標循環', '/sandbox': '沙箱', '/auto': '自動核准', '/plan': '計劃模式', '/undo': '撤銷', '/tools': '工具', '/memory': '記憶', '/sessions': '對話', '/resume': '續接', '/cost': '成本', '/clear': '清除', '/exit': '離開' };
 
@@ -48,10 +67,7 @@ export function runTui({ pack, model, getApiKey, sandbox = false, resume = null 
   const persist = () => { try { kernel.session.save(sessionId, history); } catch { /* 略 */ } };
 
   // ── kernel 事件 → store ──
-  const toolBlock = (name, result, isError) => {
-    const text = (result?.content || []).map((c) => c.text || '').join(' ').replace(/\s+/g, ' ').trim();
-    return Y(`⏺ ${name}`) + '\n' + (isError ? R('  ⎿ ✗ ' + text.slice(0, 200)) : G('  ⎿ ✓ ' + text.slice(0, 120)));
-  };
+  let pendingSummary = '';
   const onEvent = (ev) => {
     switch (ev.type) {
       case 'message_update': {
@@ -68,14 +84,16 @@ export function runTui({ pack, model, getApiKey, sandbox = false, resume = null 
       case 'tool_execution_start':
         store.finalizeLive();
         if (ev.toolName === 'todo_write' && Array.isArray(ev.args?.todos)) {
-          store.pushBlock(C('☑ 待辦') + '\n' + ev.args.todos.map((t) => '  ' + (t.status === 'completed' ? '\x1b[32m☑\x1b[39m ' + G(t.content) : t.status === 'in_progress' ? Y('◐ ') + t.content : G('☐ ' + t.content))).join('\n'));
+          store.pushBlock(C('☑ 待辦') + '\n' + ev.args.todos.map((t) => '  ' + (t.status === 'completed' ? Gn('☑ ') + G(t.content) : t.status === 'in_progress' ? Y('◐ ') + t.content : G('☐ ' + t.content))).join('\n'));
         } else {
-          store.setTool({ name: ev.toolName, summary: summarize(ev.args) });
+          pendingSummary = summarize(ev.args);
+          store.setTool({ name: ev.toolName, summary: pendingSummary });
         }
         break;
       case 'tool_execution_end':
         store.setTool(null);
-        if (ev.toolName !== 'todo_write') store.pushBlock(toolBlock(ev.toolName, ev.result, ev.isError));
+        if (ev.toolName !== 'todo_write') store.pushBlock(toolBlock(ev.toolName, pendingSummary, ev.result, ev.isError));
+        pendingSummary = '';
         break;
       case 'verify_start': store.finalizeLive(); store.pushBlock(G('  🔎 自動驗收…')); break;
       case 'verify_end': store.pushBlock(ev.ok ? G('  ✓ 驗收通過') : Y('  ✗ 驗收失敗，修正中…')); break;

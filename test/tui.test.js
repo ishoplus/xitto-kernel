@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { createStore, App, gutter, backspaceAt } from '../src/app/tui.js';
+import { summarize, toolBlock } from '../src/app/tui-run.js';
+const strip = (s) => s.replace(/\x1b\[[0-9]+m/g, '');
 
 const noopHandlers = { onSubmit() {}, onCtrlC() {}, onEscape() {}, getHistory: () => [], complete: () => null, onSelectChoice() {}, onSelectCancel() {}, onSelectAbort() {} };
 
@@ -35,6 +37,26 @@ test('store：權限 Select 模式切換', () => {
   assert.ok(store.get().selection);
   store.clearSelect();
   assert.equal(store.get().selection, null);
+});
+
+test('summarize：取有意義的參數而非全 JSON（像 Claude Code）', () => {
+  assert.equal(summarize({ command: 'npm test' }), 'npm test');
+  assert.equal(summarize({ path: 'src/a.js', content: '...' }), 'src/a.js');
+  assert.equal(summarize({}), '');
+  assert.equal(summarize(null), '');
+});
+
+test('toolBlock：⏺ 標頭(args) + ⎿ 多行 + 摺疊 +N 行', () => {
+  const r = { content: [{ type: 'text', text: Array.from({ length: 9 }, (_, i) => 'L' + i).join('\n') }] };
+  const out = strip(toolBlock('bash', 'npm test', r, false));
+  assert.match(out, /⏺ bash\(npm test\)/);
+  assert.match(out, /⎿ L0/);
+  assert.match(out, /L5/);            // 顯示前 6 行
+  assert.doesNotMatch(out, /L6/);     // 第 7 行起摺疊
+  assert.match(out, /… \+3 行/);      // 9 - 6 = 3
+  // 空結果 → ✓ / ✗ 標記
+  assert.match(strip(toolBlock('x', '', { content: [] }, false)), /⎿ ✓/);
+  assert.match(strip(toolBlock('x', '', { content: [] }, true)), /⎿ ✗/);
 });
 
 test('gutter / backspaceAt 純函數', () => {
