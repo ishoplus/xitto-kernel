@@ -42,7 +42,7 @@ xitto-kernel init
 **3. 跑內建 pack（互動 CLI）**
 ```bash
 xitto-kernel                  # coding agent（讀寫檔案、跑命令）
-xitto-kernel --tui            # 完整 Ink TUI（持久狀態列、串流、Esc 中斷、工具卡⏺/⎿、待辦☑；需真實終端）
+xitto-kernel --tui            # 完整 Ink TUI（持久狀態列、串流、Esc 中斷、工具卡⏺/⎿、彩色 diff、待辦☑；需真實終端）
 xitto-kernel --pack notes     # 筆記 / 知識庫 agent
 xitto-kernel --pack data-query
 xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱

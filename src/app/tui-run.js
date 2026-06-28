@@ -30,6 +30,18 @@ export function toolBlock(name, summary, result, isError) {
   return out;
 }
 
+// 彩色 diff 區塊（綠 + / 紅 -）：渲染 kernel 掛在 result._diff 的行級 diff。
+export function diffBlock(d) {
+  if (!d) return '';
+  const head = G('  ⎿ ') + Gn(`+${d.added}`) + ' ' + R(`-${d.removed}`) + G(' 行');
+  if (d.tooBig) return head + G('（差異過大,省略內容）');
+  const changed = (d.lines || []).filter((l) => l.t !== ' ');
+  if (!changed.length) return '';
+  const MAX = 30;
+  const body = changed.slice(0, MAX).map((l) => (l.t === '+' ? Gn('    + ' + l.s.slice(0, 200)) : R('    - ' + l.s.slice(0, 200)))).join('\n');
+  return head + '\n' + body + (changed.length > MAX ? '\n' + G(`     … +${changed.length - MAX} 行變更`) : '');
+}
+
 const SLASH = { '/help': '說明', '/goal': '目標循環', '/sandbox': '沙箱', '/auto': '自動核准', '/plan': '計劃模式', '/undo': '撤銷', '/tools': '工具', '/memory': '記憶', '/sessions': '對話', '/resume': '續接', '/cost': '成本', '/clear': '清除', '/exit': '離開' };
 
 export function runTui({ pack, model, getApiKey, sandbox = false, resume = null }) {
@@ -90,11 +102,19 @@ export function runTui({ pack, model, getApiKey, sandbox = false, resume = null 
           store.setTool({ name: ev.toolName, summary: pendingSummary });
         }
         break;
-      case 'tool_execution_end':
+      case 'tool_execution_end': {
         store.setTool(null);
-        if (ev.toolName !== 'todo_write') store.pushBlock(toolBlock(ev.toolName, pendingSummary, ev.result, ev.isError));
+        if (ev.toolName !== 'todo_write') {
+          const d = ev.result?._diff;
+          if (d && !ev.isError && (d.added || d.removed || d.tooBig)) {
+            store.pushBlock(Y(`⏺ ${ev.toolName}`) + (pendingSummary ? G(`(${pendingSummary})`) : '') + '\n' + diffBlock(d));
+          } else {
+            store.pushBlock(toolBlock(ev.toolName, pendingSummary, ev.result, ev.isError));
+          }
+        }
         pendingSummary = '';
         break;
+      }
       case 'verify_start': store.finalizeLive(); store.pushBlock(G('  🔎 自動驗收…')); break;
       case 'verify_end': store.pushBlock(ev.ok ? G('  ✓ 驗收通過') : Y('  ✗ 驗收失敗，修正中…')); break;
       case 'compact': store.pushBlock(G(`  ⊙ 已壓縮上下文：${ev.tokensBefore}→${ev.tokensAfter} tokens`)); break;

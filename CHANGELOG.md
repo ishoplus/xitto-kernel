@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.3
+
+- **彩色 diff（編輯一目了然）**：
+  - kernel 新增 `diff.js`（LCS 行級 diff）；**在 `wrapUndo` 集中計算**——用既有的 undo 快照(before)+ 改後內容(after),
+    把 `_diff` 掛在工具結果上（不進 LLM content,僅供 app 渲染）。**所有 pack 的 edit/write 免改**,二進位/超大檔自動跳過
+  - TUI 渲染 `diffBlock`：`⎿ +N -N 行` + 綠 `+` / 紅 `-` 變更行（過長摺疊）
+  - 4 個測試（lineDiff 增刪/新檔/超大、diffBlock 渲染、kernel edit 自動掛 _diff）+ 視覺驗證。測試 180/180
+  - 註：`_diff` 已在 kernel 算好,日後接到許願台網頁很容易（目前先做 TUI）
+
 ## 0.6.2
 
 - **TUI 補強（對標 Claude Code 的工具卡）**：

@@ -11,6 +11,7 @@ import { createPermissionStep } from './security/permission-step.js';
 import { fileAllowStore, memoryAllowStore } from './security/allow-store.js';
 import { normalizeSandbox, wrapWithSeatbelt, sandboxViolation } from './security/sandbox.js';
 import { dangerousReason } from './security/danger.js';
+import { lineDiff } from './diff.js';
 import { spawnSync } from 'node:child_process';
 import { createMemory } from './memory.js';
 import { createPlaybook } from './playbook.js';
@@ -94,20 +95,31 @@ function wrapSandboxable(tool, { cwd, getSandbox, getSandboxConfig }) {
 
 // undo 快照：mutating 且帶 args.path 的工具（檔案編輯類），執行前記錄檔案原狀，供 kernel.undo() 還原。
 // 「以 path 指涉被改檔案」是常見約定；非檔案型 mutating 工具（bash/sql_exec 無 path）不受影響。
+const isTextContent = (s) => s == null || !String(s).includes("\u0000");
 function wrapUndo(tool, { cwd, undoStack }) {
   if (tool.mutating !== true || typeof tool.execute !== 'function') return tool;
   const orig = tool.execute.bind(tool);
   return {
     ...tool,
-    execute: (id, params, ...rest) => {
+    execute: async (id, params, ...rest) => {
+      let abs = null, before = null;
       if (params?.path) {
-        const p = isAbsolute(params.path) ? params.path : join(cwd, params.path);
+        abs = isAbsolute(params.path) ? params.path : join(cwd, params.path);
         try {
-          undoStack.push({ path: p, rel: params.path, before: existsSync(p) ? readFileSync(p, 'utf8') : null });
+          before = existsSync(abs) ? readFileSync(abs, 'utf8') : null;
+          undoStack.push({ path: abs, rel: params.path, before });
           if (undoStack.length > 50) undoStack.shift();
         } catch { /* 略 */ }
       }
-      return orig(id, params, ...rest);
+      const result = await orig(id, params, ...rest);
+      // 集中算 diff：用 before 快照 + 改後內容，掛在 result._diff（不進 LLM content，僅供 app 渲染）
+      if (abs && result && typeof result === 'object' && isTextContent(before)) {
+        try {
+          const after = existsSync(abs) ? readFileSync(abs, 'utf8') : null;
+          if (isTextContent(after)) { const d = lineDiff(before, after); if (d) result._diff = { path: params.path, ...d }; }
+        } catch { /* 略 */ }
+      }
+      return result;
     },
   };
 }
