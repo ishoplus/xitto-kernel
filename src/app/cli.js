@@ -73,6 +73,7 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
   // 回 'yes'（允許一次）/ 'command'（信任此命令簽章類,跨 session）/ 'always'（信任此工具全部）/ 'no'（拒絕）。
   async function askConfirm(name, args, danger, meta = {}) {
     if (autoApprove && !danger) return 'yes';   // 自動模式仍對危險命令把關
+    stopSpin();                                 // 停 spinner,否則它每 100ms 蓋掉提問/輸入列
     endStream();
     const sig = meta.signature; // 有簽章（bash 類）才提供細粒度「信任這類命令」
     return new Promise((res) => {
@@ -96,8 +97,9 @@ export function runCli({ pack, model, getApiKey, sandbox = false, resume = null,
 
   // 澄清通道：agent 呼叫 ask_user 時,內嵌問使用者並等待回答（自由文字；options 只當提示）
   async function askUserQuestion({ question, options }) {
+    stopSpin();                                 // 關鍵：停 spinner,否則它會蓋掉問題與你的輸入,讓你看不到 agent 在問
     endStream();
-    out('\n' + c.cyan('  ❓ ' + String(question || '')) + '\n');
+    out('\n' + c.cyan('  ❓ agent 想問你：') + c.bold(String(question || '')) + '\n');
     if (Array.isArray(options) && options.length) out(c.gray('     選項：' + options.map((o, i) => `${i + 1}) ${o}`).join('   ')) + '\n');
     return new Promise((res) => {
       try { rl.question(c.cyan('  你的回答 › '), (ans) => res((ans || '').trim())); } catch { res(''); }

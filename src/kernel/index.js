@@ -180,7 +180,8 @@ export function createKernel(pack, config = {}) {
     execute: async (_id, { question, options }) => {
       let answer; try { answer = await config.askUser({ question, options }); } catch { answer = null; }
       const text = (answer == null || answer === '') ? '(使用者未回答；請用合理預設繼續，不要再追問)' : String(answer);
-      return { content: [{ type: 'text', text: JSON.stringify({ answer: text }) }] };
+      // 同時回傳 question + 明確指示，讓模型把回答當權威依據（即使對話很長也不會脫鉤）
+      return { content: [{ type: 'text', text: JSON.stringify({ question: String(question || ''), answer: text, note: '這是使用者對你提問的回答，請以此為準繼續，不要忽略或再問同一件事。' }) }] };
     },
   } : null;
 

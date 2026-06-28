@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.5
+
+- **修：CLI 澄清提問被 spinner 蓋住，導致回答疑似沒被採用**。
+  - `askUserQuestion` / `askConfirm` 提問前先 `stopSpin()`——否則「思考中…」spinner 每 100ms 覆蓋掉
+    `❓ 問題` 與你的輸入列,使用者根本看不到 agent 在問,打的字也對不上 → 看起來像回答被忽略
+  - ask_user 提問加上「agent 想問你：」更醒目
+  - `ask_user` 工具結果改為自帶 `{ question, answer, note }`：把回答標為權威依據,長對話也不脫鉤
+  - 驗證:kernel/server 的回答鏈本來就正確（單輪 + 多輪 live 測試:round-1 回答在 round-2 仍被採用）;
+    本修針對互動 CLI 的顯示遮蔽問題
+
 ## 0.4.4
 
 - **即時進度（許願台不再只顯示「進行中」）**：讓非技術使用者看得到 agent 在做什麼。

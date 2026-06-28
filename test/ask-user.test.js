@@ -24,7 +24,9 @@ test('kernel：未提供 askUser → 無 ask_user 工具；提供 → 有，且�
     assert.ok(k.registry.has('ask_user'));
     const r = await k.runTool('ask_user', { question: '用哪個語言?', options: ['JS', 'TS'] });
     assert.deepEqual(askedWith, { question: '用哪個語言?', options: ['JS', 'TS'] });
-    assert.deepEqual(JSON.parse(r.result.content[0].text), { answer: '用 TypeScript' });
+    const out = JSON.parse(r.result.content[0].text);
+    assert.equal(out.answer, '用 TypeScript');
+    assert.equal(out.question, '用哪個語言?');   // 結果自帶問題,避免長對話脫鉤
     assert.match(k.systemPrompt, /ask_user/);   // prompt 有節制使用的引導
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
