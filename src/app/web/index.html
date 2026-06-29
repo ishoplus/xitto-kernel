@@ -4,460 +4,1521 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>xitto · 許願台</title>
-<script>
-  // 早期套用主題（避免載入閃爍）：localStorage(xk_theme) 優先，否則跟隨系統
-  (function(){ try { var t = localStorage.getItem("xk_theme") || (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); document.documentElement.setAttribute("data-theme", t); } catch(e){} })();
-</script>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<!-- 設計系統 + 共享工具庫 -->
+<link rel="stylesheet" href="shared/style.css">
+<!-- 設定注入：server 會替換這些佔位符（HTML 才會被替換，靜態 app.js 不會），app.js 從 window.__XITTO__ 讀 -->
+<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__ };</script>
+<script src="shared/app.js"></script>
 <style>
-  /* 深色（預設）。淺色見 [data-theme=light]；切換鈕寫入 localStorage(xk_theme,兩頁共用)，預設跟隨系統 */
-  :root { --bg:#0f1115; --card:#181b22; --line:#272b34; --fg:#e7e9ee; --dim:#8b919e; --accent:#6ea8fe; --ok:#5fd38a; --warn:#f0c674; --me:#222630; --inset:#0c0e12; --code:#1a1d24; --btnfg:#08101f; --danger:#f08a8a; --warnbg:#1d1c12; }
-  :root[data-theme="light"] { --bg:#f6f7f9; --card:#ffffff; --line:#e3e6eb; --fg:#1d2230; --dim:#6b7280; --accent:#2563eb; --ok:#1a8a4d; --warn:#b07a12; --me:#e8eefc; --inset:#eef1f5; --code:#eef1f5; --btnfg:#ffffff; --danger:#d62f2f; --warnbg:#fdf6e3; }
-  * { box-sizing:border-box; }
-  body { margin:0; font:15px/1.6 -apple-system,"PingFang TC","Microsoft JhengHei",system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-  .wrap { max-width:1180px; margin:0 auto; padding:24px 22px 80px; }
-  /* 單頁佈局：頂部許願 + 左欄(歷史+檔案) + 主區(當前任務/成品/預覽共用)。窄螢幕收單欄 */
-  .layout { display:grid; grid-template-columns:300px minmax(0,1fr); gap:24px; align-items:start; margin-top:18px; }
-  .nav { position:sticky; top:14px; max-height:calc(100vh - 28px); display:flex; flex-direction:column; gap:16px; }
-  .navsec { display:flex; flex-direction:column; min-height:0; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
-  .navsec h3 { margin:0 0 8px; position:sticky; top:0; }
-  .hist-sec #history, .file-sec #wbfiles { overflow:auto; }      /* 兩段各自內捲,都到得了底 */
-  .hist-sec { flex:0 1 auto; max-height:44vh; } .hist-sec #history { max-height:40vh; }
-  .file-sec { flex:1 1 auto; min-height:120px; } .file-sec #wbfiles { flex:1; }
-  .work { min-width:0; }
-  .welcome { padding:56px 24px; text-align:center; line-height:2; font-size:15px; border:1px dashed var(--line); border-radius:14px; }
-  @media (max-width:860px){ .layout{ grid-template-columns:1fr; } .nav{ position:static; max-height:none; } .hist-sec,.hist-sec #history,.file-sec #wbfiles{ max-height:none; } }
-  header { display:flex; align-items:center; gap:12px; padding-bottom:14px; border-bottom:1px solid var(--line); }
-  header h1 { font-size:20px; margin:0; white-space:nowrap; }
-  header .sub { color:var(--dim); font-size:13px; }
-  .topctl { display:flex; align-items:center; gap:8px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:5px 8px; }
-  .prjlabel { color:var(--dim); font-size:12px; }
-  .topctl select { padding:5px 8px; max-width:200px; }
-  .topctl button { padding:5px 10px; font-size:13px; font-weight:500; }
-  @media (max-width:640px){ header .sub { display:none; } }
-  .ask { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin:18px 0; transition:border-color .15s; }
-  .ask:focus-within { border-color:var(--accent); }
-  .ask textarea { width:100%; background:var(--inset); color:var(--fg); border:1px solid var(--line); border-radius:10px; padding:12px; font:inherit; resize:vertical; min-height:70px; outline:none; }
-  .ask textarea:focus { border-color:var(--accent); }
-  .askhint { color:var(--dim); font-size:12px; }
-  .row { display:flex; gap:10px; align-items:center; margin-top:10px; }
-  select, button { font:inherit; }
-  select { background:var(--inset); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px; }
-  button { background:var(--accent); color:var(--btnfg); border:0; border-radius:8px; padding:9px 16px; font-weight:600; cursor:pointer; }
-  button.ghost { background:transparent; color:var(--dim); border:1px solid var(--line); }
-  button:disabled { opacity:.5; cursor:default; }
-  .spacer { flex:1; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin:14px 0; }
-  .goal { font-weight:600; margin-bottom:8px; }
-  .status { display:inline-block; font-size:12px; padding:2px 10px; border-radius:20px; border:1px solid var(--line); color:var(--dim); }
-  .status.running { color:var(--accent); border-color:var(--accent); }
-  .status.needs { color:var(--warn); border-color:var(--warn); }
-  .status.done { color:var(--ok); border-color:var(--ok); }
-  .status.error { color:var(--danger); border-color:var(--danger); }
-  .activity { color:var(--dim); font-size:13px; margin-top:8px; min-height:20px; }
-  .phase { color:var(--accent); font-size:13px; margin-bottom:5px; }
-  .step { font-size:13px; color:var(--dim); padding:1px 0; }
-  .step.cur { color:var(--fg); }
-  .step.think { color:var(--warn); font-style:italic; }
-  .todos { margin-top:10px; padding-top:8px; border-top:1px solid var(--line); }
-  .todo { font-size:13px; padding:2px 0; color:var(--dim); }
-  .todo.in_progress { color:var(--accent); font-weight:600; }
-  .todo.completed { color:var(--ok); }
-  button.cancel { margin-left:10px; padding:3px 12px; font-size:12px; background:transparent; color:var(--danger); border:1px solid rgba(240,138,138,.45); }
-  button.cancel:hover { background:rgba(240,138,138,.14); }
-  .wsbadge { display:inline-block; font-size:12px; color:var(--dim); margin-left:8px; }
-  .loc { margin-top:10px; font-size:12px; color:var(--dim); }
-  .loc code { background:var(--inset); border:1px solid var(--line); border-radius:6px; padding:2px 7px; color:var(--fg); cursor:pointer; }
-  .logtoggle { margin-top:12px; font-size:13px; color:var(--accent); cursor:pointer; user-select:none; }
-  .loglist { margin-top:6px; border-left:2px solid var(--line); padding-left:12px; }
-  .logstep { font-size:13px; color:var(--fg); padding:3px 0; }
-  .logstep.err { color:var(--danger); }
-  .logstep .dim { color:var(--dim); }
-  .diff { margin:5px 0 6px 14px; font:12px/1.5 ui-monospace,Menlo,monospace; }
-  .dh { color:var(--dim); font-size:11px; margin-bottom:2px; }
-  .dl { white-space:pre-wrap; }
-  .dl.add { color:var(--ok); } .dl.del { color:var(--danger); }
-  .dots::after { content:""; animation:dots 1.4s steps(4,end) infinite; }
-  @keyframes dots { 0%{content:""} 25%{content:"·"} 50%{content:"··"} 75%{content:"···"} }
-  .summary { margin-top:10px; white-space:pre-wrap; }
-  .files { margin-top:10px; }
-  .file { display:inline-block; margin:3px 6px 0 0; padding:4px 10px; background:var(--inset); border:1px solid var(--line); border-radius:8px; font-size:13px; cursor:pointer; color:var(--accent); }
-  .file.mod { color:var(--warn); }
-  .qbox { margin-top:12px; padding:12px; background:var(--warnbg); border:1px solid var(--warn); border-radius:10px; }
-  .qbox .q { color:var(--warn); margin-bottom:8px; }
-  .qbox input { width:100%; background:var(--inset); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px; font:inherit; }
-  .steerbox { margin-top:12px; padding-top:10px; border-top:1px dashed var(--line); }
-  .steernote { font-size:12.5px; color:var(--ok); margin-bottom:6px; }
-  #steerin { width:100%; background:var(--inset); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 11px; font:inherit; outline:none; }
-  #steerin:focus { border-color:var(--accent); }
-  h3 { color:var(--dim); font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; margin:28px 0 8px; }
-  .hist { border:1px solid transparent; border-radius:8px; padding:8px 10px; margin:3px 0; cursor:pointer; }
-  .hist:hover { background:var(--inset); }
-  .hist.active { background:var(--inset); border-color:var(--accent); }
-  .hist .g { font-size:13.5px; line-height:1.4; } .hist .m { color:var(--dim); font-size:11px; margin-top:2px; }
-  .empty { color:var(--dim); font-size:13px; }
-  .wbrow { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:8px; margin:1px 0; }
-  .wbrow:hover { background:var(--inset); }
-  .wbname { flex:1; color:var(--accent); cursor:pointer; font-size:13.5px; }
-  .wbmeta { color:var(--dim); font-size:12px; }
-  .wbdel { cursor:pointer; opacity:.6; } .wbdel:hover { opacity:1; }
-  .followup { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
-  .followup textarea { width:100%; background:var(--inset); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:10px; font:inherit; resize:vertical; min-height:52px; margin-bottom:8px; }
-  .cont { color:var(--accent); }
-  .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:10; }
-  .modalbox { background:var(--card); border:1px solid var(--line); border-radius:14px; width:min(560px,92vw); max-height:80vh; display:flex; flex-direction:column; padding:14px; }
-  .fspath { font:12px ui-monospace,Menlo,monospace; color:var(--dim); margin-bottom:8px; word-break:break-all; }
-  .fslist { flex:1; overflow:auto; border:1px solid var(--line); border-radius:8px; }
-  .fsrow { padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--line); font-size:14px; }
-  .fsrow:hover { background:var(--inset); } .fsrow.up { color:var(--dim); } .fsrow.hid { color:var(--dim); }
-  .fsdrives { display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px; border-bottom:1px solid var(--line); background:var(--inset); }
-  .drivebtn { font-size:12.5px; padding:3px 10px; cursor:pointer; background:transparent; color:var(--fg); border:1px solid var(--line); border-radius:6px; }
-  .drivebtn:hover { border-color:var(--accent); }
-  .fshidden { font-size:12.5px; color:var(--dim); display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none; } .fshidden input { cursor:pointer; }
-  .fsbar { display:flex; align-items:center; gap:8px; margin-top:10px; }
-  .viewer { margin-top:10px; border:1px solid var(--line); border-radius:10px; padding:12px; background:var(--inset); }
-  .vbar { font-size:12px; color:var(--dim); margin-bottom:8px; }
-  .vbar a { color:var(--accent); text-decoration:none; }
-  .vimg { max-width:100%; border-radius:8px; }
-  .vframe { width:100%; height:420px; border:0; background:#fff; border-radius:8px; }
-  .viewer-pre { white-space:pre-wrap; font:13px/1.5 ui-monospace,Menlo,monospace; margin:0; color:var(--fg); overflow:auto; max-height:420px; }
-  .md { line-height:1.65; } .md h1,.md h2,.md h3,.md h4 { margin:.7em 0 .3em; line-height:1.3; }
-  .md code { background:var(--code); padding:1px 5px; border-radius:4px; font-size:.9em; }
-  .md pre.code { background:var(--code); padding:10px; border-radius:8px; overflow:auto; }
-  .md ul { margin:.3em 0 .3em 1.2em; } .md a { color:var(--accent); } .md p { margin:.5em 0; }
+/* ── Wishboard 頁面樣式 ──────────────────────────────────── */
+
+:root { --sidebar-w: 300px; --max-w: 1320px; }
+
+/* 全幅 app-shell：左側欄固定寬 + 右主區填滿，整體鋪滿視窗（無置中容器、無留白）*/
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── 側邊欄 ── */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--inset);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.sidebar-head {
+  padding: var(--sp-4) var(--sp-3) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.brand h1 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.brand-tagline {
+  color: var(--dim);
+  font-size: 12px;
+  margin: var(--sp-1) 0 0;
+  line-height: 1.4;
+}
+
+.project-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.project-bar select { flex: 1; min-width: 0; }
+
+.icon-btn {
+  flex-shrink: 0;
+  padding: var(--sp-2);
+  font-size: 15px;
+  line-height: 1;
+  border: 1px solid var(--line);
+}
+
+/* 兩段：歷史取內容高度（上限 45%）、檔案長高填滿剩餘側欄 */
+.sidebar > .sidebar-section { margin: var(--sp-3) var(--sp-3) 0; }
+.sidebar > .sidebar-section:first-of-type { flex: 0 1 auto; max-height: 45%; }
+.sidebar > .sidebar-section:last-of-type  { flex: 1 1 auto; margin-bottom: var(--sp-3); }
+
+.sidebar-foot {
+  margin-top: auto;
+  padding: var(--sp-3);
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  font-size: 13px;
+}
+.sidebar-foot a { color: var(--accent); }
+
+/* 許願區（主區頂部，全寬）*/
+.wish-zone {
+  padding: var(--sp-5) var(--sp-6) var(--sp-3);
+  flex-shrink: 0;
+}
+
+.wish-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-5);
+  box-shadow: var(--shadow-md), inset 0 1px 0 var(--hairline);
+  transition: border-color var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.wish-card:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: var(--shadow-md), 0 0 0 3px var(--accent-soft);
+}
+
+.wish-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dim);
+  margin-bottom: var(--sp-2);
+}
+
+.wish-textarea {
+  width: 100%;
+  min-height: 80px;
+  background: var(--inset);
+  resize: vertical;
+  font: inherit;
+  line-height: 1.6;
+}
+
+.wish-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.wish-hint {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.route-hint {
+  color: var(--ok);
+  font-size: 12.5px;
+  margin-top: var(--sp-2);
+  display: none;
+}
+
+.route-hint.show { display: block; }
+
+/* 主體：側邊欄 + 主區 */
+/* 主區：垂直填滿視窗（許願在上、工作區填滿剩餘並自捲）*/
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-3);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--hairline);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-section h3 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--dim);
+  margin: 0 0 var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.sidebar-section .scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.history-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-2) var(--sp-2);
+  margin: 2px 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast);
+}
+
+.history-item:hover {
+  background: var(--inset);
+}
+
+.history-item.active {
+  background: var(--inset);
+  border-color: var(--accent);
+}
+
+.history-item .g {
+  font-size: 13.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  padding: 0;
+  font-weight: inherit;
+}
+
+.history-item .m {
+  color: var(--dim);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* 檔案列表（資料夾/上層仍是單一按鈕，需覆寫全域 button 樣式） */
+.file-up,
+.fs-row {
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  font-weight: inherit;
+  text-align: left;
+  padding: var(--sp-2);
+}
+
+/* 檔案列：容器 div（開啟鈕 + 刪除鈕並排）——不可用巢狀 <button>，否則瀏覽器會把刪除鈕斷到下一行 */
+.file-row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--r-sm);
+  font-size: 13.5px;
+}
+
+.file-row:hover { background: var(--inset); }
+
+.file-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  border-radius: var(--r-sm);
+}
+
+.file-open .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+}
+
+.file-open .size {
+  color: var(--dim);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.del {
+  opacity: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 12px;
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--dim);
+  transition: opacity var(--duration-fast), color var(--duration-fast);
+}
+
+.file-row:hover .del { opacity: .6; }
+.del:hover { opacity: 1; color: var(--danger); }
+
+.file-up {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--dim);
+  font-size: 13px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.file-up:hover { color: var(--fg); }
+
+.file-breadcrumb {
+  padding: var(--sp-2);
+  font-size: 12px;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+}
+
+/* 工作區：填滿主區剩餘高度，內容多了自捲 */
+.work {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--sp-6) var(--sp-6);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 當前任務容器：填滿工作區（讓空狀態置中撐滿、任務卡時自然由上排起）*/
+#current-task {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 任務卡 */
+.task-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-5);
+  margin-bottom: var(--sp-4);
+  box-shadow: var(--shadow-md);
+  animation: fade-in var(--duration-base) var(--ease-out);
+}
+
+.task-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.task-goal {
+  flex: 1;
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.task-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.task-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+/* 進度區 */
+.progress {
+  margin-top: var(--sp-3);
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.progress .phase {
+  color: var(--accent);
+  margin-bottom: var(--sp-1);
+}
+
+.progress .steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.progress .step {
+  color: var(--dim);
+  font-size: 13px;
+  padding: 2px 0;
+}
+
+.progress .step.current {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.progress .step.thinking {
+  color: var(--warn);
+  font-style: italic;
+}
+
+/* 待辦清單 */
+.todos {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+
+.todos-label {
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: var(--sp-2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 3px 0;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.todo-item.in_progress { color: var(--accent); font-weight: 600; }
+.todo-item.completed { color: var(--ok); text-decoration: line-through; }
+
+/* 過程日誌 */
+.log-section {
+  margin-top: var(--sp-3);
+}
+
+.log-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  padding: var(--sp-2) 0;
+  background: none;
+  border: none;
+  font-weight: inherit;
+}
+
+.log-toggle:hover { text-decoration: underline; }
+
+.log-list {
+  margin-top: var(--sp-2);
+  margin-left: var(--sp-4);
+  border-left: 2px solid var(--line);
+  padding-left: var(--sp-3);
+}
+
+.log-step {
+  font-size: 13px;
+  padding: var(--sp-1) 0;
+  color: var(--fg);
+}
+
+.log-step.error { color: var(--danger); }
+.log-step .dim { color: var(--dim); }
+
+/* 彩色 diff */
+.diff { margin: var(--sp-2) 0 var(--sp-2) var(--sp-4); font: 12px/1.5 ui-monospace, Menlo, monospace; }
+.dh { color: var(--dim); font-size: 11px; margin-bottom: 2px; }
+.dl { white-space: pre-wrap; }
+.dl.add { color: var(--ok); }
+.dl.del { color: var(--danger); }
+
+/* 提問框 */
+.question-box {
+  margin-top: var(--sp-4);
+  padding: var(--sp-3);
+  background: var(--warnbg);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-md);
+}
+
+.question-label {
+  font-size: 12px;
+  color: var(--warn);
+  font-weight: 600;
+  margin-bottom: var(--sp-2);
+}
+
+.question-input {
+  width: 100%;
+  margin-top: var(--sp-2);
+}
+
+/* 摘要 + 成品 */
+.summary {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
+.summary-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--dim);
+  margin-bottom: var(--sp-2);
+}
+
+.summary-text {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.artifacts {
+  margin-top: var(--sp-4);
+}
+
+.artifacts-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--dim);
+  margin-bottom: var(--sp-2);
+}
+
+.artifact-file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  margin: var(--sp-1) var(--sp-1) 0 0;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), background var(--duration-fast);
+}
+
+.artifact-file:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--inset));
+}
+
+.artifact-file.modified { color: var(--warn); }
+
+/* 檔案位置 */
+.file-location {
+  margin-top: var(--sp-3);
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.file-location code,
+.file-location .loc-code {
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  font: inherit;
+  color: var(--fg);
+}
+
+.file-location .loc-code {
+  cursor: pointer;
+  transition: border-color var(--duration-fast);
+}
+
+.file-location .loc-code:hover {
+  border-color: var(--accent);
+}
+
+/* Steer 框 */
+.steer-zone {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px dashed var(--line);
+}
+
+.steer-note {
+  font-size: 12.5px;
+  color: var(--ok);
+  margin-bottom: var(--sp-2);
+}
+
+.steer-input {
+  width: 100%;
+  margin-top: var(--sp-2);
+}
+
+/* 繼續/調整 */
+.continue-zone {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+
+.continue-btn {
+  margin-right: var(--sp-2);
+}
+
+.continue-box {
+  margin-top: var(--sp-3);
+}
+
+.continue-textarea {
+  width: 100%;
+  margin-bottom: var(--sp-2);
+}
+
+/* 檔案預覽（與任務區互斥；顯示時填滿工作區並自捲）*/
+.file-viewer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--sp-4);
+}
+.file-viewer .md,
+.file-viewer .viewer-pre,
+.file-viewer .viewer-iframe { flex: 1; min-height: 0; }
+
+.viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: var(--sp-3);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.viewer-bar a {
+  color: var(--accent);
+}
+
+.viewer-pre {
+  white-space: pre-wrap;
+  font: 13px/1.5 ui-monospace, Menlo, monospace;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  overflow: auto;
+  max-height: 420px;
+}
+
+.viewer-img {
+  max-width: 100%;
+  border-radius: var(--r-md);
+}
+
+.viewer-iframe {
+  width: 100%;
+  height: 420px;
+  border: none;
+  border-radius: var(--r-md);
+  background: #fff;
+}
+
+/* 空狀態 */
+.welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: min(58vh, 480px);
+  padding: var(--sp-10) var(--sp-6);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--card) 50%, transparent);
+}
+
+.welcome-icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: var(--sp-4);
+  filter: saturate(1.1);
+}
+
+.welcome-title {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--fg);
+  margin: 0 0 var(--sp-2);
+  letter-spacing: -.01em;
+}
+
+.welcome-sub {
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1.8;
+  margin: 0;
+  max-width: 380px;
+}
+
+/* 錯誤狀態 */
+.error-msg {
+  color: var(--danger);
+  padding: var(--sp-3);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-radius: var(--r-md);
+  margin-top: var(--sp-3);
+  font-size: 13px;
+}
+
+/* 資料夾選擇 Modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: fade-in var(--duration-fast) var(--ease-out);
+}
+
+.modal[hidden] { display: none; }
+
+.modal-box {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-4);
+  box-shadow: var(--shadow-card);
+}
+
+.modal-title {
+  font-weight: 600;
+  margin-bottom: var(--sp-3);
+}
+
+.fs-path {
+  font: 12px ui-monospace, Menlo, monospace;
+  color: var(--dim);
+  margin-bottom: var(--sp-2);
+  word-break: break-all;
+}
+
+.fs-list {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.fs-row {
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  font-size: 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.fs-row:last-child { border-bottom: none; }
+.fs-row:hover { background: var(--inset); }
+.fs-row.up { color: var(--dim); }
+.fs-row.hid { color: var(--dim); }
+
+.fs-drives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--inset);
+}
+
+.fs-drive {
+  font-size: 12px;
+  padding: 3px var(--sp-2);
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.fs-drive:hover { border-color: var(--accent); }
+
+.fs-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.fs-hidden {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 12.5px;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+/* ── 響應式 ──────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  :root { --sidebar-w: 260px; }
+}
+
+/* 窄螢幕：殼層改上下堆疊（側欄在上、主區在下），不再固定全高 */
+@media (max-width: 860px) {
+  .shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    overflow: visible;
+  }
+  .sidebar > .sidebar-section:first-of-type,
+  .sidebar > .sidebar-section:last-of-type { flex: none; max-height: 40vh; }
+  .main { overflow: visible; }
+  .work { overflow: visible; padding: 0 var(--sp-4) var(--sp-6); }
+  .wish-zone { padding: var(--sp-4); }
+}
+
+@media (max-width: 480px) {
+  .wish-footer { flex-direction: column; align-items: flex-start; }
+  .wish-footer .spacer { display: none; }
+}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1>🪄 xitto 許願台</h1>
-    <span class="sub">說出你想完成的事，做完給你成品</span>
-    <span class="spacer"></span>
-    <button class="ghost" id="theme" title="切換白天／夜晚" style="padding:6px 10px;font-size:15px">🌙</button>
-    <a href="/chat" class="topctl" style="text-decoration:none;color:var(--accent)" title="改用對話式：逐句協作、記得上下文">💬 對話模式</a>
-    <div class="topctl">
-      <span class="prjlabel">專案</span>
-      <select id="space" title="專案／空間：不同專案的檔案與記憶各自獨立"></select>
-      <button class="ghost" id="browsebtn" title="瀏覽並選一個真實資料夾（本地模式）" style="display:none">📁 選</button>
-      <button class="ghost" id="newspace" title="新增一個專案／空間">＋ 新專案</button>
-    </div>
-  </header>
+<!-- 跳過導航 -->
+<a href="#main-content" class="skip-link">跳到主要內容</a>
 
-  <div id="fsmodal" class="modal" style="display:none">
-    <div class="modalbox">
-      <div style="margin-bottom:8px;font-weight:600">選一個資料夾（就地工作）</div>
-      <div class="fspath" id="fspath"></div>
-      <div class="fslist" id="fslist"></div>
-      <div class="fsbar">
-        <button class="ghost" onclick="fsHome()">🏠 家目錄</button>
-        <label class="fshidden"><input type="checkbox" id="fshidden" onchange="fsToggleHidden()"> 顯示隱藏資料夾</label>
-        <button class="ghost" onclick="closeFs()">取消</button>
-        <span class="spacer"></span>
-        <button onclick="chooseFs()">✓ 選這個資料夾</button>
+<!-- 全幅 app-shell：左側欄（品牌/專案/歷史/檔案/底部）+ 右主區（許願/工作區），撐滿整個視窗 -->
+<div class="shell">
+  <!-- 側邊欄 -->
+  <aside class="sidebar" aria-label="專案導覽">
+    <div class="sidebar-head">
+      <div class="brand">
+        <h1>🪄 xitto 許願台</h1>
+        <p class="brand-tagline">說出你想完成的事，做完給你成品</p>
+      </div>
+      <div class="project-bar">
+        <label for="space" class="sr-only">專案</label>
+        <select id="space" aria-label="選擇專案空間"></select>
+        <button class="ghost icon-btn" id="browse-btn" style="display:none" data-tooltip="選資料夾（就地工作）" aria-label="瀏覽並選擇資料夾">📁</button>
+        <button class="ghost icon-btn" id="newspace-btn" data-tooltip="新專案" aria-label="新增專案空間">＋</button>
       </div>
     </div>
-  </div>
 
-  <div class="ask">
-    <textarea id="goal" placeholder="說出你想完成的事⋯例如：把這個資料夾的 .md 整理成目錄 index.md；或抓 example.com 標題寫進 title.txt"></textarea>
-    <div class="row">
-      <select id="pack" title="領域"></select>
-      <span class="spacer"></span>
-      <span class="askhint">⌘ / Ctrl + Enter 送出</span>
-      <button id="go">交辦 →</button>
+    <!-- 歷史成品 -->
+    <section class="sidebar-section" aria-label="歷史成品">
+      <h3>歷史成品</h3>
+      <div class="scroll" id="history" role="list" aria-label="任務歷史"></div>
+    </section>
+
+    <!-- 檔案瀏覽器 -->
+    <section class="sidebar-section" aria-label="工作區檔案">
+      <h3>📂 檔案</h3>
+      <div id="file-breadcrumb" class="file-breadcrumb" aria-live="polite"></div>
+      <div class="scroll" id="wbfiles" role="tree" aria-label="檔案列表"></div>
+    </section>
+
+    <div class="sidebar-foot">
+      <a href="/chat" class="ghost" style="text-decoration:none" aria-label="切換到對話模式（逐句協作）">💬 對話模式</a>
+      <span class="spacer" aria-hidden="true"></span>
+      <button class="ghost icon-btn" id="theme" data-tooltip="切換主題" aria-label="切換深色/淺色模式">🌙</button>
     </div>
-    <div id="routehint" class="askhint" style="margin-top:8px;display:none"></div>
-  </div>
+  </aside>
 
-  <div class="layout">
-    <aside class="nav">
-      <section class="navsec hist-sec">
-        <h3>歷史成品</h3>
-        <div id="history"><div class="empty">還沒有任何任務。上面交辦一件事試試。</div></div>
-      </section>
-      <section class="navsec file-sec">
-        <h3>📂 檔案</h3>
-        <div id="wbfiles"></div>
-      </section>
-    </aside>
-    <main class="work">
-      <div id="current"><div class="empty welcome">👋 上面說出你想完成的事，交給它去做。<br>左邊看歷史成品與工作區檔案，點任一個在這裡展開。</div></div>
-      <div class="viewer" id="fview" style="display:none"></div>
-    </main>
+  <!-- 主區 -->
+  <main id="main-content" class="main" role="main">
+    <!-- 許願區 -->
+    <section class="wish-zone" aria-label="許願輸入">
+      <div class="wish-card">
+        <label for="goal" class="wish-label">你想完成什麼？</label>
+        <textarea
+          id="goal"
+          class="wish-textarea"
+          placeholder="說出你想完成的事⋯例如：把這個資料夾的 .md 整理成目錄 index.md；或抓 example.com 標題寫進 title.txt"
+          aria-describedby="goal-hint"
+        ></textarea>
+        <div id="goal-hint" class="wish-hint">⌘ / Ctrl + Enter 送出</div>
+
+        <div class="wish-footer">
+          <label for="pack" class="sr-only">選擇領域</label>
+          <select id="pack" aria-label="選擇領域"></select>
+          <span class="spacer" aria-hidden="true"></span>
+          <button class="primary" id="go-btn" aria-label="交辦這個任務">交辦 →</button>
+        </div>
+
+        <div id="route-hint" class="route-hint" role="status" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- 工作區（填滿剩餘高度）-->
+    <div class="work">
+      <div id="current-task" aria-live="polite" aria-label="當前任務">
+        <div class="welcome">
+          <div class="welcome-icon" aria-hidden="true">🪄</div>
+          <h2 class="welcome-title">說出你想完成的事</h2>
+          <p class="welcome-sub">在上方輸入一句話，交給它去做——做完把成品給你。<br>左邊可看歷史成品與工作區檔案，點任一個在這裡展開。</p>
+        </div>
+      </div>
+      <!-- 檔案預覽 -->
+      <div id="file-viewer" class="file-viewer" hidden aria-label="檔案預覽"></div>
+    </div>
+  </main>
+</div>
+
+<!-- 資料夾選擇 Modal（position:fixed，置於 shell 外）-->
+<div id="fs-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="fs-modal-title">
+  <div class="modal-box">
+    <div class="modal-title" id="fs-modal-title">選一個資料夾（就地工作）</div>
+    <div class="fs-path" id="fs-path" aria-live="polite"></div>
+    <div class="fs-list" id="fs-list" role="tree" aria-label="資料夾列表"></div>
+    <div class="fs-bar">
+      <button class="ghost" onclick="fsHome()">🏠 家目錄</button>
+      <label class="fs-hidden">
+        <input type="checkbox" id="fs-hidden" onchange="fsToggleHidden()">
+        顯示隱藏資料夾
+      </label>
+      <span class="spacer" aria-hidden="true"></span>
+      <button class="ghost" onclick="closeFs()">取消</button>
+      <button class="primary" onclick="chooseFs()">✓ 選這個</button>
+    </div>
   </div>
 </div>
 
 <script>
-const TOKEN = "__SERVER_TOKEN__";
-const PACKS = __PACKS__;
-const LOCAL = __LOCAL__;  // 本地模式：可把專案指向真實資料夾（就地工作,像 Claude Code）
-const $ = (s) => document.querySelector(s);
-const api = (p, opts={}) => fetch(p, { ...opts, headers: { authorization:"Bearer "+TOKEN, "content-type":"application/json", ...(opts.headers||{}) } });
-const esc = (s) => String(s==null?"":s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-// 內嵌進「雙引號 HTML 屬性裡的單引號 JS 字串」用：先 JS 跳脫(反斜線/單引號，避免 Windows 路徑被吃掉)，再 HTML 屬性跳脫。
-const jsAttr = (s) => String(s==null?"":s).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+/* ── Wishboard 應用邏輯 ──────────────────────────────────── */
 
-// 白天／夜晚切換（xk_theme 兩頁共用；鈕顯示「將切到」的圖示）
-function applyTheme(t){ document.documentElement.setAttribute("data-theme", t); const b=$("#theme"); if(b) b.textContent = t==="light" ? "🌙" : "☀️"; }
-applyTheme(localStorage.getItem("xk_theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
-$("#theme").onclick = () => { const t = document.documentElement.getAttribute("data-theme")==="light" ? "dark" : "light"; localStorage.setItem("xk_theme", t); applyTheme(t); };
-
-// 把工具動作翻成人話,讓「進行中」變成看得懂的進度
-const TOOL_ZH = { read:"讀取檔案", ls:"查看目錄", glob:"尋找檔案", grep:"搜尋內容", write:"建立檔案", edit:"修改檔案", bash:"執行指令", web_search:"搜尋網路", web_fetch:"讀取網頁", http:"呼叫 API", read_image:"看圖片", skill:"載入技能", skill_save:"記錄技能", skills_check:"複查技能", playbook_update:"記下做法", episode_record:"記下經驗", episode_recall:"回想經驗", memory_save:"記住重點", todo_write:"規劃步驟", spawn_agent:"派出子助手", ask_user:"來問你" };
-const PHASE_ZH = { starting:"啟動中", thinking:"思考中", acting:"執行中", verifying:"驗收中", verified:"驗收通過", fixing:"修正中", "needs-input":"等你回答" };
-const friendlyStep = (a) => { const z = TOOL_ZH[a.name] || a.name; const d = a.args && (a.args.command||a.args.path||a.args.query||a.args.url||a.args.topic||a.args.name) || ""; return z + (d ? ` ${String(d).slice(0,44)}` : ""); };
-const elapsedOf = (t) => t.startedAt ? Math.max(0, Math.round((Date.now() - new Date(t.startedAt).getTime())/1000)) : 0;
-function progressHtml(t) {
-  const p = t.progress || {};
-  const head = `${PHASE_ZH[p.phase]||"進行中"}${p.round?` · 第 ${p.round} 輪`:""}${p.steps?` · ${p.steps} 個動作`:""} · 已進行 <span id="elapsed">${elapsedOf(t)}s</span>`;
-  const think = p.thinking ? `<div class="step think">💭 ${esc(p.thinking)}…</div>` : "";
-  const steps = (p.recent||[]).slice().reverse().map((a,i)=>`<div class="step ${i===0?"cur":""}">${i===0?"▸":"·"} ${esc(friendlyStep(a))}</div>`).join("");
-  return `<div class="activity"><div class="phase dots">${head}</div>${think}${steps}</div>`;
-}
-// 心跳：每秒更新「已進行 Ns」,即使沒有新事件也讓使用者看到它活著
-let liveTask = null;
-setInterval(() => { if (liveTask && (liveTask.status==="running"||liveTask.status==="queued")) { const el=document.getElementById("elapsed"); if (el) el.textContent = elapsedOf(liveTask)+"s"; } }, 1000);
-
-// 領域選單（非技術使用者預設「通用」）
-const LABELS = { general:"通用", coding:"程式", "data-query":"查資料", notes:"筆記", "deep-research":"研究", devops:"維運", patent:"專利", uiux:"介面" };
-const packLabel = (p) => LABELS[p] || p;
-// 預設「自動判斷」：使用者不必懂領域,系統依願望文字挑;要手動指定可在此覆蓋
-$("#pack").innerHTML = `<option value="auto" selected>🪄 自動判斷領域</option>` + PACKS.map(p=>`<option value="${p}">${packLabel(p)}</option>`).join("");
-
-// 專案／空間（對應 Claude Code 的「目錄」,但可選＋命名＋有預設；不同空間的檔案與沉澱各自獨立）
-let spaces = JSON.parse(localStorage.getItem("xk_spaces")||'["default"]');
-let curSpace = localStorage.getItem("xk_space")||"default";
-const spaceLabel=s=>s.startsWith("/")?("📁 "+(s.split("/").filter(Boolean).pop()||s)):s;
-function renderSpaces(){ $("#space").innerHTML = spaces.map(s=>`<option value="${esc(s)}" ${s===curSpace?"selected":""}>${esc(spaceLabel(s))}</option>`).join(""); }
-function refreshAll(){ $("#fview").style.display="none"; wbSub=""; loadHistory(); loadFiles(); }
-$("#space").onchange = () => { curSpace=$("#space").value; localStorage.setItem("xk_space",curSpace); $("#current").innerHTML=""; refreshAll(); };
-$("#newspace").onclick = () => {
-  const raw=(prompt(LOCAL?"新專案：輸入名稱，或貼上一個真實資料夾的絕對路徑（本地模式會就地改該資料夾的檔，像 Claude Code）":"新專案名稱（英數/底線/連字號）：")||"").trim();
-  if(!raw) return;
-  const n = (LOCAL && raw.startsWith("/")) ? raw : raw.replace(/[^a-zA-Z0-9_-]/g,"");
-  if(!n) return;
-  if(!spaces.includes(n)) spaces.push(n);
-  curSpace=n; localStorage.setItem("xk_spaces",JSON.stringify(spaces)); localStorage.setItem("xk_space",curSpace);
-  renderSpaces(); $("#current").innerHTML=""; refreshAll();
+/* 主題切換 */
+$("#theme").onclick = () => {
+  const t = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+  applyTheme(t);
 };
-renderSpaces();
 
-// 資料夾瀏覽器（本地模式「用選的」）：伺服器端列資料夾,網頁點進去挑一個
-if(LOCAL) $("#browsebtn").style.display="";
-$("#browsebtn").onclick = ()=>{ $("#fsmodal").style.display="flex"; $("#fshidden").checked=fsShowHidden; fsGo(null); };
-let fsPath=null, fsShowHidden=localStorage.getItem("xk_fshidden")==="1";
-// 導覽以 {path,name,up} 交給後端拼路徑(跨平台)；前端 onclick 只帶資料夾名，不內嵌絕對路徑，
-// 避免含反斜線的 Windows 路徑被 JS 字串跳脫吃掉分隔符(如 C:\Users\showang → C:Usersshowang)。
-async function fsList(opts){
-  opts=opts||{}; const qs=[];
-  if(opts.path) qs.push("path="+encodeURIComponent(opts.path));
-  if(opts.name) qs.push("name="+encodeURIComponent(opts.name));
-  if(opts.up) qs.push("up=1");
-  if(fsShowHidden) qs.push("hidden=1");
-  const r=await api("/v1/fs"+(qs.length?("?"+qs.join("&")):"")).then(r=>r.json()).catch(()=>({error:"讀取失敗"}));
-  if(r.error){ alert(r.error); return; }
-  fsPath=r.path; window._fsHome=r.home;
-  $("#fspath").textContent="📂 "+r.path;
-  // Windows：頂部一排磁碟按鈕可跨槽切換(C:/D:/E:…)；非 Windows r.drives 為空，不顯示。
-  const drivesRow=(r.drives&&r.drives.length)?`<div class="fsdrives">${r.drives.map(dv=>`<button class="drivebtn" onclick="fsList({path:'${jsAttr(dv)}'})" title="切換到 ${esc(dv)}">💽 ${esc(dv.replace(/\\$/,''))}</button>`).join("")}</div>`:"";
-  $("#fslist").innerHTML=drivesRow+`<div class="fsrow up" onclick="fsUp()">⬆ 上一層</div>`+(r.dirs.length?r.dirs.map(d=>`<div class="fsrow${d.startsWith(".")?" hid":""}" onclick="fsEnter('${jsAttr(d)}')">📁 ${esc(d)}</div>`).join(""):`<div class="empty" style="padding:10px">（沒有子資料夾，可直接選這個）</div>`);
-}
-function fsGo(p){ return fsList(p?{path:p}:{}); }          // 絕對路徑 / 家目錄 / 初始
-function fsEnter(name){ return fsList({path:fsPath, name}); } // 進入子資料夾(後端 join)
-function fsUp(){ return fsList({path:fsPath, up:true}); }     // 上一層(後端 dirname)
-function fsToggleHidden(){ fsShowHidden=$("#fshidden").checked; localStorage.setItem("xk_fshidden", fsShowHidden?"1":"0"); fsGo(fsPath); }
-function fsHome(){ fsGo(window._fsHome||null); }
-function closeFs(){ $("#fsmodal").style.display="none"; }
-function chooseFs(){ if(!fsPath) return; const p=fsPath; if(!spaces.includes(p)) spaces.push(p); curSpace=p; localStorage.setItem("xk_spaces",JSON.stringify(spaces)); localStorage.setItem("xk_space",curSpace); renderSpaces(); closeFs(); $("#current").innerHTML=""; refreshAll(); }
+/* 專案空間 */
+renderSpaces($("#space"));
+$("#space").onchange = () => {
+  switchSpace($("#space").value);
+  loadHistory();
+  loadFiles();
+};
 
-// 極簡 markdown 渲染（零依賴、可離線；夠用於 agent 產的報告）
-function mdRender(src){
-  const lines=String(src).replace(/\r/g,"").split("\n"); const out=[]; let inCode=false,buf=[],inList=false;
-  const inline=s=>esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\*([^*]+)\*/g,'<em>$1</em>').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');
-  const closeL=()=>{ if(inList){out.push("</ul>");inList=false;} };
-  for(const ln of lines){
-    if(/^```/.test(ln)){ if(inCode){out.push("<pre class='code'>"+esc(buf.join("\n"))+"</pre>");buf=[];inCode=false;}else{closeL();inCode=true;} continue; }
-    if(inCode){ buf.push(ln); continue; }
-    const h=ln.match(/^(#{1,4})\s+(.*)/); if(h){ closeL(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
-    const li=ln.match(/^\s*(?:[-*]|\d+\.)\s+(.*)/); if(li){ if(!inList){out.push("<ul>");inList=true;} out.push("<li>"+inline(li[1])+"</li>"); continue; }
-    if(ln.trim()===""){ closeL(); continue; }
-    closeL(); out.push("<p>"+inline(ln)+"</p>");
-  }
-  closeL(); if(inCode)out.push("<pre class='code'>"+esc(buf.join("\n"))+"</pre>");
-  return out.join("");
-}
-const IMG=/\.(png|jpe?g|gif|webp|svg)$/i, MD=/\.(md|markdown)$/i, HTMLF=/\.html?$/i, JSONF=/\.json$/i;
-// 取檔 URL 產生器（任務成品走 /tasks/<id>，工作台走 /workspaces?ws=，後者 ws 可為本地絕對路徑）
-const TOK="&token="+encodeURIComponent(TOKEN);
-const taskFileUrl=id=>(path,extra="")=>"/v1/tasks/"+id+"/file?path="+encodeURIComponent(path)+TOK+extra;
-const wsFileUrl=ws=>(path,extra="")=>"/v1/workspaces/file?ws="+encodeURIComponent(ws)+"&path="+encodeURIComponent(path)+TOK+extra;
-// 彩色 diff（綠 +／紅 -）：渲染 kernel 算好的 _diff
-function diffHtml(d){
-  if(!d) return "";
-  if(d.tooBig) return `<div class="diff"><span class="dh">+${d.added} -${d.removed} 行（差異過大，省略）</span></div>`;
-  const ch=(d.lines||[]).filter(l=>l.t!==" ").slice(0,40);
-  if(!ch.length) return "";
-  return `<div class="diff"><div class="dh">+${d.added} -${d.removed}</div>${ch.map(l=>`<div class="dl ${l.t==="+"?"add":"del"}">${esc(l.t+" "+l.s)}</div>`).join("")}</div>`;
-}
-// 完整步驟卡（展開過程）：人話動作 + 編輯的彩色 diff
-function logHtml(p){
-  if(!p||!(p.log||[]).length) return `<div class="empty">（尚無步驟）</div>`;
-  return p.log.map(s=>`<div class="logstep ${s.isError?"err":""}">▸ ${esc(TOOL_ZH[s.name]||s.name)}${s.summary?` <span class="dim">${esc(s.summary)}</span>`:""}${s.diff?diffHtml(s.diff):""}</div>`).join("");
-}
-let expandedLog=false;
-function toggleLog(){ expandedLog=!expandedLog; if(liveTask) renderCurrent(liveTask); }
+/* 新增專案 */
+$("#newspace-btn").onclick = () => {
+  const raw = (
+    prompt(
+      LOCAL
+        ? "新專案：輸入名稱，或貼上一個真實資料夾的絕對路徑（本地模式會就地改該資料夾）"
+        : "新專案名稱（英數/底線/連字號）："
+    ) || ""
+  ).trim();
+  if (!raw) return;
+  const n = LOCAL && raw.startsWith("/") ? raw : raw.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!n) return;
+  addSpace(n);
+  switchSpace(n);
+  renderSpaces($("#space"));
+  loadHistory();
+  loadFiles();
+};
 
-async function renderFile(urlFn, encPath, name, sel){
-  const path=decodeURIComponent(encPath); const v=document.querySelector(sel); v.style.display="block";
-  const bar=`<div class="vbar">📄 ${esc(name)} · <a href="${urlFn(path)}" target="_blank">開新分頁</a> · <a href="${urlFn(path,'&download=1')}">下載</a></div>`;
-  if(IMG.test(name)){ v.innerHTML=bar+`<img class="vimg" src="${urlFn(path)}">`; return; }
-  if(HTMLF.test(name)){ v.innerHTML=bar+`<iframe class="vframe" sandbox src="${urlFn(path)}"></iframe>`; return; }
-  v.innerHTML=bar+`<div class="empty">載入中…</div>`;
-  const txt=await fetch(urlFn(path)).then(r=>r.ok?r.text():null).catch(()=>null);
-  if(txt==null){ v.innerHTML=bar+`<div class="empty">（無法以文字呈現，請下載）</div>`; return; }
-  let body;
-  if(MD.test(name)) body=`<div class="md">${mdRender(txt)}</div>`;
-  else if(JSONF.test(name)){ try{ body=`<pre class="viewer-pre">${esc(JSON.stringify(JSON.parse(txt),null,2))}</pre>`; }catch{ body=`<pre class="viewer-pre">${esc(txt)}</pre>`; } }
-  else body=`<pre class="viewer-pre">${esc(txt)}</pre>`;
-  v.innerHTML=bar+body;
+/* 資料夾瀏覽器（本地模式）*/
+if (LOCAL) $("#browse-btn").style.display = "";
+
+let fsPath = null,
+  fsShowHidden = localStorage.getItem("xk_fshidden") === "1";
+
+$("#browse-btn").onclick = () => {
+  $("#fs-modal").hidden = false;
+  $("#fs-hidden").checked = fsShowHidden;
+  fsGo(null);
+  // focus trap
+  $("#fs-list").querySelector("button, [tabindex='0'], .fs-row")?.focus();
+};
+
+function fsGo(opts) {
+  opts = opts || {};
+  const qs = [];
+  if (opts.path) qs.push("path=" + encodeURIComponent(opts.path));
+  if (opts.name) qs.push("name=" + encodeURIComponent(opts.name));
+  if (opts.up) qs.push("up=1");
+  if (fsShowHidden) qs.push("hidden=1");
+  api("/v1/fs" + (qs.length ? "?" + qs.join("&") : ""))
+    .then((r) => r.json())
+    .then((r) => {
+      if (r.error) {
+        alert(r.error);
+        return;
+      }
+      fsPath = r.path;
+      window._fsHome = r.home;
+      $("#fs-path").textContent = "📂 " + r.path;
+
+      const drivesRow =
+        r.drives && r.drives.length
+          ? `<div class="fs-drives">${r.drives.map(
+              (dv) =>
+                `<button class="fs-drive" onclick="fsGo({path:'${jsAttr(dv)}'})" title="切換到 ${esc(dv)}">💽 ${esc(dv.replace(/\\$/, ""))}</button>`
+            ).join("")}</div>`
+          : "";
+
+      const rows = [
+        `<button class="fs-row up" onclick="fsUp()" role="treeitem" tabindex="0" type="button">⬆ 上一層</button>`,
+        ...(r.dirs.length
+          ? r.dirs.map(
+              (d) =>
+                `<button class="fs-row${d.startsWith(".") ? " hid" : ""}" onclick="fsEnter('${jsAttr(d)}')" role="treeitem" tabindex="0" type="button">📁 ${esc(d)}</button>`
+            )
+          : [`<div class="empty" style="padding:${12}px">（沒有子資料夾，可直接選這個）</div>`]),
+      ];
+
+      $("#fs-list").innerHTML = drivesRow + rows.join("");
+    })
+    .catch(() => ({ error: "讀取失敗" }));
 }
-function viewFile(id, encPath, name){ return renderFile(taskFileUrl(id), encPath, name, "#fview"); }
-function wbView(encPath, name){ return renderFile(wsFileUrl(curSpace), encPath, name, "#fview"); }
 
-// 左欄檔案瀏覽器：逐層瀏覽 / 看（→ 主區 #fview） / 刪
-function fmtSize(n){ return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"; }
-let wbSub="";
-function wbNav(s){ wbSub=decodeURIComponent(s); loadFiles(); }
-function wbUp(){ wbSub=wbSub.includes("/")?wbSub.slice(0,wbSub.lastIndexOf("/")):""; loadFiles(); }
-async function loadFiles(){
-  const r=await api("/v1/workspaces/files?ws="+encodeURIComponent(curSpace)+"&sub="+encodeURIComponent(wbSub)).then(r=>r.json()).catch(()=>({dirs:[],files:[]}));
-  let html=wbSub?`<div class="loc">📂 ${esc(wbSub)}</div>`:"";
-  if(wbSub) html+=`<div class="wbrow up" onclick="wbUp()"><span class="wbname">⬆ 上一層</span></div>`;
-  html+=(r.dirs||[]).map(d=>`<div class="wbrow" onclick="wbNav('${encodeURIComponent((wbSub?wbSub+'/':'')+d)}')"><span class="wbname">📁 ${esc(d)}/</span></div>`).join("");
-  html+=(r.files||[]).map(f=>{const full=(wbSub?wbSub+'/':'')+f.name;return `<div class="wbrow"><span class="wbname" onclick="wbView('${encodeURIComponent(full)}','${esc(f.name)}')">📄 ${esc(f.name)}</span><span class="wbmeta">${fmtSize(f.size)}</span><span class="wbdel" title="刪除" onclick="wbDelete('${encodeURIComponent(full)}','${esc(f.name)}')">🗑</span></div>`;}).join("");
-  if(!(r.dirs||[]).length && !(r.files||[]).length) html+=`<div class="empty">（${wbSub?"空資料夾":"還沒有檔案"}）</div>`;
-  $("#wbfiles").innerHTML=html;
+function fsEnter(name) {
+  return fsGo({ path: fsPath, name });
 }
-async function wbDelete(encPath, name){ if(!confirm("刪除 "+name+"？此動作無法復原。")) return; await api("/v1/workspaces/file?ws="+encodeURIComponent(curSpace)+"&path="+encodeURIComponent(decodeURIComponent(encPath)),{method:"DELETE"}); loadFiles(); }
+function fsUp() {
+  return fsGo({ path: fsPath, up: true });
+}
+function fsToggleHidden() {
+  fsShowHidden = $("#fs-hidden").checked;
+  localStorage.setItem("xk_fshidden", fsShowHidden ? "1" : "0");
+  fsGo(fsPath);
+}
+function fsHome() {
+  fsGo(window._fsHome || null);
+}
+function closeFs() {
+  $("#fs-modal").hidden = true;
+}
+function chooseFs() {
+  if (!fsPath) return;
+  const p = fsPath;
+  addSpace(p);
+  switchSpace(p);
+  renderSpaces($("#space"));
+  closeFs();
+  loadHistory();
+  loadFiles();
+}
 
-let activeId = null, polling = null;
+/* 領域選單 */
+renderPackSelect($("#pack"));
 
-$("#go").onclick = async () => {
-  const goal = $("#goal").value.trim(); if (!goal) return;
+/* 許願提交 */
+let activeId = null,
+  polling = null;
+
+$("#go-btn").onclick = async () => {
+  const goal = $("#goal").value.trim();
+  if (!goal) return;
   const picked = $("#pack").value;
-  $("#go").disabled = true;
-  if (picked==="auto") { const rh=$("#routehint"); rh.style.display=""; rh.textContent="🪄 判斷適合的領域…"; }
-  const r = await api("/v1/tasks", { method:"POST", body: JSON.stringify({ pack:picked, mode:"goal", goal, workspace: curSpace }) }).then(r=>r.json());
-  $("#go").disabled = false;
-  if (r.error) { alert(r.error); $("#routehint").style.display="none"; return; }
-  // 自動分流回饋：告訴使用者這次用了哪個領域,要改可在上面下拉覆蓋後重交辦
-  const rh=$("#routehint");
-  if (r.routed && r.pack) { rh.style.display=""; rh.innerHTML=`🪄 已自動用「<b>${esc(packLabel(r.pack))}</b>」領域 · 不對的話可在上方下拉改選領域再交辦`; }
-  else rh.style.display="none";
+  $("#go-btn").disabled = true;
+
+  const rh = $("#route-hint");
+  if (picked === "auto") {
+    rh.classList.add("show");
+    rh.textContent = "🪄 判斷適合的領域…";
+  }
+
+  const r = await api("/v1/tasks", {
+    method: "POST",
+    body: JSON.stringify({ pack: picked, mode: "goal", goal, workspace: curSpace }),
+  }).then((r) => r.json());
+
+  $("#go-btn").disabled = false;
+
+  if (r.error) {
+    alert(r.error);
+    rh.classList.remove("show");
+    return;
+  }
+
+  if (r.routed && r.pack) {
+    rh.classList.add("show");
+    rh.innerHTML = `🪄 已自動用「<b>${esc(packLabel(r.pack))}</b>」領域 · 不對的話可在上方下拉改選`;
+  } else {
+    rh.classList.remove("show");
+  }
+
   $("#goal").value = "";
-  $("#fview").style.display="none"; expandedLog=false;
+  closePreview();
+  expandedLog = false;
   activeId = r.taskId;
-  poll(); loadHistory();
+  poll();
+  loadHistory();
 };
-$("#goal").addEventListener("keydown", e=>{ if((e.metaKey||e.ctrlKey) && e.key==="Enter"){ e.preventDefault(); $("#go").click(); } });
 
-function statusClass(s){ return s==="running"?"running":s==="needs-input"?"needs":s==="done"?"done":(s==="error"||s==="cancelled"||s==="interrupted")?"error":""; }
-function statusText(s){ return ({queued:"排隊中",running:"進行中…","needs-input":"需要你回答",done:"已完成",error:"失敗",cancelled:"已中斷",interrupted:"已中斷(重啟)"})[s]||s; }
-const CANCELLABLE = ["queued","running","needs-input"];
-function todosHtml(p){ if(!p||!(p.todos||[]).length) return ""; const ic=s=>s==="completed"?"☑":s==="in_progress"?"◐":"☐"; return `<div class="todos">${p.todos.map(td=>`<div class="todo ${td.status}">${ic(td.status)} ${esc(td.content)}</div>`).join("")}</div>`; }
-async function cancelTask(id){ await api("/v1/tasks/"+id+"/cancel",{method:"POST"}); for(let i=0;i<10;i++){ await new Promise(r=>setTimeout(r,600)); const t=await api("/v1/tasks/"+id).then(r=>r.json()); liveTask=t; renderCurrent(t); if(["done","error","cancelled"].includes(t.status)){loadHistory();break;} } }
+$("#goal").addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    $("#go-btn").click();
+  }
+});
 
-// IME 組字旗標：中文/日文輸入法組字期間,暫停輪詢重繪,避免重建 input 把未確認的拼音(不在 value 裏)洗掉
+/* IME 保護旗標 */
 let composing = false;
-function wireComposition(el){
-  if(!el) return;
-  el.addEventListener("compositionstart", ()=>{ composing=true; });
-  el.addEventListener("compositionend", ()=>{ composing=false; });
-}
+const inp = $("#goal");
+wireComposition(inp);
+inp.addEventListener("compositionstart", () => { composing = true; });
+inp.addEventListener("compositionend", () => { composing = false; });
 
+/* 輪詢 */
 async function poll() {
   clearTimeout(polling);
-  const t = await api("/v1/tasks/"+activeId).then(r=>r.json());
+  if (!activeId) return;
+
+  const t = await api("/v1/tasks/" + activeId).then((r) => r.json());
   liveTask = t;
-  const terminal = t.status==="done" || t.status==="error";
-  if (!composing || terminal) renderCurrent(t); // 組字中暫停重繪(任務已結束則仍須更新一次)
-  if (terminal) { loadHistory(); loadFiles(); return; }
-  if (t.status==="needs-input") return; // 等使用者回答
+
+  const terminal = t.status === "done" || t.status === "error";
+  if (!composing || terminal) renderCurrent(t);
+  if (terminal) {
+    loadHistory();
+    loadFiles();
+    return;
+  }
+  if (t.status === "needs-input") return;
   polling = setTimeout(poll, 1200);
 }
 
+/* 心跳：每秒更新「已進行 Ns」*/
+setInterval(() => {
+  if (liveTask && (liveTask.status === "running" || liveTask.status === "queued")) {
+    const el = document.getElementById("elapsed");
+    if (el) el.textContent = elapsedOf(liveTask) + "s";
+  }
+}, 1000);
+
+/* 渲染當前任務 */
+let liveTask = null;
+let expandedLog = false;
+
+const elapsedOf = (t) =>
+  t.startedAt ? Math.max(0, Math.round((Date.now() - new Date(t.startedAt).getTime()) / 1000)) : 0;
+
+function statusClass(s) {
+  return s === "running" ? "running" : s === "needs-input" ? "needs" : s === "done" ? "done" : s === "error" || s === "cancelled" || s === "interrupted" ? "error" : "";
+}
+
+const STATUS_TEXT = {
+  queued: "排隊中",
+  running: "進行中…",
+  "needs-input": "需要你回答",
+  done: "已完成",
+  error: "失敗",
+  cancelled: "已中斷",
+  interrupted: "已中斷(重啟)",
+};
+
+const PHASE_ZH = {
+  starting: "啟動中",
+  thinking: "思考中",
+  acting: "執行中",
+  verifying: "驗收中",
+  verified: "驗收通過",
+  fixing: "修正中",
+  "needs-input": "等你回答",
+};
+
+function todosHtml(p) {
+  if (!p || !p.todos || !p.todos.length) return "";
+  const icons = { completed: "☑", in_progress: "◐", pending: "☐" };
+  return `<div class="todos">
+    <div class="todos-label">待辦</div>
+    ${p.todos.map((td) => `<div class="todo-item ${td.status}">${icons[td.status] || "☐"} ${esc(td.content)}</div>`).join("")}</div>`;
+}
+
+function progressHtml(t) {
+  const p = t.progress || {};
+  const head = `${PHASE_ZH[p.phase] || "進行中"}${p.round ? ` · 第 ${p.round} 輪` : ""}${p.steps ? ` · ${p.steps} 個動作` : ""} · 已進行 <span id="elapsed">${elapsedOf(t)}s</span>`;
+  const think = p.thinking ? `<div class="step thinking">💭 ${esc(p.thinking)}…</div>` : "";
+  const steps = (p.recent || [])
+    .slice()
+    .reverse()
+    .map((a, i) => `<div class="step ${i === 0 ? "current" : ""}">${i === 0 ? "▸" : "·"} ${esc(toolText(a))}</div>`)
+    .join("");
+  return `<div class="progress"><div class="phase dots">${head}</div>${think}<div class="steps">${steps}</div></div>`;
+}
+
+function logHtml(p) {
+  if (!p || !(p.log || []).length) return `<div class="empty">（尚無步驟）</div>`;
+  return p.log
+    .map((s) => `<div class="log-step ${s.isError ? "error" : ""}">▸ ${esc(TOOL_ZH[s.name] || s.name)}${s.summary ? ` <span class="dim">${esc(s.summary)}</span>` : ""}${s.diff ? diffHtml(s.diff) : ""}</div>`)
+    .join("");
+}
+
 function renderCurrent(t) {
-  // 保住 steer 輸入框的內容與游標：輪詢每 1.2s 重繪整張卡,別把使用者正打到一半的補充洗掉
-  const ps=(()=>{const el=document.getElementById("steerin");return el?{v:el.value,f:document.activeElement===el,s:el.selectionStart}:null;})();
-  const a = t.result?.artifacts, files = a ? [...(a.created||[]).map(f=>[f,"new"]), ...(a.modified||[]).map(f=>[f,"mod"])] : [];
-  const p = t.progress||{}, nLog=(p.log||[]).length;
-  const logSec = nLog ? `<div class="logtoggle" onclick="toggleLog()">${expandedLog?"▾ 收合過程":"▸ 展開過程（"+nLog+" 步）"}</div>${expandedLog?`<div class="loglist">${logHtml(p)}</div>`:""}` : "";
-  $("#current").innerHTML = `<div class="card">
-    <div class="goal">${esc(t.goal||"任務")}<span class="wsbadge">📁 ${esc(t.workspace||"default")}</span>${t.pack?`<span class="wsbadge" title="${t.auto?"自動判斷的領域":"指定的領域"}">${t.auto?"🪄":"🧭"} ${esc(packLabel(t.pack))}</span>`:""}</div>
-    <span class="status ${statusClass(t.status)}">${statusText(t.status)}${t.rounds?` · ${t.rounds} 輪`:""}</span>
-    ${CANCELLABLE.includes(t.status)?`<button class="cancel" onclick="cancelTask('${t.taskId}')">停止</button>`:""}
-    ${t.status==="running"||t.status==="queued"?progressHtml(t):""}
+  // 保住 steer 輸入框內容
+  const ps = (() => {
+    const el = document.getElementById("steerin");
+    return el ? { v: el.value, f: document.activeElement === el, s: el.selectionStart } : null;
+  })();
+
+  const a = t.result?.artifacts;
+  const files = a
+    ? [...(a.created || []).map((f) => [f, "new"]), ...(a.modified || []).map((f) => [f, "mod"])]
+    : [];
+  const p = t.progress || {};
+  const nLog = (p.log || []).length;
+
+  const CANCELLABLE = ["queued", "running", "needs-input"];
+
+  const logSec = nLog
+    ? `<div class="log-section">
+        <button class="log-toggle" onclick="toggleLog()" aria-expanded="${expandedLog}">
+          ${expandedLog ? "▾" : "▸"} 展開過程（${nLog} 步）
+        </button>
+        ${expandedLog ? `<div class="log-list">${logHtml(p)}</div>` : ""}
+      </div>`
+    : "";
+
+  $("#current-task").innerHTML = `<article class="task-card">
+    <div class="task-header">
+      <div class="task-goal">${esc(t.goal || "任務")}</div>
+      <div class="task-meta">
+        <span class="badge ${statusClass(t.status)}">${STATUS_TEXT[t.status] || t.status}${t.rounds ? ` · ${t.rounds} 輪` : ""}</span>
+        ${t.pack ? `<span class="badge">${t.auto ? "🪄" : "🧭"} ${esc(packLabel(t.pack))}</span>` : ""}
+        <span class="badge">📁 ${esc(t.workspace || "default")}</span>
+      </div>
+      <div class="task-actions">
+        ${CANCELLABLE.includes(t.status) ? `<button class="danger" onclick="cancelTask('${t.taskId}')">停止</button>` : ""}
+      </div>
+    </div>
+
+    ${t.status === "running" || t.status === "queued" ? progressHtml(t) : ""}
     ${todosHtml(t.progress)}
     ${logSec}
-    ${t.status==="needs-input"?`<div class="qbox"><div class="q">❓ ${esc(t.pending?.question)}</div>
-      <input id="ans" placeholder="輸入你的回答，按 Enter 送出"></div>`:""}
-    ${t.status==="running"?`<div class="steerbox">
-      ${(p.steers||[]).slice(-3).map(s=>`<div class="steernote">✋ 已收到補充，會在下一步納入：${esc(s)}</div>`).join("")}
-      <input id="steerin" placeholder="想補充或調整方向？打字按 Enter——會在下一步納入，不中斷目前工作">
-    </div>`:""}
-    ${t.status==="done"?`<div class="summary">${esc(t.result?.text||"")}</div>`:""}
-    ${t.status==="error"?`<div class="summary">⚠ ${esc(t.error)}</div>`:""}
-    ${files.length?`<div class="files">📦 成品：${files.map(([f,k])=>`<span class="file ${k==="mod"?"mod":""}" onclick="viewFile('${t.taskId}','${encodeURIComponent(f)}','${esc(f)}')">${k==="mod"?"~":"+"} ${esc(f)}</span>`).join("")}</div>`:""}
-    ${t.result&&t.result.workspaceDir?`<div class="loc">📂 檔案位置：<code title="點擊複製" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(t.result.workspaceDir)}')">${esc(t.result.workspaceDir)}</code></div>`:""}
-    ${t.status==="done"?`<div class="followup">
-      <button class="ghost" onclick="toggleFollowup()">↳ 繼續／調整這個成果</button>
-      <div id="fubox" style="display:none;margin-top:8px">
-        <textarea id="fugoal" placeholder="想怎麼調整或繼續深入？（會接續這次的對話與檔案，agent 記得來龍去脈）"></textarea>
-        <button onclick="submitFollowup('${esc(t.sessionId||"")}','${esc(t.pack||"general")}','${esc(t.workspace||"default")}')">送出 →</button>
+
+    ${t.status === "needs-input" ? `<div class="question-box">
+      <div class="question-label">❓ ${esc(t.pending?.question)}</div>
+      <label for="ans" class="sr-only">你的回答</label>
+      <input id="ans" class="question-input" placeholder="輸入你的回答，按 Enter 送出">
+    </div>` : ""}
+
+    ${t.status === "running" ? `<div class="steer-zone">
+      ${(p.steers || []).slice(-3).map((s) => `<div class="steer-note">✋ 已收到：${esc(s)}</div>`).join("")}
+      <label for="steerin" class="sr-only">補充指示</label>
+      <input id="steerin" class="steer-input" placeholder="想補充或調整方向？打字按 Enter——會在下一步納入">
+    </div>` : ""}
+
+    ${t.status === "done" ? `<div class="summary">
+      <div class="summary-label">摘要</div>
+      <div class="summary-text">${esc(t.result?.text || "")}</div>
+    </div>` : ""}
+
+    ${t.status === "error" ? `<div class="error-msg">⚠ ${esc(t.error)}</div>` : ""}
+
+    ${files.length ? `<div class="artifacts">
+      <div class="artifacts-label">📦 成品</div>
+      ${files.map(([f, k]) => `<button class="artifact-file ${k === "mod" ? "modified" : ""}" onclick="viewFile('${t.taskId}','${encodeURIComponent(f)}','${jsAttr(f)}')" aria-label="${k === "mod" ? "修改" : "新建"} ${esc(f)}">${k === "mod" ? "~" : "+"} ${esc(f)}</button>`).join("")}
+    </div>` : ""}
+
+    ${t.result && t.result.workspaceDir ? `<div class="file-location">
+      📂 位置：<button class="loc-code" title="點擊複製" onclick="navigator.clipboard?.writeText('${esc(t.result.workspaceDir)}')" type="button">${esc(t.result.workspaceDir)}</button>
+    </div>` : ""}
+
+    ${t.status === "done" ? `<div class="continue-zone">
+      <button class="ghost continue-btn" onclick="toggleFollowup()">↳ 繼續／調整這個成果</button>
+      <div id="fubox" style="display:none" class="continue-box">
+        <label for="fugoal" class="sr-only">想怎麼調整或繼續</label>
+        <textarea id="fugoal" class="continue-textarea" placeholder="想怎麼調整或繼續深入？（會接續這次的對話與檔案）"></textarea>
+        <button class="primary" onclick="submitFollowup('${esc(t.sessionId || "")}','${esc(t.pack || "general")}','${esc(t.workspace || "default")}')">送出 →</button>
       </div>
-    </div>`:""}
-  </div>`;
-  if (t.status==="needs-input") {
-    const inp = $("#ans"); inp.focus(); wireComposition(inp);
-    inp.onkeydown = async (e) => { if (e.key==="Enter" && !e.isComposing && inp.value.trim()) {
-      const ans = inp.value.trim(); inp.disabled = true;
-      await api("/v1/tasks/"+t.taskId+"/answer", { method:"POST", body: JSON.stringify({ answer: ans }) });
-      poll();
-    }};
+    </div>` : ""}
+  </article>`;
+
+  /* 互動綁定 */
+  if (t.status === "needs-input") {
+    const inp = $("#ans");
+    inp.focus();
+    inp.onkeydown = async (e) => {
+      if (e.key === "Enter" && inp.value.trim()) {
+        const ans = inp.value.trim();
+        inp.disabled = true;
+        await api("/v1/tasks/" + t.taskId + "/answer", {
+          method: "POST",
+          body: JSON.stringify({ answer: ans }),
+        });
+        poll();
+      }
+    };
   }
-  if (t.status==="running") {
+
+  if (t.status === "running") {
     const si = $("#steerin");
     if (si) {
-      if (ps) { si.value = ps.v; if (ps.f) { si.focus(); try { si.setSelectionRange(ps.s, ps.s); } catch {} } }  // 還原打到一半的內容/游標
-      wireComposition(si);
-      si.onkeydown = async (e) => { if (e.key==="Enter" && !e.isComposing && si.value.trim()) {
-        const txt = si.value.trim(); si.value = ""; si.disabled = true;
-        await api("/v1/tasks/"+t.taskId+"/steer", { method:"POST", body: JSON.stringify({ text: txt }) });
-        si.disabled = false; si.focus();
-      }};
+      if (ps) {
+        si.value = ps.v;
+        if (ps.f) {
+          si.focus();
+          try { si.setSelectionRange(ps.s, ps.s); } catch {}
+        }
+      }
+      si.onkeydown = async (e) => {
+        if (e.key === "Enter" && !e.isComposing && si.value.trim()) {
+          const txt = si.value.trim();
+          si.value = "";
+          si.disabled = true;
+          await api("/v1/tasks/" + t.taskId + "/steer", {
+            method: "POST",
+            body: JSON.stringify({ text: txt }),
+          });
+          si.disabled = false;
+          si.focus();
+        }
+      };
     }
   }
 }
 
-// 繼續／調整：送出接續上一個任務對話(sessionId)+ 同工作區的後續任務
-function toggleFollowup(){ const b=$("#fubox"); if(b){ b.style.display=b.style.display==="none"?"":"none"; if(b.style.display!=="none") $("#fugoal").focus(); } }
-async function submitFollowup(sessionId, pack, workspace){
-  const goal=$("#fugoal").value.trim(); if(!goal) return;
-  const r=await api("/v1/tasks",{method:"POST",body:JSON.stringify({pack, mode:"goal", goal, workspace, sessionId})}).then(r=>r.json());
-  if(r.error){ alert(r.error); return; }
-  activeId=r.taskId; expandedLog=false; liveTask=null; poll(); window.scrollTo({top:0,behavior:"smooth"});
+function toggleLog() {
+  expandedLog = !expandedLog;
+  if (liveTask) renderCurrent(liveTask);
 }
 
+async function cancelTask(id) {
+  await api("/v1/tasks/" + id + "/cancel", { method: "POST" });
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 600));
+    const t = await api("/v1/tasks/" + id).then((r) => r.json());
+    liveTask = t;
+    renderCurrent(t);
+    if (["done", "error", "cancelled"].includes(t.status)) {
+      loadHistory();
+      break;
+    }
+  }
+}
+
+/* 繼續/調整 */
+function toggleFollowup() {
+  const b = $("#fubox");
+  if (b) {
+    b.style.display = b.style.display === "none" ? "" : "none";
+    if (b.style.display !== "none") $("#fugoal").focus();
+  }
+}
+
+async function submitFollowup(sessionId, pack, workspace) {
+  const goal = $("#fugoal").value.trim();
+  if (!goal) return;
+  const r = await api("/v1/tasks", {
+    method: "POST",
+    body: JSON.stringify({ pack, mode: "goal", goal, workspace, sessionId }),
+  }).then((r) => r.json());
+  if (r.error) {
+    alert(r.error);
+    return;
+  }
+  activeId = r.taskId;
+  expandedLog = false;
+  liveTask = null;
+  poll();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/* 檔案預覽 */
+const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
+const MD = /\.(md|markdown)$/i;
+const HTMLF = /\.html?$/i;
+const JSONF = /\.json$/i;
+
+// 取檔 URL 產生器：任務成品走 /v1/tasks/<id>/file，工作區檔走 /v1/workspaces/file?ws=
+const taskFileUrl = (taskId) => (p, extra = "") =>
+  "/v1/tasks/" + taskId + "/file?path=" + encodeURIComponent(p) + "&token=" + encodeURIComponent(TOKEN) + extra;
+const wsFileUrl = (ws) => (p, extra = "") =>
+  "/v1/workspaces/file?ws=" + encodeURIComponent(ws) + "&path=" + encodeURIComponent(p) + "&token=" + encodeURIComponent(TOKEN) + extra;
+
+// 預覽與任務區互斥（同一工作區，避免兩者同時渲染而重疊）
+function showPreview() { $("#current-task").hidden = true; $("#file-viewer").hidden = false; }
+function closePreview() { $("#file-viewer").hidden = true; $("#current-task").hidden = false; }
+
+// 以給定的 urlFn 渲染檔案預覽（圖片/HTML/md/json/純文字）。
+async function renderFile(urlFn, encPath, name) {
+  const path = decodeURIComponent(encPath);
+  const v = $("#file-viewer");
+  showPreview();
+
+  const bar = `<div class="viewer-bar"><span>📄 ${esc(name)}</span> · <a href="${urlFn(path)}" target="_blank">開新分頁</a> · <a href="${urlFn(path, "&download=1")}">下載</a><span class="spacer" aria-hidden="true"></span><button class="ghost" onclick="closePreview()" aria-label="關閉預覽">✕ 關閉</button></div>`;
+
+  if (IMG.test(name)) {
+    v.innerHTML = bar + `<img class="viewer-img" src="${urlFn(path)}" alt="${esc(name)}">`;
+    return;
+  }
+  if (HTMLF.test(name)) {
+    v.innerHTML = bar + `<iframe class="viewer-iframe" sandbox src="${urlFn(path)}"></iframe>`;
+    return;
+  }
+
+  v.innerHTML = bar + `<div class="empty">載入中…</div>`;
+  const txt = await fetch(urlFn(path)).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+
+  if (txt == null) {
+    v.innerHTML = bar + `<div class="empty">（無法以文字呈現，請下載）</div>`;
+    return;
+  }
+
+  let body;
+  if (MD.test(name)) body = `<div class="md">${mdRender(txt)}</div>`;
+  else if (JSONF.test(name)) {
+    try {
+      body = `<pre class="viewer-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`;
+    } catch {
+      body = `<pre class="viewer-pre">${esc(txt)}</pre>`;
+    }
+  } else body = `<pre class="viewer-pre">${esc(txt)}</pre>`;
+
+  v.innerHTML = bar + body;
+}
+
+// 任務成品檔（成品卡點檔案）
+function viewFile(taskId, encPath, name) {
+  return renderFile(taskFileUrl(taskId), encPath, name);
+}
+
+/* 歷史成品 */
 async function loadHistory() {
-  const r = await api("/v1/tasks").then(r=>r.json());
-  const list = (r.tasks||[]).filter(t=>t.mode==="goal" && (t.workspace||"default")===curSpace).reverse();
-  $("#history").innerHTML = list.length ? list.map(t=>`<div class="hist${t.taskId===activeId?' active':''}" onclick="openTask('${t.taskId}')">
-    <div class="g">${t.continued?'<span class="cont" title="接續前一個任務">↳</span> ':''}${esc(t.goal||t.taskId)} <span class="status ${statusClass(t.status)}">${statusText(t.status)}</span></div>
-    <div class="m">${esc(fmtTime(t.createdAt))}</div></div>`).join("") : `<div class="empty">還沒有任何任務。</div>`;
-}
-function fmtTime(s){ try{ const d=new Date(s); return d.toLocaleString(undefined,{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}); }catch{ return s; } }
-async function openTask(id){ activeId=id; const t=await api("/v1/tasks/"+id).then(r=>r.json()); liveTask=t; $("#fview").style.display="none"; renderCurrent(t); loadHistory(); if(t.status==="running"||t.status==="queued"){poll();} window.scrollTo({top:0,behavior:"smooth"}); }
+  const r = await api("/v1/tasks").then((r) => r.json());
+  const list = (r.tasks || [])
+    .filter((t) => t.mode === "goal" && (t.workspace || "default") === curSpace)
+    .reverse();
 
-loadHistory(); loadFiles();
+  $("#history").innerHTML = list.length
+    ? list
+        .map(
+          (t) => `<button class="history-item${t.taskId === activeId ? " active" : ""}" onclick="openTask('${t.taskId}')">
+      <div class="g">${t.continued ? '<span aria-hidden="true">↳</span> ' : ""}${esc(t.goal || t.taskId)}</div>
+      <div class="m">${t.status ? STATUS_TEXT[t.status] || t.status : ""} · ${fmtTime(t.createdAt)}</div>
+    </button>`
+        )
+        .join("")
+    : `<div class="empty">還沒有任何任務。</div>`;
+}
+
+async function openTask(id) {
+  activeId = id;
+  const t = await api("/v1/tasks/" + id).then((r) => r.json());
+  liveTask = t;
+  closePreview();
+  renderCurrent(t);
+  loadHistory();
+  if (t.status === "running" || t.status === "queued") poll();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/* 檔案列表 */
+let wbSub = "";
+
+function wbNav(s) {
+  wbSub = decodeURIComponent(s);
+  loadFiles();
+}
+
+function wbUp() {
+  wbSub = wbSub.includes("/") ? wbSub.slice(0, wbSub.lastIndexOf("/")) : "";
+  loadFiles();
+}
+
+async function loadFiles() {
+  const r = await api("/v1/workspaces/files?ws=" + encodeURIComponent(curSpace) + "&sub=" + encodeURIComponent(wbSub)).then((r) => r.json()).catch(() => ({ dirs: [], files: [] }));
+
+  const bc = $("#file-breadcrumb");
+  bc.textContent = wbSub ? "📂 " + wbSub : "";
+
+  let html = wbSub ? `<button class="file-up" onclick="wbUp()" aria-label="上一層" type="button">⬆ 上一層</button>` : "";
+  html += (r.dirs || []).map((d) => `<button class="file-row" onclick="wbNav('${encodeURIComponent((wbSub ? wbSub + "/" : "") + d)}')" type="button">📁 <span class="name">${esc(d)}</span>/</button>`).join("");
+  html +=
+    (r.files || []).map((f) => {
+      const full = (wbSub ? wbSub + "/" : "") + f.name;
+      return `<div class="file-row">
+    <button class="file-open" onclick="wbView('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button">
+      <span class="name">📄 ${esc(f.name)}</span>
+      <span class="size">${fmtSize(f.size)}</span>
+    </button>
+    <button class="del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button" title="刪除" aria-label="刪除 ${esc(f.name)}">🗑</button>
+  </div>`;
+    }).join("");
+
+  if (!(r.dirs || []).length && !(r.files || []).length)
+    html += `<div class="empty">（${wbSub ? "空資料夾" : "還沒有檔案"}）</div>`;
+
+  $("#wbfiles").innerHTML = html;
+}
+
+async function wbDelete(encPath, name) {
+  if (!confirm("刪除 " + name + "？此動作無法復原。")) return;
+  await api("/v1/workspaces/file?ws=" + encodeURIComponent(curSpace) + "&path=" + encodeURIComponent(decodeURIComponent(encPath)), { method: "DELETE" });
+  loadFiles();
+}
+
+function wbView(encPath, name) {
+  return renderFile(wsFileUrl(curSpace), encPath, name); // 工作區檔走 /v1/workspaces/file?ws=
+}
+
+/* 啟動 */
+loadHistory();
+loadFiles();
 </script>
 </body>
 </html>

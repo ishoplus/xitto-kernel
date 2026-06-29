@@ -4,116 +4,639 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>xitto · 對話</title>
-<script>
-  // 早期套用主題（避免載入閃爍）：localStorage(xk_theme) 優先，否則跟隨系統
-  (function(){ try { var t = localStorage.getItem("xk_theme") || (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); document.documentElement.setAttribute("data-theme", t); } catch(e){} })();
-</script>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<!-- 設計系統 + 共享工具庫 -->
+<link rel="stylesheet" href="shared/style.css">
+<!-- 設定注入：server 會替換這些佔位符（HTML 才會被替換，靜態 app.js 不會），app.js 從 window.__XITTO__ 讀 -->
+<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__ };</script>
+<script src="shared/app.js"></script>
 <style>
-  /* 深色（預設）。淺色見 [data-theme=light]；切換鈕寫入 localStorage(xk_theme,兩頁共用)，預設跟隨系統 */
-  :root { --bg:#0f1115; --card:#181b22; --line:#272b34; --fg:#e7e9ee; --dim:#8b919e; --accent:#6ea8fe; --ok:#5fd38a; --warn:#f0c674; --me:#243044; --inset:#0c0e12; --code:#1a1d24; --btnfg:#08101f; --danger:#f08a8a; --warnbg:#1d1c12; }
-  :root[data-theme="light"] { --bg:#f6f7f9; --card:#ffffff; --line:#e3e6eb; --fg:#1d2230; --dim:#6b7280; --accent:#2563eb; --ok:#1a8a4d; --warn:#b07a12; --me:#e8eefc; --inset:#eef1f5; --code:#eef1f5; --btnfg:#ffffff; --danger:#d62f2f; --warnbg:#fdf6e3; }
-  * { box-sizing:border-box; }
-  html,body { height:100%; }
-  body { margin:0; font:15px/1.6 -apple-system,"PingFang TC","Microsoft JhengHei",system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-  /* 全高雙欄：左對話列表 + 右對話視窗（與許願台的「成品/檔案」佈局刻意不同：這裡以對話 thread 為主） */
-  .app { display:grid; grid-template-columns:280px minmax(0,1fr); height:100vh; }
-  .side { border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; background:var(--inset); }
-  .side h1 { font-size:17px; margin:0; display:flex; align-items:center; gap:8px; }
-  .side .sub { color:var(--dim); font-size:12px; margin-top:2px; }
-  .sidehead { padding:16px 14px 12px; border-bottom:1px solid var(--line); }
-  .topctl { display:flex; align-items:center; gap:6px; margin-top:12px; }
-  .prjlabel { color:var(--dim); font-size:12px; }
-  select, button, textarea, input { font:inherit; }
-  select { background:var(--inset); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; max-width:150px; }
-  button { background:var(--accent); color:var(--btnfg); border:0; border-radius:8px; padding:9px 16px; font-weight:600; cursor:pointer; }
-  button.ghost { background:transparent; color:var(--dim); border:1px solid var(--line); font-weight:500; }
-  button.ghost:hover { color:var(--fg); }
-  button:disabled { opacity:.5; cursor:default; }
-  .newbtn { width:100%; margin-top:12px; }
-  .chats { flex:1; overflow:auto; padding:8px; }
-  .chatitem { border:1px solid transparent; border-radius:8px; padding:9px 10px; margin:2px 0; cursor:pointer; }
-  .chatitem:hover { background:var(--card); }
-  .chatitem.active { background:var(--card); border-color:var(--accent); }
-  .chatitem .t { font-size:13.5px; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .chatitem .m { color:var(--dim); font-size:11px; margin-top:2px; display:flex; gap:6px; }
-  .chatdel { float:right; opacity:0; cursor:pointer; } .chatitem:hover .chatdel { opacity:.6; } .chatdel:hover { opacity:1; }
-  .empty { color:var(--dim); font-size:13px; padding:10px; }
-  .sidefoot { padding:10px 14px; border-top:1px solid var(--line); font-size:12.5px; }
-  .sidefoot a { color:var(--accent); text-decoration:none; }
+/* ── Chat 頁面樣式 ──────────────────────────────────────── */
 
-  .main { display:flex; flex-direction:column; min-height:0; }
-  .thread { flex:1; overflow:auto; padding:24px 0; }
-  .threadwrap { max-width:780px; margin:0 auto; padding:0 22px; }
-  .welcome { text-align:center; color:var(--dim); padding:80px 24px; line-height:2; }
-  .msg { margin:18px 0; display:flex; gap:12px; }
-  .avatar { flex:0 0 30px; width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; background:var(--card); border:1px solid var(--line); }
-  .msg.user .avatar { background:var(--me); }
-  .bubble { min-width:0; flex:1; }
-  .who { font-size:12px; color:var(--dim); margin-bottom:3px; }
-  .body { white-space:pre-wrap; word-wrap:break-word; }
-  .body.md { white-space:normal; }
-  .cursor::after { content:"▍"; color:var(--accent); animation:blink 1s steps(2) infinite; }
-  @keyframes blink { 50%{opacity:0;} }
-  .md { line-height:1.7; } .md h1,.md h2,.md h3,.md h4 { margin:.7em 0 .3em; line-height:1.3; }
-  .md code { background:var(--code); padding:1px 5px; border-radius:4px; font-size:.9em; }
-  .md pre.code { background:var(--code); padding:10px; border-radius:8px; overflow:auto; }
-  .md ul { margin:.3em 0 .3em 1.2em; } .md a { color:var(--accent); } .md p { margin:.5em 0; }
-  /* 過程（工具動作）：對話泡泡內收合，預設安靜，想看才展開——像 Claude Code 的 ⏺/⎿ + ctrl+r */
-  .proc { margin:8px 0 2px; border:1px solid var(--line); border-radius:10px; background:var(--inset); }
-  .proctoggle { padding:7px 12px; font-size:13px; color:var(--accent); cursor:pointer; user-select:none; display:flex; align-items:center; gap:6px; }
-  .proclist { padding:2px 12px 10px; border-top:1px solid var(--line); }
-  .pstep { font-size:13px; color:var(--fg); padding:3px 0; }
-  .pstep.err { color:var(--danger); } .pstep .dim { color:var(--dim); }
-  .pstep .spin { color:var(--accent); }
-  .diff { margin:4px 0 6px 14px; font:12px/1.5 ui-monospace,Menlo,monospace; }
-  .dh { color:var(--dim); font-size:11px; margin-bottom:2px; }
-  .dl { white-space:pre-wrap; } .dl.add { color:var(--ok); } .dl.del { color:var(--danger); }
-  .phase { color:var(--dim); font-size:12.5px; font-style:italic; margin:4px 0; }
-  .phase.dots::after { content:""; animation:dots 1.4s steps(4,end) infinite; }
-  @keyframes dots { 0%{content:""} 25%{content:"·"} 50%{content:"··"} 75%{content:"···"} }
+:root { --sidebar-w: 280px; --thread-w: 780px; }
 
-  .composer { border-top:1px solid var(--line); background:var(--bg); }
-  .cwrap { max-width:780px; margin:0 auto; padding:14px 22px 18px; }
-  .cbox { display:flex; gap:10px; align-items:flex-end; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px 12px; transition:border-color .15s; }
-  .cbox:focus-within { border-color:var(--accent); }
-  .cbox textarea { flex:1; background:transparent; color:var(--fg); border:0; outline:none; resize:none; font:inherit; max-height:200px; min-height:24px; }
-  .crow { display:flex; align-items:center; gap:10px; margin-top:8px; color:var(--dim); font-size:12px; }
-  .crow .spacer { flex:1; }
-  .stopbtn { background:transparent; color:var(--danger); border:1px solid rgba(240,138,138,.45); padding:6px 12px; font-size:13px; }
-  .stopbtn:hover { background:rgba(240,138,138,.14); }
-  @media (max-width:760px){ .app{ grid-template-columns:1fr; } .side{ display:none; } }
+html, body { height: 100%; }
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 跳過導航 */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 0;
+  background: var(--accent);
+  color: var(--btnfg);
+  padding: var(--sp-2) var(--sp-4);
+  z-index: 9999;
+  border-radius: 0 0 var(--r-md) 0;
+  font-weight: 600;
+  transition: top var(--duration-fast);
+}
+
+.skip-link:focus { top: 0; }
+
+/* 全屏雙欄 */
+.app {
+  flex: 1;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── 左側邊欄 ─────────────────────────────────────────── */
+.side {
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  background: var(--inset);
+  overflow: hidden;
+}
+
+.side-head {
+  padding: var(--sp-4) var(--sp-3) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.side-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+
+.side-brand h1 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.side-tagline {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.side-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.space-select {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.space-select label {
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.space-select select {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+
+.new-chat-btn {
+  width: 100%;
+  margin-top: var(--sp-3);
+  flex-shrink: 0;
+}
+
+/* 對話列表 */
+.chats {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-2);
+}
+
+.chat-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-2);
+  margin: 2px 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast);
+  position: relative;
+}
+
+.chat-item:hover { background: var(--card); }
+
+.chat-item.active {
+  background: var(--card);
+  border-color: var(--accent);
+}
+
+.chat-item .title {
+  font-size: 13.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-weight: inherit;
+  padding: 0;
+}
+
+.chat-item .meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--dim);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.chat-del {
+  position: absolute;
+  top: 50%;
+  right: var(--sp-2);
+  transform: translateY(-50%);
+  opacity: 0;
+  cursor: pointer;
+  font-size: 12px;
+  background: none;
+  border: none;
+  padding: var(--sp-1);
+  color: var(--dim);
+  transition: opacity var(--duration-fast);
+}
+
+.chat-item:hover .chat-del { opacity: .6; }
+.chat-del:hover { opacity: 1; }
+
+/* 側邊欄底部 */
+.side-foot {
+  padding: var(--sp-3);
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+  flex-shrink: 0;
+}
+
+.side-foot a {
+  color: var(--accent);
+}
+
+/* 檔案列表 */
+.file-section {
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 300px;
+}
+
+.file-section h3 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--dim);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  flex-shrink: 0;
+}
+
+.file-breadcrumb {
+  padding: var(--sp-1) var(--sp-3);
+  font-size: 11px;
+  color: var(--dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.file-up {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--dim);
+  font-size: 13px;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+}
+
+.file-up:hover { color: var(--fg); }
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: 13px;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  transition: background var(--duration-fast);
+}
+
+.file-row:hover { background: var(--card); }
+
+.file-row .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.file-row .size {
+  color: var(--dim);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* ── 右側主區 ─────────────────────────────────────────── */
+.main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Thread 區 */
+.thread {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-6) 0;
+}
+
+.thread-wrap {
+  max-width: var(--thread-w);
+  margin: 0 auto;
+  padding: 0 var(--sp-6);
+}
+
+/* 歡迎空狀態 */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: min(62vh, 460px);
+  padding: var(--sp-10) var(--sp-6);
+}
+
+.welcome-icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: var(--sp-4);
+}
+
+.welcome-title {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--fg);
+  margin: 0 0 var(--sp-2);
+  letter-spacing: -.01em;
+}
+
+.welcome-sub {
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1.8;
+  margin: 0;
+  max-width: 400px;
+}
+
+/* 訊息 */
+.msg {
+  margin: var(--sp-6) 0;
+  display: flex;
+  gap: var(--sp-3);
+  animation: fade-in var(--duration-base) var(--ease-out);
+}
+
+.msg.user { flex-direction: row-reverse; }
+
+.avatar {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  align-self: flex-start;
+  flex-shrink: 0;
+}
+
+.msg.user .avatar { background: var(--me); }
+
+.bubble {
+  min-width: 0;
+  flex: 1;
+  max-width: calc(100% - 44px);
+}
+
+.msg.user .bubble { text-align: right; }
+
+.who {
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: var(--sp-1);
+}
+
+.msg.user .who { text-align: right; }
+
+.body {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.body.md { white-space: normal; }
+
+/* 打字游標 */
+.cursor::after {
+  content: "▍";
+  color: var(--accent);
+  animation: blink 1s steps(2) infinite;
+}
+
+/* 過程日誌（工具呼叫）*/
+.proc {
+  margin: var(--sp-2) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--inset);
+  text-align: left;
+}
+
+.proc-toggle {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: none;
+  border: none;
+  font-weight: inherit;
+  width: 100%;
+  text-align: left;
+}
+
+.proc-toggle:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+
+.proc-list {
+  padding: var(--sp-1) var(--sp-3) var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+
+.proc-step {
+  font-size: 13px;
+  padding: 3px 0;
+  color: var(--fg);
+}
+
+.proc-step.error { color: var(--danger); }
+.proc-step .dim { color: var(--dim); }
+.proc-step .spin { color: var(--accent); }
+
+/* 彩色 diff */
+.diff { margin: var(--sp-2) 0 var(--sp-2) var(--sp-4); font: 12px/1.5 ui-monospace, Menlo, monospace; }
+.dh { color: var(--dim); font-size: 11px; margin-bottom: 2px; }
+.dl { white-space: pre-wrap; }
+.dl.add { color: var(--ok); }
+.dl.del { color: var(--danger); }
+
+/* 階段提示 */
+.phase {
+  color: var(--dim);
+  font-size: 12.5px;
+  font-style: italic;
+  margin: var(--sp-1) 0;
+}
+
+/* ── 輸入區 ─────────────────────────────────────────── */
+.composer {
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.composer-wrap {
+  max-width: var(--thread-w);
+  margin: 0 auto;
+  padding: var(--sp-3) var(--sp-6) var(--sp-4);
+}
+
+.composer-box {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-end;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-2) var(--sp-3);
+  box-shadow: var(--shadow-md), inset 0 1px 0 var(--hairline);
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.composer-box:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: var(--shadow-md), 0 0 0 3px var(--accent-soft);
+}
+
+.composer-textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  font: inherit;
+  max-height: 200px;
+  min-height: 24px;
+  line-height: 1.6;
+  color: var(--fg);
+  padding: 0;
+}
+
+.composer-textarea::placeholder { color: var(--dim); }
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+.send-btn { padding: var(--sp-2) var(--sp-4); }
+
+.stop-btn {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 13px;
+}
+
+.stop-btn:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.composer-footer .spacer { flex: 1; }
+
+/* ── 響應式 ─────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  :root { --sidebar-w: 240px; }
+}
+
+@media (max-width: 768px) {
+  .app { grid-template-columns: 1fr; }
+  
+  .side {
+    display: none; /* 手機上隱藏側邊欄，用連結切換 */
+  }
+  
+  .thread-wrap, .composer-wrap {
+    padding: 0 var(--sp-4);
+  }
+  
+  /* 手機上顯示「返回列表」按鈕 */
+  .mobile-back {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--dim);
+    cursor: pointer;
+  }
+  
+  .mobile-back:hover { color: var(--fg); }
+  
+  /* 手機上把檔案列表放到 thread 區底部 */
+  .file-section {
+    max-height: 200px;
+    border-top: 1px solid var(--line);
+  }
+}
+
+@media (min-width: 769px) {
+  .mobile-back { display: none; }
+}
+
+@media (min-width: 1400px) {
+  :root { --thread-w: 860px; }
+}
 </style>
 </head>
 <body>
+<a href="#main-input" class="skip-link">跳到輸入框</a>
+
 <div class="app">
-  <aside class="side">
-    <div class="sidehead">
-      <h1>💬 xitto 對話<span class="spacer" style="flex:1"></span><button class="ghost" id="theme" title="切換白天／夜晚" style="padding:4px 9px;font-size:15px">🌙</button></h1>
-      <div class="sub">逐句協作，記得上下文</div>
-      <div class="topctl">
-        <span class="prjlabel">專案</span>
-        <select id="space" title="專案／空間：與許願台共用，檔案與記憶各自獨立、跨頁累積"></select>
+  <!-- 左側邊欄 -->
+  <aside class="side" role="navigation" aria-label="對話列表">
+    <div class="side-head">
+      <div class="side-brand">
+        <h1>💬 對話</h1>
+        <button class="ghost" id="theme" data-tooltip="切換主題" aria-label="切換深色/淺色模式" style="padding:4px 9px;font-size:15px;margin-left:auto">🌙</button>
       </div>
-      <button class="newbtn" id="newchat">＋ 新對話</button>
+      <div class="side-tagline">逐句協作，記得上下文</div>
+      
+      <div class="side-controls">
+        <div class="space-select">
+          <label for="space">專案</label>
+          <select id="space" aria-label="選擇專案空間"></select>
+        </div>
+      </div>
+      
+      <button class="ghost new-chat-btn" id="new-chat-btn" aria-label="開始新對話">＋ 新對話</button>
     </div>
-    <div class="chats" id="chats"></div>
-    <div class="sidefoot">🪄 <a href="/">改用許願台</a>（交辦明確任務、收成品）</div>
+    
+    <div class="chats" id="chats" role="list" aria-label="對話列表"></div>
+    
+    <!-- 檔案列表 -->
+    <section class="file-section" aria-label="工作區檔案">
+      <h3>📂 檔案</h3>
+      <div id="file-breadcrumb" class="file-breadcrumb" aria-live="polite"></div>
+      <div class="file-list" id="wbfiles" role="tree" aria-label="檔案列表"></div>
+    </section>
+    
+    <div class="side-foot">
+      🪄 <a href="/">許願台</a>（交辦明確任務、收成品）
+    </div>
   </aside>
 
-  <main class="main">
-    <div class="thread" id="thread">
-      <div class="threadwrap"><div class="welcome" id="welcome">👋 開始一段對話。<br>它會記得整段上下文，逐步和你協作。<br><br>想「交辦一件明確的事、做完給成品」？改用 <a href="/" style="color:var(--accent)">🪄 許願台</a>。</div></div>
+  <!-- 右側主區 -->
+  <main id="main-content" class="main" role="main" aria-label="對話區">
+    <button class="mobile-back" onclick="showSide()" aria-label="返回對話列表">
+      ← 返回對話列表
+    </button>
+    
+    <div class="thread" id="thread" role="log" aria-label="對話記錄" aria-live="polite">
+      <div class="thread-wrap">
+        <!-- 動態內容由 JS render() 注入 -->
+      </div>
     </div>
-    <div class="composer">
-      <div class="cwrap">
-        <div class="cbox">
-          <textarea id="input" rows="1" placeholder="輸入訊息…（Enter 送出，Shift+Enter 換行）"></textarea>
-          <button id="send">送出</button>
+    <!-- 檔案預覽區 -->
+    <div id="file-preview"></div>
+
+    <!-- 輸入區 -->
+    <div class="composer" id="main-input">
+      <div class="composer-wrap">
+        <div class="composer-box" role="form" aria-label="輸入訊息">
+          <label for="input" class="sr-only">輸入訊息</label>
+          <textarea
+            id="input"
+            class="composer-textarea"
+            rows="1"
+            placeholder="輸入訊息，開始對話…"
+            aria-describedby="input-hint"
+          ></textarea>
+          <div class="composer-actions">
+            <label for="pack" class="sr-only">選擇領域</label>
+            <select id="pack" aria-label="選擇領域" style="max-width:120px"></select>
+            <button class="primary send-btn" id="send-btn" aria-label="送出訊息">送出</button>
+          </div>
         </div>
-        <div class="crow">
-          <select id="pack" title="領域"></select>
-          <span class="spacer"></span>
-          <span id="hint"></span>
+        <div class="composer-footer">
+          <span id="input-hint">Enter 送出 · Shift+Enter 換行</span>
+          <span class="spacer" aria-hidden="true"></span>
+          <span id="status-hint" aria-live="polite"></span>
         </div>
       </div>
     </div>
@@ -121,205 +644,458 @@
 </div>
 
 <script>
-const TOKEN = "__SERVER_TOKEN__";
-const PACKS = __PACKS__;
-const LOCAL = __LOCAL__;
-const $ = (s) => document.querySelector(s);
-const esc = (s) => String(s==null?"":s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-const api = (p, opts={}) => fetch(p, { ...opts, headers: { authorization:"Bearer "+TOKEN, "content-type":"application/json", ...(opts.headers||{}) } });
+/* ── Chat 應用邏輯 ───────────────────────────────────────── */
 
-// 白天／夜晚切換（xk_theme 兩頁共用；鈕顯示「將切到」的圖示）
-function applyTheme(t){ document.documentElement.setAttribute("data-theme", t); const b=$("#theme"); if(b) b.textContent = t==="light" ? "🌙" : "☀️"; }
-applyTheme(localStorage.getItem("xk_theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
-$("#theme").onclick = () => { const t = document.documentElement.getAttribute("data-theme")==="light" ? "dark" : "light"; localStorage.setItem("xk_theme", t); applyTheme(t); };
+/* 主題切換 */
+$("#theme").onclick = () => {
+  const t = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+  applyTheme(t);
+};
 
-// 工具動作翻人話（與許願台一致）
-const TOOL_ZH = { read:"讀取檔案", ls:"查看目錄", glob:"尋找檔案", grep:"搜尋內容", write:"建立檔案", edit:"修改檔案", bash:"執行指令", web_search:"搜尋網路", web_fetch:"讀取網頁", http:"呼叫 API", read_image:"看圖片", skill:"載入技能", skill_save:"記錄技能", skills_check:"複查技能", playbook_update:"記下做法", episode_record:"記下經驗", episode_recall:"回想經驗", memory_save:"記住重點", todo_write:"規劃步驟", spawn_agent:"派出子助手", ask_user:"來問你" };
-const LABELS = { general:"通用", coding:"程式", "data-query":"查資料", notes:"筆記", "deep-research":"研究", devops:"維運", patent:"專利", uiux:"介面" };
-const packLabel = (p) => LABELS[p] || p;
-const toolText = (a) => { const z=TOOL_ZH[a.name]||a.name; const d=a.args&&(a.args.command||a.args.path||a.args.query||a.args.url||a.args.topic||a.args.name)||""; return z+(d?` ${String(d).slice(0,60)}`:""); };
+/* IME 保護 */
+let composing = false;
+const inp = $("#input");
+inp.addEventListener("compositionstart", () => { composing = true; });
+inp.addEventListener("compositionend", () => { composing = false; });
 
-// ── 極簡 markdown（與許願台同款，零依賴）──
-function mdRender(src){
-  const lines=String(src).replace(/\r/g,"").split("\n"); const out=[]; let inCode=false,buf=[],inList=false;
-  const inline=s=>esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\*([^*]+)\*/g,'<em>$1</em>').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');
-  const closeL=()=>{ if(inList){out.push("</ul>");inList=false;} };
-  for(const ln of lines){
-    if(/^```/.test(ln)){ if(inCode){out.push("<pre class='code'>"+esc(buf.join("\n"))+"</pre>");buf=[];inCode=false;}else{closeL();inCode=true;} continue; }
-    if(inCode){ buf.push(ln); continue; }
-    const h=ln.match(/^(#{1,4})\s+(.*)/); if(h){ closeL(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
-    const li=ln.match(/^\s*(?:[-*]|\d+\.)\s+(.*)/); if(li){ if(!inList){out.push("<ul>");inList=true;} out.push("<li>"+inline(li[1])+"</li>"); continue; }
-    if(ln.trim()===""){ closeL(); continue; }
-    closeL(); out.push("<p>"+inline(ln)+"</p>");
-  }
-  closeL(); if(inCode)out.push("<pre class='code'>"+esc(buf.join("\n"))+"</pre>");
-  return out.join("");
-}
-function diffHtml(d){
-  if(!d) return "";
-  if(d.tooBig) return `<div class="diff"><span class="dh">+${d.added} -${d.removed} 行（差異過大，省略）</span></div>`;
-  const ch=(d.lines||[]).filter(l=>l.t!==" ").slice(0,40);
-  if(!ch.length) return "";
-  return `<div class="diff"><div class="dh">+${d.added} -${d.removed}</div>${ch.map(l=>`<div class="dl ${l.t==="+"?"add":"del"}">${esc(l.t+" "+l.s)}</div>`).join("")}</div>`;
-}
+/* 專案空間 */
+renderSpaces($("#space"));
+$("#space").onchange = () => {
+  switchSpace($("#space").value);
+  newChat();
+  renderChats();
+  loadFiles();
+};
 
-// ── 專案／空間（與許願台共用 localStorage：跨頁同一工作區 → 五層沉澱跨頁累積）──
-let spaces = JSON.parse(localStorage.getItem("xk_spaces")||'["default"]');
-let curSpace = localStorage.getItem("xk_space")||"default";
-const spaceLabel=s=>s.startsWith("/")?("📁 "+(s.split("/").filter(Boolean).pop()||s)):s;
-function renderSpaces(){ $("#space").innerHTML = spaces.map(s=>`<option value="${esc(s)}" ${s===curSpace?"selected":""}>${esc(spaceLabel(s))}</option>`).join(""); }
-$("#space").onchange = () => { curSpace=$("#space").value; localStorage.setItem("xk_space",curSpace); newChat(); renderChats(); };
-renderSpaces();
+/* 領域選單 */
+renderPackSelect($("#pack"));
 
-// 領域選單（預設自動判斷）
-$("#pack").innerHTML = `<option value="auto" selected>🪄 自動領域</option>` + PACKS.map(p=>`<option value="${p}">${packLabel(p)}</option>`).join("");
-
-// ── 對話清單（純前端持久化：transcript 存 localStorage，sessionId 由伺服器回傳後綁定）──
-// 後端 history 也綁 sessionId 持久化（重啟可續），這裡額外存「畫面用的對話內容」供列表/重開顯示。
+/* ── 對話持久化（localStorage）──────────────────────────── */
 const chatsKey = () => "xk_chats";
-const tKey = (id) => "xk_chat_"+id;
-function allChats(){ return JSON.parse(localStorage.getItem(chatsKey())||"[]"); }
-function saveChats(list){ localStorage.setItem(chatsKey(), JSON.stringify(list)); }
-function upsertChat(meta){ const list=allChats().filter(c=>c.id!==meta.id); list.unshift(meta); saveChats(list); }
-function loadTranscript(id){ return JSON.parse(localStorage.getItem(tKey(id))||"[]"); }
-function saveTranscript(id, msgs){ localStorage.setItem(tKey(id), JSON.stringify(msgs)); }
+const tKey = (id) => "xk_chat_" + id;
 
-// ── 目前對話狀態 ──
-let sessionId = null;       // null = 尚未建立（首則訊息送出後由伺服器回傳）
-let messages = [];          // [{role, text, tools:[{name,args,done,isError,diff}], phase}]
+function allChats() {
+  return JSON.parse(localStorage.getItem(chatsKey()) || "[]");
+}
+
+function saveChats(list) {
+  localStorage.setItem(chatsKey(), JSON.stringify(list));
+}
+
+function upsertChat(meta) {
+  const list = allChats().filter((c) => c.id !== meta.id);
+  list.unshift(meta);
+  saveChats(list);
+}
+
+function loadTranscript(id) {
+  return JSON.parse(localStorage.getItem(tKey(id)) || "[]");
+}
+
+function saveTranscript(id, msgs) {
+  localStorage.setItem(tKey(id), JSON.stringify(msgs));
+}
+
+/* ── 目前對話狀態 ──────────────────────────────────────── */
+let sessionId = null; // null = 尚未建立
+let messages = []; // [{role, text, tools:[], _procOpen, phase}]
 let streaming = false;
 let abortCtl = null;
 
-function newChat(){ stopStream(); sessionId=null; messages=[]; render(); $("#input").focus(); renderChats(); }
-$("#newchat").onclick = newChat;
+/* ── 對話列表 ──────────────────────────────────────────── */
+function newChat() {
+  stopStream();
+  sessionId = null;
+  messages = [];
+  render();
+  $("#input").focus();
+  renderChats();
+  loadFiles();
+}
 
-function openChat(id){
-  stopStream(); sessionId=id; messages=loadTranscript(id); render(); renderChats();
-  $("#thread").scrollTop = $("#thread").scrollHeight;
+$("#new-chat-btn").onclick = newChat;
+
+/* ── 檔案列表 ──────────────────────────────────────────── */
+let wbSub = "";
+
+function wbNav(s) {
+  wbSub = decodeURIComponent(s);
+  loadFiles();
 }
-function deleteChat(id, ev){
+
+function wbUp() {
+  wbSub = wbSub.includes("/") ? wbSub.slice(0, wbSub.lastIndexOf("/")) : "";
+  loadFiles();
+}
+
+async function loadFiles() {
+  const r = await api("/v1/workspaces/files?ws=" + encodeURIComponent(curSpace) + "&sub=" + encodeURIComponent(wbSub)).then((r) => r.json()).catch(() => ({ dirs: [], files: [] }));
+
+  const bc = $("#file-breadcrumb");
+  bc.textContent = wbSub ? "📂 " + wbSub : "";
+
+  let html = wbSub ? `<button class="file-up" onclick="wbUp()" aria-label="上一層" type="button">⬆ 上一層</button>` : "";
+  html += (r.dirs || []).map((d) => `<button class="file-row" onclick="wbNav('${encodeURIComponent((wbSub ? wbSub + "/" : "") + d)}')" type="button">📁 <span class="name">${esc(d)}</span>/</button>`).join("");
+  html +=
+    (r.files || []).map((f) => {
+      const full = (wbSub ? wbSub + "/" : "") + f.name;
+      return `<button class="file-row" onclick="wbView('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button">
+    <span class="name">📄 ${esc(f.name)}</span>
+    <span class="size">${fmtSize(f.size)}</span>
+  </button>`;
+    }).join("");
+
+  if (!(r.dirs || []).length && !(r.files || []).length)
+    html += `<div class="empty" style="padding:${8}px">（${wbSub ? "空資料夾" : "還沒有檔案"}）</div>`;
+
+  $("#wbfiles").innerHTML = html;
+}
+
+async function wbView(encPath, name) {
+  // 在 thread 區顯示檔案預覽
+  const path = decodeURIComponent(encPath);
+  const v = document.getElementById("file-preview");
+  if (!v) return;
+  
+  const url = "/v1/workspaces/file?ws=" + encodeURIComponent(curSpace) + "&path=" + encPath + "&token=" + encodeURIComponent(TOKEN);
+  
+  const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
+  const MD = /\.(md|markdown)$/i;
+  const JSONF = /\.json$/i;
+  const HTMLF = /\.html?$/i;
+  
+  let content = "";
+  if (IMG.test(name)) {
+    content = `<div style="padding:${8}px"><img style="max-width:100%;border-radius:${6}px" src="${url}" alt="${esc(name)}"></div>`;
+  } else {
+    const txt = await fetch(url).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+    if (txt == null) {
+      content = `<div class="empty">（無法預覽）</div>`;
+    } else if (MD.test(name)) {
+      content = `<div class="md" style="padding:${12}px;max-height:400px;overflow:auto">${mdRender(txt)}</div>`;
+    } else if (JSONF.test(name)) {
+      try { content = `<pre style="padding:${12}px;overflow:auto;max-height:400px;white-space:pre-wrap;font-size:13px">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`; }
+      catch { content = `<pre style="padding:${12}px;overflow:auto;max-height:400px">${esc(txt)}</pre>`; }
+    } else if (HTMLF.test(name)) {
+      content = `<div class="empty">（HTML 檔案，請用「開新分頁」檢視）</div>`;
+    } else {
+      content = `<pre style="padding:${12}px;overflow:auto;max-height:400px;white-space:pre-wrap;font-size:13px">${esc(txt)}</pre>`;
+    }
+  }
+  
+  v.innerHTML = `<div style="border-top:1px solid var(--line);padding:${12}px ${24}px">
+    <div style="display:flex;align-items:center;gap:${8}px;margin-bottom:${8}px;font-size:12px;color:var(--dim)">
+      📄 ${esc(name)}
+      <a href="${url}" target="_blank" style="color:var(--accent)">開新分頁</a>
+      <a href="${url}&download=1" style="color:var(--accent)">下載</a>
+    </div>
+    ${content}
+    <button class="ghost" onclick="this.parentElement.parentElement.remove()" style="margin-top:${8}px;font-size:12px" type="button">✕ 關閉</button>
+  </div>`;
+  scrollDown();
+}
+
+function openChat(id) {
+  stopStream();
+  sessionId = id;
+  messages = loadTranscript(id);
+  render();
+  renderChats();
+  scrollDown();
+}
+
+function deleteChat(id, ev) {
   ev.stopPropagation();
-  if(!confirm("刪除這段對話？")) return;
-  saveChats(allChats().filter(c=>c.id!==id)); localStorage.removeItem(tKey(id));
-  if(id===sessionId) newChat(); else renderChats();
+  if (!confirm("刪除這段對話？")) return;
+  saveChats(allChats().filter((c) => c.id !== id));
+  localStorage.removeItem(tKey(id));
+  if (id === sessionId) newChat();
+  else renderChats();
 }
-function renderChats(){
-  const list = allChats().filter(c=>(c.space||"default")===curSpace);
-  $("#chats").innerHTML = list.length ? list.map(c=>`<div class="chatitem${c.id===sessionId?' active':''}" onclick="openChat('${c.id}')">
-    <span class="chatdel" title="刪除" onclick="deleteChat('${c.id}',event)">🗑</span>
-    <div class="t">${esc(c.title||"新對話")}</div>
-    <div class="m">${esc(packLabel(c.pack||"general"))} · ${esc(fmtTime(c.ts))}</div></div>`).join("")
+
+function renderChats() {
+  const list = allChats().filter((c) => (c.space || "default") === curSpace);
+  const activeClass = (id) => (id === sessionId ? " active" : "");
+
+  $("#chats").innerHTML = list.length
+    ? list
+        .map(
+          (c) => `<button class="chat-item${activeClass(c.id)}" onclick="openChat('${c.id}')" aria-current="${c.id === sessionId ? "page" : "false"}">
+      <span class="title">${esc(c.title || "新對話")}</span>
+      <span class="meta">
+        <span>${packLabel(c.pack || "general")}</span>
+        <span>${fmtTime(c.ts)}</span>
+      </span>
+      <button class="chat-del" onclick="deleteChat('${c.id}',event)" aria-label="刪除對話" title="刪除">🗑</button>
+    </button>`
+        )
+        .join("")
     : `<div class="empty">還沒有對話。<br>下面打一句話開始。</div>`;
 }
-function fmtTime(s){ try{ return new Date(s).toLocaleString(undefined,{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}); }catch{ return ""; } }
 
-// ── 渲染對話 thread ──
-function procHtml(m, idx){
-  if(!m.tools||!m.tools.length) return "";
+/* ── 渲染 Thread ─────────────────────────────────────── */
+const PHASE_TEXT = {
+  starting: "啟動中",
+  thinking: "思考中…",
+  verifying: "驗收中…",
+  verified: "驗收通過",
+  fixing: "修正中…",
+  "needs-input": "需要你回答",
+};
+
+function procHtml(m, idx) {
+  if (!m.tools || !m.tools.length) return "";
   const open = m._procOpen;
-  const steps = m.tools.map(a=>`<div class="pstep ${a.isError?"err":""}">${a.done?(a.isError?"✗":"⏺"):'<span class="spin">◐</span>'} ${esc(toolText(a))}${a.diff?diffHtml(a.diff):""}</div>`).join("");
-  return `<div class="proc"><div class="proctoggle" onclick="toggleProc(${idx})">${open?"▾":"▸"} 過程（${m.tools.length} 步）</div>${open?`<div class="proclist">${steps}</div>`:""}</div>`;
+  const steps = m.tools
+    .map(
+      (a) =>
+        `<div class="proc-step ${a.isError ? "error" : ""}">
+          ${a.done ? (a.isError ? "✗" : "⏺") : '<span class="spin">◐</span>'}
+          ${esc(toolText(a))}
+          ${a.diff ? diffHtml(a.diff) : ""}
+        </div>`
+    )
+    .join("");
+  return `<div class="proc">
+    <button class="proc-toggle" onclick="toggleProc(${idx})" aria-expanded="${open}" aria-controls="proc-${idx}">
+      ${open ? "▾" : "▸"} 過程（${m.tools.length} 步）
+    </button>
+    <div id="proc-${idx}" class="proc-list" ${open ? "" : "hidden"}>${steps}</div>
+  </div>`;
 }
-function msgHtml(m, idx){
-  const isUser = m.role==="user";
-  const bodyCls = isUser ? "body" : "body md";
-  const bodyHtml = isUser ? esc(m.text) : (m.text ? mdRender(m.text) : "");
-  const cursor = (!isUser && streaming && idx===messages.length-1 && !m.text) ? '<span class="cursor"></span>' : "";
-  const phase = (!isUser && m.phase) ? `<div class="phase dots">${esc(m.phase)}</div>` : "";
-  return `<div class="msg ${isUser?"user":"asst"}">
-    <div class="avatar">${isUser?"🙂":"🤖"}</div>
+
+function msgHtml(m, idx) {
+  const isUser = m.role === "user";
+  const bodyHtml = isUser ? esc(m.text) : m.text ? mdRender(m.text) : "";
+  const cursor =
+    !isUser && streaming && idx === messages.length - 1 && !m.text
+      ? '<span class="cursor" aria-label="正在輸入"></span>'
+      : "";
+  const phase =
+    !isUser && m.phase ? `<div class="phase ${m.phase === "thinking" || m.phase === "verifying" ? "dots" : ""}">${esc(PHASE_TEXT[m.phase] || m.phase)}</div>` : "";
+
+  return `<div class="msg ${isUser ? "user" : "asst"}" role="article" aria-label="${isUser ? "你的訊息" : "xitto 的回覆"}">
+    <div class="avatar" aria-hidden="true">${isUser ? "🙂" : "🤖"}</div>
     <div class="bubble">
-      <div class="who">${isUser?"你":"xitto"}</div>
-      ${!isUser?procHtml(m, idx):""}
+      <div class="who" aria-hidden="true">${isUser ? "你" : "xitto"}</div>
+      ${!isUser ? procHtml(m, idx) : ""}
       ${phase}
-      <div class="${bodyCls}">${bodyHtml}${cursor}</div>
+      <div class="body ${isUser ? "" : "md"}">${bodyHtml}${cursor}</div>
     </div>
   </div>`;
 }
-function render(){
-  if(!messages.length){ $("#thread").innerHTML = `<div class="threadwrap"><div class="welcome" id="welcome">👋 開始一段對話。<br>它會記得整段上下文，逐步和你協作。<br><br>想「交辦一件明確的事、做完給成品」？改用 <a href="/" style="color:var(--accent)">🪄 許願台</a>。</div></div>`; return; }
-  $("#thread").innerHTML = `<div class="threadwrap">${messages.map((m,i)=>msgHtml(m,i)).join("")}</div>`;
-}
-function toggleProc(idx){ if(messages[idx]){ messages[idx]._procOpen=!messages[idx]._procOpen; render(); } }
-function scrollDown(){ const t=$("#thread"); t.scrollTop=t.scrollHeight; }
 
-// ── 送出 + SSE 串流（mode:turn，固定 sessionId 多輪）──
-async function send(){
+function render() {
+  if (!messages.length) {
+    $("#thread").innerHTML = `<div class="thread-wrap">
+      <div class="welcome">
+        <div class="welcome-icon" aria-hidden="true">💬</div>
+        <h2 class="welcome-title">開始一段對話</h2>
+        <p class="welcome-sub">它會記得整段上下文，逐步和你協作。<br>想「交辦一件明確的事、做完給成品」？改用 <a href="/">🪄 許願台</a>。</p>
+      </div>
+    </div>`;
+    return;
+  }
+  $("#thread").innerHTML = `<div class="thread-wrap">${messages.map((m, i) => msgHtml(m, i)).join("")}</div>`;
+}
+
+function toggleProc(idx) {
+  if (messages[idx]) {
+    messages[idx]._procOpen = !messages[idx]._procOpen;
+    render();
+  }
+}
+
+function scrollDown() {
+  const t = $("#thread");
+  t.scrollTop = t.scrollHeight;
+}
+
+/* ── 送出訊息 + SSE 串流 ───────────────────────────────── */
+async function send() {
   const text = $("#input").value.trim();
-  if(!text || streaming) return;
-  $("#input").value=""; autosize();
-  messages.push({ role:"user", text });
-  const asst = { role:"assistant", text:"", tools:[], _procOpen:false, phase:"思考中" };
+  if (!text || streaming) return;
+  $("#input").value = "";
+  autosize();
+
+  messages.push({ role: "user", text });
+  const asst = { role: "assistant", text: "", tools: [], _procOpen: false, phase: "thinking" };
   messages.push(asst);
-  render(); scrollDown();
+  render();
+  scrollDown();
   setStreaming(true);
 
   abortCtl = new AbortController();
   const pack = $("#pack").value;
-  const body = JSON.stringify({ pack, mode:"turn", input:text, sessionId: sessionId||undefined, workspace: curSpace });
+  const body = JSON.stringify({
+    pack,
+    mode: "turn",
+    input: text,
+    sessionId: sessionId || undefined,
+    workspace: curSpace,
+  });
+
   try {
-    const resp = await api("/v1/stream", { method:"POST", body, signal: abortCtl.signal });
-    if(!resp.ok || !resp.body){ asst.phase=""; asst.text="⚠ 連線失敗（"+resp.status+"）"; render(); setStreaming(false); return; }
-    const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf="";
-    while(true){
-      const { done, value } = await reader.read(); if(done) break;
-      buf += dec.decode(value, { stream:true });
+    const resp = await api("/v1/stream", { method: "POST", body, signal: abortCtl.signal });
+    if (!resp.ok || !resp.body) {
+      asst.phase = "";
+      asst.text = "⚠ 連線失敗（" + resp.status + "）";
+      render();
+      setStreaming(false);
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
       let idx;
-      while((idx=buf.indexOf("\n\n"))>=0){
-        const chunk=buf.slice(0,idx); buf=buf.slice(idx+2);
-        if(!chunk.startsWith("data: ")) continue;
-        let ev; try{ ev=JSON.parse(chunk.slice(6)); }catch{ continue; }
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        if (!chunk.startsWith("data: ")) continue;
+        let ev;
+        try {
+          ev = JSON.parse(chunk.slice(6));
+        } catch {
+          continue;
+        }
         handleEvent(ev, asst);
       }
     }
-  } catch(e){
-    if(e.name!=="AbortError"){ asst.phase=""; asst.text=(asst.text||"")+"\n⚠ "+esc(e.message); render(); }
+  } catch (e) {
+    if (e.name !== "AbortError") {
+      asst.phase = "";
+      asst.text = (asst.text || "") + "\n⚠ " + esc(e.message);
+      render();
+    }
   }
+
   setStreaming(false);
-  asst.phase="";
+  asst.phase = "";
   finalize(asst, text);
 }
 
-function handleEvent(ev, asst){
-  switch(ev.type){
-    case "text": asst.phase=""; asst.text += ev.delta||""; break;
-    case "tool": asst.tools.push({ name:ev.name, args:ev.args, done:false }); asst.phase="執行中"; break;
-    case "tool_end": { const t=[...asst.tools].reverse().find(x=>x.name===ev.name && !x.done); if(t){ t.done=true; t.isError=ev.isError; if(ev.diff) t.diff=ev.diff; } break; }
-    case "round": asst.phase="思考中"; break;
-    case "phase": asst.phase = ({verifying:"驗收中",verified:"驗收通過",fixing:"修正中"})[ev.phase]||asst.phase; break;
-    case "done": if(ev.sessionId) sessionId=ev.sessionId; if(!asst.text && ev.text) asst.text=ev.text; break;
-    case "error": asst.phase=""; asst.text=(asst.text||"")+"\n⚠ "+(ev.error||"發生錯誤"); break;
+function handleEvent(ev, asst) {
+  switch (ev.type) {
+    case "text":
+      asst.phase = "";
+      asst.text += ev.delta || "";
+      break;
+    case "tool":
+      asst.tools.push({ name: ev.name, args: ev.args, done: false });
+      asst.phase = "acting";
+      break;
+    case "tool_end": {
+      const t = [...asst.tools].reverse().find((x) => x.name === ev.name && !x.done);
+      if (t) {
+        t.done = true;
+        t.isError = ev.isError;
+        if (ev.diff) t.diff = ev.diff;
+      }
+      break;
+    }
+    case "round":
+      asst.phase = "thinking";
+      break;
+    case "phase":
+      asst.phase =
+        { verifying: "verifying", verified: "verified", fixing: "fixing" }[ev.phase] || ev.phase;
+      break;
+    case "done":
+      if (ev.sessionId) sessionId = ev.sessionId;
+      if (!asst.text && ev.text) asst.text = ev.text;
+      break;
+    case "error":
+      asst.phase = "";
+      asst.text = (asst.text || "") + "\n⚠ " + (ev.error || "發生錯誤");
+      break;
   }
-  render(); scrollDown();
+  if (!composing) {
+    render();
+    scrollDown();
+  }
 }
 
-// 串流結束：綁定 sessionId、寫入對話清單與 transcript
-function finalize(asst, firstUserText){
+/* 串流結束：落地 */
+function finalize(asst, firstUserText) {
   render();
-  if(!sessionId) return; // 沒拿到 sessionId（多半是錯誤）→ 不落地
-  const title = (allChats().find(c=>c.id===sessionId)?.title) || firstUserText.slice(0,40);
-  upsertChat({ id:sessionId, title, ts:Date.now(), space:curSpace, pack:$("#pack").value });
-  saveTranscript(sessionId, messages.map(m=>({ role:m.role, text:m.text, tools:m.tools||[] })));
+  if (!sessionId) return; // 沒拿到 sessionId → 不落地
+  const title = (allChats().find((c) => c.id === sessionId)?.title) || firstUserText.slice(0, 40);
+  upsertChat({ id: sessionId, title, ts: Date.now(), space: curSpace, pack: $("#pack").value });
+  saveTranscript(sessionId, messages.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [] })));
   renderChats();
 }
 
-function stopStream(){ if(abortCtl){ try{ abortCtl.abort(); }catch{} abortCtl=null; } setStreaming(false); }
-function setStreaming(on){
-  streaming=on;
-  $("#send").style.display = on ? "none" : "";
-  let stop = document.getElementById("stopbtn");
-  if(on && !stop){ stop=document.createElement("button"); stop.id="stopbtn"; stop.className="stopbtn"; stop.textContent="■ 停止"; stop.onclick=stopStream; $(".cbox").appendChild(stop); }
-  else if(!on && stop){ stop.remove(); }
+function stopStream() {
+  if (abortCtl) {
+    try {
+      abortCtl.abort();
+    } catch {}
+    abortCtl = null;
+  }
+  setStreaming(false);
 }
 
-// ── 輸入框：Enter 送出 / Shift+Enter 換行 / 自動高度 / IME 安全 ──
-const inp = $("#input");
-function autosize(){ inp.style.height="auto"; inp.style.height=Math.min(200, inp.scrollHeight)+"px"; }
-inp.addEventListener("input", autosize);
-inp.addEventListener("keydown", e=>{ if(e.key==="Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send(); } });
-$("#send").onclick = send;
+function setStreaming(on) {
+  streaming = on;
+  $("#send-btn").style.display = on ? "none" : "";
+  $("#status-hint").textContent = on ? "回覆中…" : "";
+}
 
-renderChats(); render(); inp.focus();
+/* ── 輸入框控制 ─────────────────────────────────────────── */
+function autosize() {
+  inp.style.height = "auto";
+  inp.style.height = Math.min(200, inp.scrollHeight) + "px";
+}
+
+inp.addEventListener("input", autosize);
+
+inp.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    send();
+  }
+});
+
+$("#send-btn").onclick = send;
+
+/* ── 啟動 ──────────────────────────────────────────────── */
+renderChats();
+render();
+inp.focus();
+loadFiles();
+
+/* 手機上顯示側邊欄 */
+function showSide() {
+  const side = $(".side");
+  if (side) {
+    side.style.display = "flex";
+    side.style.position = "fixed";
+    side.style.inset = "0";
+    side.style.zIndex = "50";
+    side.style.background = "var(--bg)";
+  }
+}
+
+/* 點擊對話後在手機上隱藏側邊欄 */
+function openChat(id) {
+  stopStream();
+  sessionId = id;
+  messages = loadTranscript(id);
+  render();
+  renderChats();
+  scrollDown();
+  
+  const side = $(".side");
+  if (side && window.innerWidth < 768) {
+    side.style.display = "none";
+  }
+}
 </script>
 </body>
 </html>

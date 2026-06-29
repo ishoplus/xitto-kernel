@@ -1,0 +1,420 @@
+/**
+ * xitto web — 設計系統
+ * 
+ * 架構：base.css（token + reset + 通用元件）
+ *       index.html / chat.html（繼承 base，只寫 layout + 特定元件）
+ * 
+ * Design token 基於 8pt Grid，嚴格執行。
+ */
+
+/* ── 1. 主題變數 ────────────────────────────────────────── */
+:root {
+  /* 色彩（深色預設）— 冷調近黑 + 清楚的表面層次（bg < inset < card < raised）+ 靛藍品牌色 */
+  --bg:      #090a0e;   /* 最底層 */
+  --card:    #181b23;   /* 抬升的卡片（明顯比 bg 亮）*/
+  --raised:  #20242e;   /* hover / 浮層 */
+  --line:    #2c313d;   /* 細邊框（夠亮才看得出層次）*/
+  --hairline: rgba(255,255,255,.05); /* 頂部受光內邊（Linear 式立體感）*/
+  --fg:      #e9ebf1;
+  --dim:     #8b91a1;
+  --faint:   #5a6070;
+  --accent:        #8b93ff;            /* 靛藍：文字/圖示/focus 環（在深色上夠亮）*/
+  --accent-strong: #5b63e6;            /* 實心按鈕底（白字達 AA）*/
+  --accent-soft:   rgba(124,131,247,.16); /* 淡色填底/光暈 */
+  --ok:      #54d191;
+  --warn:    #f0c674;
+  --me:      #1e2233;
+  --inset:   #0c0d12;   /* 凹陷：輸入框井 / 側欄 */
+  --code:    #161922;
+  --btnfg:   #ffffff;
+  --danger:  #f08a8a;
+  --warnbg:  #1e1b12;
+
+  /* 間距（8pt Grid，嚴格執行）*/
+  --sp-1: 4px;   /* 4  */
+  --sp-2: 8px;   /* 8  */
+  --sp-3: 12px;  /* 12 */
+  --sp-4: 16px;  /* 16 */
+  --sp-5: 20px;  /* 20 */
+  --sp-6: 24px;  /* 24 */
+  --sp-8: 32px;  /* 32 */
+  --sp-10: 40px; /* 40 */
+  --sp-12: 48px; /* 48 */
+  
+  /* 圓角（8pt Grid）*/
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  
+  /* 陰影（景深層次）*/
+  --shadow-sm:   0 1px 2px rgba(0,0,0,.4);
+  --shadow-md:   0 6px 20px -6px rgba(0,0,0,.55);
+  --shadow-pop:  0 16px 40px -10px rgba(0,0,0,.65);
+  --shadow-card: var(--shadow-sm);
+  
+  /* 動效 */
+  --ease-out: cubic-bezier(.16,1,.3,1);
+  --ease-in-out: cubic-bezier(.4,0,.2,1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+}
+
+[data-theme="light"] {
+  --bg:      #f7f8fb;
+  --card:    #ffffff;
+  --raised:  #ffffff;
+  --line:    #e5e8ef;
+  --fg:      #181b25;
+  --dim:     #5c6371;
+  --faint:   #99a0ae;
+  --accent:        #5b61e6;
+  --accent-strong: #5b61e6;
+  --accent-soft:   rgba(91,97,230,.10);
+  --ok:      #1a8a4d;
+  --warn:    #b07a12;
+  --me:      #ebedfd;
+  --inset:   #f1f3f8;
+  --code:    #f0f2f7;
+  --btnfg:   #ffffff;
+  --danger:  #d62f2f;
+  --warnbg:  #fdf6e3;
+  --hairline: transparent;
+  --shadow-sm:   0 1px 2px rgba(16,20,40,.06);
+  --shadow-md:   0 6px 20px -6px rgba(16,20,40,.12);
+  --shadow-pop:  0 16px 40px -10px rgba(16,20,40,.16);
+  --shadow-card: var(--shadow-sm);
+}
+
+/* ── 2. Reset + Base ───────────────────────────────────── */
+*,*::before,*::after { box-sizing:border-box; }
+
+/* hidden 屬性永遠生效（覆蓋自訂 display:flex 等規則，否則 [hidden] 不會隱藏）*/
+[hidden] { display: none !important; }
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font: 15px/1.6 -apple-system,"PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── 3. 通用元件 ────────────────────────────────────────── */
+
+/* 按鈕 */
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 0;
+  background: transparent;   /* 預設透明：未加 class 的按鈕不要掉到瀏覽器預設淺灰（修白方塊）*/
+  color: inherit;
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-4);
+  font-weight: 600;
+  transition: background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              opacity var(--duration-fast) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:active:not(:disabled) {
+  transform: scale(.97);
+}
+
+button:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent-strong);
+  color: #fff;
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,.14);
+}
+
+button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-strong) 86%, #fff);
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255,255,255,.14);
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--line);
+}
+
+button.ghost:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--dim);
+}
+
+button.danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+/* 輸入框 */
+input, textarea, select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+select {
+  cursor: pointer;
+}
+
+/* 連結 */
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* 卡片 */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4);
+  box-shadow: var(--shadow-card);
+}
+
+/* 分隔線 */
+.divider {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: var(--sp-4) 0;
+}
+
+/* 標籤晶片 */
+.badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 2px var(--sp-2);
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  line-height: 1.5;
+}
+
+.badge.running  { color: var(--accent); border-color: var(--accent); }
+.badge.needs    { color: var(--warn);   border-color: var(--warn);   }
+.badge.done     { color: var(--ok);     border-color: var(--ok);     }
+.badge.error    { color: var(--danger); border-color: var(--danger); }
+
+/* 空狀態 */
+.empty {
+  color: var(--dim);
+  font-size: 13px;
+  padding: var(--sp-4);
+  text-align: center;
+  line-height: 1.8;
+}
+
+/* 滾動條（自訂樣式）*/
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+
+/* 選取文字 */
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--fg);
+}
+
+/* ── 4. 工具提示 ────────────────────────────────────────── */
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+  z-index: 100;
+}
+
+[data-tooltip]:hover::after {
+  opacity: 1;
+}
+
+/* ── 5. 無障礙 ─────────────────────────────────────────── */
+
+/* 螢幕閱讀器專用（視覺隱藏，但仍可被報讀器讀取）*/
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 跳過導航連結 */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 0;
+  background: var(--accent);
+  color: var(--btnfg);
+  padding: var(--sp-2) var(--sp-4);
+  z-index: 9999;
+  border-radius: 0 0 var(--r-md) 0;
+  font-weight: 600;
+  transition: top var(--duration-fast);
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* ── 6. Markdown 渲染 ─────────────────────────────────── */
+.md {
+  line-height: 1.7;
+}
+
+.md h1 { font-size: 1.5em; margin: 1em 0 .4em; }
+.md h2 { font-size: 1.25em; margin: .9em 0 .35em; }
+.md h3 { font-size: 1.1em; margin: .8em 0 .3em; }
+.md h4 { font-size: 1em; margin: .7em 0 .25em; }
+
+.md p { margin: .5em 0; }
+.md ul, .md ol { margin: .4em 0 .4em 1.4em; }
+.md li { margin: .2em 0; }
+.md code {
+  background: var(--code);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: .9em;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.md pre.code {
+  background: var(--code);
+  padding: var(--sp-3);
+  border-radius: var(--r-md);
+  overflow: auto;
+  margin: .5em 0;
+}
+.md pre.code code {
+  background: none;
+  padding: 0;
+  font-size: 13px;
+}
+.md a { color: var(--accent); }
+.md strong { font-weight: 600; }
+.md em { font-style: italic; }
+.md blockquote {
+  border-left: 3px solid var(--accent);
+  margin: .5em 0;
+  padding-left: var(--sp-4);
+  color: var(--dim);
+}
+
+/* ── 7. 動畫 ───────────────────────────────────────────── */
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+@keyframes dots {
+  0%   { content: ""; }
+  25%  { content: "·"; }
+  50%  { content: "··"; }
+  75%  { content: "···"; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in var(--duration-base) var(--ease-out) both;
+}
+
+/* 尊重「減少動態偏好」*/
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── 8. 響應式 ─────────────────────────────────────────── */
+
+/* 平板豎向 */
+@media (max-width: 1024px) {
+  :root { --sidebar-w: 240px; }
+}
+
+/* 手機豎向 */
+@media (max-width: 768px) {
+  :root { --sidebar-w: 100%; }
+}
+
+/* 超寬屏 */
+@media (min-width: 1400px) {
+  :root { --max-w: 1400px; }
+}

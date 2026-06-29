@@ -392,6 +392,24 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     const path = url.pathname;
     if (req.method === 'GET' && path === '/health') return json(res, 200, { ok: true, packs: Object.keys(PACKS), model: model.id, tasks: tasks.stats() });
 
+    // favicon（公開，免 auth）：瀏覽器會自動抓 /favicon.ico，沒這條會被 auth 擋成 401。回一個內嵌 SVG 標誌。
+    if (req.method === 'GET' && (path === '/favicon.ico' || path === '/favicon.svg')) {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/><circle cx="12" cy="11" r="1"/><circle cx="23" cy="19" r="1"/></g></svg>';
+      res.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=86400' });
+      return res.end(svg);
+    }
+
+    // 靜態檔案（CSS / JS / 字體等）：從 web/shared/ 提供，與 HTML token 替換分開處理。
+    if (req.method === 'GET' && path.startsWith('/shared/')) {
+      const file = join(dirname(fileURLToPath(import.meta.url)), 'web', path);
+      if (!existsSync(file)) return json(res, 404, { error: 'not found' });
+      const ext = path.split('.').pop() || '';
+      const ct = contentTypeFor(path);
+      const isText = /^text\/|json|xml|javascript|svg/.test(ct);
+      res.writeHead(200, { 'content-type': ct + (isText ? '; charset=utf-8' : '') });
+      return res.end(readFileSync(file));
+    }
+
     // 「許願台」網頁（公開可載入；token 注入頁面供同源 API 呼叫——PoC/本地自用,正式部署請前置真實認證）
     if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
       let html; try { html = webHtml(); } catch { return json(res, 500, { error: 'web UI 未找到' }); }
