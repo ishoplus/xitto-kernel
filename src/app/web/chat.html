@@ -580,6 +580,7 @@ body {
   flex: 1;
   background: transparent;
   border: none;
+  border-radius: 0;
   outline: none;
   resize: none;
   font: inherit;
@@ -589,6 +590,11 @@ body {
   color: var(--fg);
   padding: 0;
 }
+
+/* 清掉 textarea 內層自帶的 focus 指示（基底 textarea:focus 的圓角 box-shadow 與 :focus-visible 的 outline）
+   → 否則聚焦時內層冒一圈橢圓/外框；composer-box 的 focus-within 已是唯一聚焦指示 */
+.composer-textarea:focus,
+.composer-textarea:focus-visible { box-shadow: none; outline: none; }
 
 .composer-textarea::placeholder { color: var(--dim); }
 
