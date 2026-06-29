@@ -51,6 +51,8 @@ xitto-kernel                  # coding agent（讀寫檔案、跑命令）
 xitto-kernel --tui            # 完整 Ink TUI（持久狀態列、串流、Esc 中斷、工具卡⏺/⎿、彩色 diff、待辦☑；需真實終端）
 xitto-kernel --pack notes     # 筆記 / 知識庫 agent
 xitto-kernel --pack data-query
+xitto-kernel --pack patent    # 專利交底書助手（找發明點、撰寫交底書）
+xitto-kernel --cwd ~/my-proj  # 指定工作目錄（沙箱根；不存在自動建立）。預設當前目錄
 xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
 ```
 
@@ -103,8 +105,18 @@ const o = await kernel.runOutcome('建立 greet.js 並寫個範例驗證');
 ```bash
 XITTO_SERVER_TOKEN=secret npm run serve   # 然後瀏覽器開 http://localhost:8787/
 # 本地就地模式（可選真實資料夾、就地改檔，沙箱關）：
-npm run serve:local                        # = LOCAL=1 SANDBOX=off,token 預設 secret(可用 XITTO_SERVER_TOKEN 覆寫)
+npm run serve:local                        # 跨平台(Windows/macOS/Linux);= LOCAL=1 SANDBOX=off,token 預設 secret(可用 XITTO_SERVER_TOKEN 覆寫)
 ```
+`npm run serve:local` 三平台通用(實際執行 `node scripts/serve-local.js`,不含任何 shell 專用語法)。若想自己設環境變數:
+```powershell
+# Windows PowerShell
+$env:XITTO_SERVER_LOCAL="1"; $env:XITTO_SERVER_SANDBOX="off"; $env:XITTO_SERVER_TOKEN="secret"; node src/app/server.js
+```
+```cmd
+:: Windows cmd.exe
+set XITTO_SERVER_LOCAL=1 && set XITTO_SERVER_SANDBOX=off && set XITTO_SERVER_TOKEN=secret && node src/app/server.js
+```
+（改連接埠：`PORT=8799` / `$env:PORT="8799"` / `set PORT=8799`。）
 不用終端機、不用碰金鑰(伺服器端管)。介面以**結果**為中心,不是聊天:
 - **許願**:打一句「你想完成什麼」→ 交辦(背景跑 goal loop)
 - **進行中**:**即時進度 + 活著的證明**——每秒跳動的「已進行 Ns」心跳時鐘、目前階段(思考中/執行中/驗收中)、agent 當下的**思考文字**(💭)、工具動作翻成人話、第幾輪 + 動作數。看得到它在想什麼、做什麼

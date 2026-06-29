@@ -51,6 +51,8 @@ xitto-kernel                  # coding agent (read/write files, run commands)
 xitto-kernel --tui            # full Ink TUI (persistent status bar, streaming, Esc to interrupt, tool cards ⏺/⎿, colored diffs, todos ☑; needs a real terminal)
 xitto-kernel --pack notes     # notes / knowledge-base agent
 xitto-kernel --pack data-query
+xitto-kernel --pack patent    # patent disclosure assistant (find inventions, draft the disclosure)
+xitto-kernel --cwd ~/my-proj  # set the working directory (sandbox root; created if missing). default: current dir
 xitto-kernel --sandbox        # open the Seatbelt sandbox on startup
 ```
 
@@ -103,8 +105,18 @@ In practice: given "create a config file but I haven't decided the filename/cont
 ```bash
 XITTO_SERVER_TOKEN=secret npm run serve   # then open http://localhost:8787/ in a browser
 # Local in-place mode (pick a real folder, edit files in place, sandbox off):
-npm run serve:local                        # = LOCAL=1 SANDBOX=off, token defaults to secret (override with XITTO_SERVER_TOKEN)
+npm run serve:local                        # cross-platform (Windows/macOS/Linux); = LOCAL=1 SANDBOX=off, token defaults to secret (override with XITTO_SERVER_TOKEN)
 ```
+`npm run serve:local` works on every OS (it runs `node scripts/serve-local.js`, no shell-specific syntax). If you'd rather set the env vars yourself:
+```powershell
+# Windows PowerShell
+$env:XITTO_SERVER_LOCAL="1"; $env:XITTO_SERVER_SANDBOX="off"; $env:XITTO_SERVER_TOKEN="secret"; node src/app/server.js
+```
+```cmd
+:: Windows cmd.exe
+set XITTO_SERVER_LOCAL=1 && set XITTO_SERVER_SANDBOX=off && set XITTO_SERVER_TOKEN=secret && node src/app/server.js
+```
+(Change the port with `PORT=8799` / `$env:PORT="8799"` / `set PORT=8799`.)
 No terminal, no touching keys (managed server-side). The interface centers on **results**, not chat:
 - **Wish**: type one line of "what you want done" → submit (runs the goal loop in the background)
 - **In progress**: **live progress + proof of life** — a heartbeat clock ticking "elapsed Ns" every second, the current phase (thinking / acting / verifying), the agent's current **thinking text** (💭), tool actions translated into plain language, the round number + action count. You can see what it's thinking and doing

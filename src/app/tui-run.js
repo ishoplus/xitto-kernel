@@ -44,8 +44,7 @@ export function diffBlock(d) {
 
 const SLASH = { '/help': '說明', '/goal': '目標循環', '/sandbox': '沙箱', '/auto': '自動核准', '/plan': '計劃模式', '/undo': '撤銷', '/tools': '工具', '/memory': '記憶', '/sessions': '對話', '/resume': '續接', '/cost': '成本', '/clear': '清除', '/exit': '離開' };
 
-export function runTui({ pack, model, getApiKey, sandbox = false, resume = null }) {
-  const cwd = process.cwd();
+export function runTui({ pack, model, getApiKey, sandbox = false, resume = null, cwd = process.cwd() }) {
   const store = createStore();
   let history = [];
   let sessionId;

@@ -17,10 +17,12 @@ import { createNotesPack } from '../packs/notes/index.js';
 import { createGeneralPack } from '../packs/general/index.js';
 import { createDeepResearchPack } from '../packs/deep-research/index.js';
 import { createDevopsPack } from '../packs/devops/index.js';
+import { createPatentPack } from '../packs/patent/index.js';
 
 const PACKS = {
   coding: createCodingPack, 'data-query': createDataQueryPack, notes: createNotesPack,
   general: createGeneralPack, 'deep-research': createDeepResearchPack, devops: createDevopsPack,
+  patent: createPatentPack,
 };
 
 const lastText = (history) => ([...(history || [])].reverse().find((m) => m.role === 'assistant')?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
@@ -35,7 +37,8 @@ const ROUTE_GUIDE =
   'deep-research：一個主題查多個來源、查證後寫成研究報告。\n' +
   'data-query：對 SQLite 資料庫下 SQL 撈數據——僅當明確提到資料庫／SQL／.db 才選。\n' +
   'notes：管理筆記知識庫——僅當明確提到筆記才選。\n' +
-  'devops：伺服器維運／部署／docker／CI／常駐服務。';
+  'devops：伺服器維運／部署／docker／CI／常駐服務。\n' +
+  'patent：撰寫專利交底書／找專利題目／挖掘發明點／現有技術初步檢索——提到專利／交底書／發明點時選。';
 
 // 關鍵字快速判斷（LLM 不可用/逾時時的備援；命中強訊號才回領域，否則 null→general）。
 export function heuristicPack(goal) {
@@ -43,6 +46,7 @@ export function heuristicPack(goal) {
   if (/(sqlite|資料庫|database|\.db\b|撈數據|查詢資料表|\bsql\b|select\s+\*)/.test(g)) return 'data-query';
   if (/(部署|deploy|docker|kubernetes|k8s|nginx|ci\/cd|systemd|伺服器維運)/.test(g)) return 'devops';
   if (/(筆記本?|\bnotes?\b)/.test(g)) return 'notes';
+  if (/(專利|专利|交底書?|交底书?|發明點|发明点|權利要求|权利要求|patent|invention\s*disclosure)/.test(g)) return 'patent';
   if (/(研究報告|深度研究|多來源|文獻|綜述|市場調查|競品分析|deep\s*research)/.test(g)) return 'deep-research';
   if (/(修\s*bug|debug|重構|refactor|單元測試|unit\s*test|程式碼|codebase|\brepo\b|git\s*commit|pull\s*request|\.(js|ts|jsx|tsx|py|go|rs|java|cpp?|rb|php)\b)/.test(g)) return 'coding';
   return null;
@@ -58,7 +62,7 @@ export async function classifyPack(goal, { model, getApiKey, complete = complete
     const apiKey = await getApiKey(model.provider);
     if (!apiKey) return fallback;
     const ctx = {
-      systemPrompt: '你是任務分流器。把使用者的需求分到最適合的「領域」，只輸出一個領域代號（general/coding/deep-research/data-query/notes/devops）其中之一，不要解釋、不要標點。\n領域說明：\n' + ROUTE_GUIDE,
+      systemPrompt: '你是任務分流器。把使用者的需求分到最適合的「領域」，只輸出一個領域代號（general/coding/deep-research/data-query/notes/devops/patent）其中之一，不要解釋、不要標點。\n領域說明：\n' + ROUTE_GUIDE,
       messages: [{ role: 'user', content: [{ type: 'text', text: `需求：${String(goal).slice(0, 600)}\n\n領域代號是？` }], timestamp: Date.now() }],
     };
     const res = await complete(model, ctx, { maxTokens: 12, apiKey, signal: ac.signal, cacheRetention: cacheRetentionFor(model) });
@@ -83,6 +87,17 @@ export const safeWs = (w) => (String(w || 'default').replace(/[^a-zA-Z0-9_-]/g, 
 // 否則（含託管模式收到絕對路徑）→ 消毒成管理空間 ws/<name>，不會逃逸到主機任意路徑。
 export function workspaceDir(baseDir, ws, local) {
   return (local && isAbsolute(String(ws || ''))) ? String(ws) : join(baseDir, 'ws', safeWs(ws));
+}
+
+// 確保 workdir 可用：指到既有檔案 → 拋錯（清楚理由,而非 mkdir 的 ENOTDIR）；不存在 → 自動建立。
+// 與本地 CLI 的 resolveCwd 同規則,讓三條端點（/v1/tasks、/v1/run、/v1/stream）行為一致。
+export function ensureWorkdir(dir) {
+  if (existsSync(dir)) {
+    if (!statSync(dir).isDirectory()) throw new Error(`工作目錄指到的不是資料夾：${dir}`);
+    return dir;
+  }
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 // 列工作區檔案（給「工作台」分頁）：遞迴,排除內部目錄,回 [{path,size,mtime}]。
@@ -324,7 +339,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     // 持久工作空間（B 模型）：workdir 綁 workspace（非 sessionId）→ 檔案留存 + 五層沉澱跨成品累積。
     // 本地模式 + workspace 是絕對路徑 → 就地用該真實資料夾（像 Claude Code 改你現有的檔）。
     const workspace = spec.workspace || 'default';
-    const workdir = workspaceDir(baseDir, workspace, local); mkdirSync(workdir, { recursive: true });
+    const workdir = workspaceDir(baseDir, workspace, local); ensureWorkdir(workdir);
     // history 仍綁 sessionId（每個成品獨立對話：無 sessionId → 全新,不續接,避免 context 暴脹/混淆）
     const sessionId = spec.sessionId || newId();
     const sess = sessions.get(sessionId) || { history: [] };
@@ -404,7 +419,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       } catch (e) {
         if (clientGone) return;
         log({ pack: body.pack, error: e.message });
-        if (streaming) { sse({ type: 'error', error: e.message }); res.end(); } else json(res, e.message?.startsWith('未知 pack') ? 400 : 500, { error: e.message });
+        if (streaming) { sse({ type: 'error', error: e.message }); res.end(); } else json(res, /^未知 pack|工作目錄/.test(e.message || '') ? 400 : 500, { error: e.message });
       }
       return;
     }
@@ -417,7 +432,10 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       if (!pack || pack === 'auto') { pack = await classifyPack(body.goal || body.input || '', { model, getApiKey }); routed = true; }
       if (!PACKS[pack]) return json(res, 400, { error: `未知 pack「${body.pack}」，可用：${Object.keys(PACKS).join(', ')}` });
       if (body.webhook && !/^https?:\/\//.test(body.webhook)) return json(res, 400, { error: 'webhook 需為 http(s) URL' });
-      if (local && body.workspace && isAbsolute(body.workspace) && !existsSync(body.workspace)) return json(res, 400, { error: `資料夾不存在：${body.workspace}` });
+      // 本地絕對路徑：缺失自動建立（與 CLI 一致），指到既有檔案才 fail-fast 報錯。
+      if (local && body.workspace && isAbsolute(body.workspace)) {
+        try { ensureWorkdir(body.workspace); } catch (e) { return json(res, 400, { error: e.message }); }
+      }
       const t = tasks.enqueue({ pack, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook, workspace: body.workspace, auto: routed });
       log({ task: t.id, action: 'enqueue', pack, routed, mode: body.mode || 'turn' });
       return json(res, 202, { taskId: t.id, status: t.status, pack, routed, ...tasks.stats() });

@@ -1,6 +1,7 @@
 // App 進入點：解析參數 → 載入 model（providers.json）→ 選 pack → 啟動 CLI。
 // 子指令：new-agent <name> → 產出依賴 kernel 的獨立 agent 專案。
-import { join } from 'node:path';
+import { join, resolve, isAbsolute } from 'node:path';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { loadModel } from './providers.js';
 import { runCli } from './cli.js';
 import { runTui } from './tui-run.js';
@@ -14,6 +15,7 @@ import { createNotesPack } from '../packs/notes/index.js';
 import { createGeneralPack } from '../packs/general/index.js';
 import { createDeepResearchPack } from '../packs/deep-research/index.js';
 import { createDevopsPack } from '../packs/devops/index.js';
+import { createPatentPack } from '../packs/patent/index.js';
 
 const e = (n) => (s) => `\x1b[${n}m${s}\x1b[0m`;
 const green = e(32); const gray = e(90); const red = e(31); const cyan = e(36); const yellow = e(33);
@@ -25,6 +27,7 @@ const PACKS = {
   general: createGeneralPack,
   'deep-research': createDeepResearchPack,
   devops: createDevopsPack,
+  patent: createPatentPack,
 };
 
 export async function main(argv = process.argv.slice(2)) {
@@ -75,8 +78,13 @@ export async function main(argv = process.argv.slice(2)) {
     }
   }
 
+  // 工作目錄：本地端依使用者選擇的目錄（--cwd）生成；未指定才退回 process.cwd()。
+  // 不存在會自動建立；指到既有檔案則報錯。沙箱與 fs 工具都以此為根。
+  let cwd;
+  try { cwd = resolveCwd(opts.cwd); }
+  catch (err) { console.error(red(err.message)); process.exit(1); }
+
   // MCP：啟動時連 .xitto-kernel/<pack>/mcp.json 的 server，工具以 extraTools 注入
-  const cwd = process.cwd();
   const mcp = await loadMcpTools(join(cwd, '.xitto-kernel', opts.pack, 'mcp.json'), (m) => console.log(gray(`  [MCP] ${m}`)));
 
   // --goal "..."：headless 自主循環（給目標、自己做到完成）後退出，不進互動 CLI
@@ -110,7 +118,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (opts.tui && process.stdin.isTTY) {
-    runTui({ pack: make({ cwd }), model, getApiKey, sandbox: opts.sandbox, resume: opts.resume });
+    runTui({ pack: make({ cwd }), model, getApiKey, sandbox: opts.sandbox, resume: opts.resume, cwd });
     return;
   }
   if (opts.tui) console.error(gray('（--tui 需要真實終端，退回一般 CLI）'));
@@ -122,13 +130,27 @@ export async function main(argv = process.argv.slice(2)) {
   });
 }
 
+// 把使用者選的目錄解析成可用的工作目錄（絕對路徑）：相對路徑以 process.cwd() 為基準展開，
+// 不存在則建立，指到既有檔案則拋錯。未指定 → 用 process.cwd()。
+function resolveCwd(dir) {
+  if (!dir) return process.cwd();
+  const full = isAbsolute(dir) ? dir : resolve(process.cwd(), dir);
+  if (existsSync(full)) {
+    if (!statSync(full).isDirectory()) throw new Error(`--cwd 指到的不是目錄：${full}`);
+    return full;
+  }
+  try { mkdirSync(full, { recursive: true }); } catch (e) { throw new Error(`無法建立工作目錄 ${full}：${e.message}`); }
+  return full;
+}
+
 function parse(argv) {
-  const o = { pack: 'coding', model: undefined, sandbox: false, help: false, resume: null, yes: false, goal: null };
+  const o = { pack: 'coding', model: undefined, sandbox: false, help: false, resume: null, yes: false, goal: null, cwd: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--pack') o.pack = argv[++i];
     else if (a === '--model') o.model = argv[++i];
+    else if (a === '--cwd' || a === '--dir' || a === '-C') o.cwd = argv[++i];
     else if (a === '--sandbox') o.sandbox = true;
     else if (a === '--yes' || a === '-y') o.yes = true;
     else if (a === '--tui') o.tui = true;
@@ -144,11 +166,12 @@ function printHelp() {
     '',
     '用法:',
     '  xitto-kernel init                                        首次設定導引（產生 providers.json）',
-    '  xitto-kernel [--pack <name>] [--model <id>] [--sandbox] [--resume [id]] [--yes]   互動跑內建 pack',
+    '  xitto-kernel [--pack <name>] [--cwd <dir>] [--model <id>] [--sandbox] [--resume [id]] [--yes]   互動跑內建 pack',
     '  xitto-kernel --pack general --goal "..." [--yes]         目標驅動自主循環（headless）',
     '  xitto-kernel new-agent <name>                            產出依賴 kernel 的獨立 agent 專案',
     '',
-    '  --pack <name>   選擇內建 DomainPack（coding | data-query | notes | general | deep-research | devops；預設 coding）',
+    '  --pack <name>   選擇內建 DomainPack（coding | data-query | notes | general | deep-research | devops | patent；預設 coding）',
+    '  --cwd <dir>     工作目錄（沙箱根；相對路徑以當前目錄展開，不存在自動建立。別名 --dir / -C；預設當前目錄）',
     '  --goal "..."    給目標，agent 自主反覆做到完成（建議搭配 --pack general）',
     '  --model <id>    指定 model（預設用 providers.json 的 defaultModel）',
     '  --sandbox       啟動即開啟沙箱（macOS=Seatbelt 真隔離）',

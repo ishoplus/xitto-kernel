@@ -46,7 +46,7 @@
     "demo": "node examples/demo.js",
     "eval": "node eval/run.js",
     "serve": "node src/app/server.js",
-    "serve:local": "XITTO_SERVER_LOCAL=1 XITTO_SERVER_SANDBOX=off XITTO_SERVER_TOKEN=${XITTO_SERVER_TOKEN:-secret} node src/app/server.js",
+    "serve:local": "node scripts/serve-local.js",
     "start": "node bin/xitto-kernel.js"
   },
   "exports": {
@@ -57,7 +57,8 @@
     "./packs/notes": "./src/packs/notes/index.js",
     "./packs/general": "./src/packs/general/index.js",
     "./packs/deep-research": "./src/packs/deep-research/index.js",
-    "./packs/devops": "./src/packs/devops/index.js"
+    "./packs/devops": "./src/packs/devops/index.js",
+    "./packs/patent": "./src/packs/patent/index.js"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.2",

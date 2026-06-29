@@ -2,6 +2,13 @@
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const stripTags = (s) => String(s).replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim();
+// 讀取回應文字，但先看 content-length，過大直接拒絕避免把巨型回應全載入記憶體。
+const MAX_BODY = 25 * 1024 * 1024; // 25MB
+const readBodyCapped = async (res) => {
+  const len = Number(res.headers.get('content-length'));
+  if (len && len > MAX_BODY) { throw new Error(`回應過大（${(len / 1048576).toFixed(1)}MB），已拒絕讀取`); }
+  return res.text();
+};
 
 export function createWebFetchTool() {
   return {
@@ -11,7 +18,7 @@ export function createWebFetchTool() {
     execute: async (_id, { url }) => {
       try {
         const res = await fetch(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(20000) });
-        const html = await res.text();
+        const html = await readBodyCapped(res);
         const text = html
           .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
           .replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 8000);
@@ -49,7 +56,7 @@ export function createHttpTool() {
       try {
         const m = String(method).toUpperCase();
         const res = await fetch(url, { method: m, headers: headers || {}, body: (m === 'GET' || m === 'HEAD') ? undefined : body, signal: AbortSignal.timeout(20000) });
-        const text = (await res.text()).slice(0, 8000);
+        const text = (await readBodyCapped(res)).slice(0, 8000);
         return txt({ url, method: m, status: res.status, headers: Object.fromEntries(res.headers), body: text });
       } catch (e) { return txt({ error: e?.message || String(e), url }); }
     },
