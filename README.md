@@ -52,6 +52,7 @@ xitto-kernel --tui            # full Ink TUI (persistent status bar, streaming, 
 xitto-kernel --pack notes     # notes / knowledge-base agent
 xitto-kernel --pack data-query
 xitto-kernel --pack patent    # patent disclosure assistant (find inventions, draft the disclosure)
+xitto-kernel --pack uiux      # UI/UX agent (accessible, responsive UI; a11y verify gate)
 xitto-kernel --cwd ~/my-proj  # set the working directory (sandbox root; created if missing). default: current dir
 xitto-kernel --sandbox        # open the Seatbelt sandbox on startup
 ```
@@ -223,7 +224,8 @@ xitto-kernel/
 │       ├── notes/                ✅ third domain (knowledge base)
 │       ├── general/              ✅ general autonomous agent (files/shell/web/http + goal loop)
 │       ├── deep-research/        ✅ deep research (multi-source search → verify → cited conclusion)
-│       └── devops/               ✅ ops/SRE (shell + bash_bg + config + logs + health checks)
+│       ├── devops/               ✅ ops/SRE (shell + bash_bg + config + logs + health checks)
+│       └── uiux/                 ✅ UI/UX (design-system aware + WCAG a11y verify gate)
 ├── bin/xitto-kernel.js           ✅ CLI entry point (run / new-agent)
 ├── test/                         ✅ all tests green (runTurn + Seatbelt isolation + scaffolding + …)
 └── examples/
@@ -273,6 +275,7 @@ Paradigm: **a new-domain agent = a new pack (what it can do) + a new EvalSuite (
 | data-query | Spider/BIRD style | real SQLite + answer match | `node eval/data-query-run.js` | 4/4 |
 | deep-research | GAIA/research | factual correctness + genuine verification (allOf) | `node eval/deep-research-run.js` | 3/3 |
 | devops | Terminal-Bench style | state check (system/files meet target) | `node eval/devops-run.js` | 4/4 |
+| uiux | v0 style | a11y static audit (WCAG, 0 issues) + structure check (allOf) | `node eval/uiux-run.js` | 4/4 |
 | tool calling | BFCL style | trajectory check (calls the right tool/params) | `node eval/tool-calling-run.js` | 6/6 |
 
 \* Reference numbers run with MiniMax-M2.7 (small sample); for swapping models / expanding the sample see `eval/README.md`. Scorer types: `answerMatch` / `stateCheck` / `toolCalled`.
