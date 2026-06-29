@@ -71,9 +71,9 @@
 }
 
 /* 兩段：歷史取內容高度（上限 45%）、檔案長高填滿剩餘側欄 */
-.sidebar > .sidebar-section { margin: var(--sp-3) var(--sp-3) 0; }
+.sidebar > .sidebar-section { margin: 0; }
 .sidebar > .sidebar-section:first-of-type { flex: 0 1 auto; max-height: 45%; }
-.sidebar > .sidebar-section:last-of-type  { flex: 1 1 auto; margin-bottom: var(--sp-3); }
+.sidebar > .sidebar-section:last-of-type  { flex: 1 1 auto; border-top: 1px solid var(--line); }
 
 .sidebar-foot {
   margin-top: auto;
@@ -157,12 +157,13 @@
   overflow: hidden;
 }
 
+/* 側欄區塊：扁平（Linear——壓低側欄視覺權重，讓主區優先），不做成卡片 */
 .sidebar-section {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   padding: var(--sp-3);
-  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--hairline);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -179,6 +180,9 @@
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
+
+/* 空狀態的引導（NN/g：空狀態要有狀態訊息 + 行動指引）*/
+.empty-hint { display: block; margin-top: var(--sp-2); font-size: 12px; color: var(--accent); opacity: .9; }
 
 .sidebar-section .scroll {
   flex: 1;
@@ -428,8 +432,26 @@
   color: var(--dim);
 }
 
-.todo-item.in_progress { color: var(--accent); font-weight: 600; }
-.todo-item.completed { color: var(--ok); text-decoration: line-through; }
+.todo-text { flex: 1; min-width: 0; }
+.todo-ic { flex-shrink: 0; }
+.todo-item.pending .todo-ic { color: var(--faint); }
+/* 進行中：升為主文字 + accent 圖示 + 進行式標籤（Claude Code activeForm 精神）*/
+.todo-item.in_progress { color: var(--fg); font-weight: 600; }
+.todo-item.in_progress .todo-ic { color: var(--accent); }
+.todo-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-soft);
+  border-radius: 20px;
+  padding: 1px 7px;
+  font-weight: 600;
+}
+/* 完成項：退到背景（不搶眼，Linear：完成的事讓位給進行中的）*/
+.todo-item.completed { color: var(--dim); text-decoration: line-through; }
+.todo-item.completed .todo-ic { color: var(--ok); }
+.todos.done .todos-label { color: var(--ok); }
 
 /* 過程日誌 */
 .log-section {
@@ -463,6 +485,22 @@
   padding: var(--sp-1) 0;
   color: var(--fg);
 }
+
+/* 可點的步驟（有 diff 的 write/edit）→ 點開預覽該檔 */
+.log-step.linked {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font: inherit;
+  color: var(--fg);
+  margin: 0 calc(-1 * var(--sp-2));
+  padding: var(--sp-1) var(--sp-2);
+}
+.log-step.linked:hover { background: var(--inset); }
 
 .log-step.error { color: var(--danger); }
 .log-step .dim { color: var(--dim); }
@@ -1183,10 +1221,14 @@ const PHASE_ZH = {
 
 function todosHtml(p) {
   if (!p || !p.todos || !p.todos.length) return "";
+  const todos = p.todos;
+  const done = todos.filter((t) => t.status === "completed").length;
+  // 全部完成 → 收合成一行（Claude Code：全完成即清 active state）
+  if (done === todos.length) return `<div class="todos done"><div class="todos-label">☑ 待辦 · 全部完成（${todos.length}）</div></div>`;
   const icons = { completed: "☑", in_progress: "◐", pending: "☐" };
   return `<div class="todos">
-    <div class="todos-label">待辦</div>
-    ${p.todos.map((td) => `<div class="todo-item ${td.status}">${icons[td.status] || "☐"} ${esc(td.content)}</div>`).join("")}</div>`;
+    <div class="todos-label">待辦 · ${done}/${todos.length} 完成</div>
+    ${todos.map((td) => `<div class="todo-item ${td.status}"><span class="todo-ic" aria-hidden="true">${icons[td.status] || "☐"}</span><span class="todo-text">${esc(td.content)}</span>${td.status === "in_progress" ? '<span class="todo-tag">進行中</span>' : ""}</div>`).join("")}</div>`;
 }
 
 function progressHtml(t) {
@@ -1204,7 +1246,13 @@ function progressHtml(t) {
 function logHtml(p) {
   if (!p || !(p.log || []).length) return `<div class="empty">（尚無步驟）</div>`;
   return p.log
-    .map((s) => `<div class="log-step ${s.isError ? "error" : ""}">▸ ${esc(TOOL_ZH[s.name] || s.name)}${s.summary ? ` <span class="dim">${esc(s.summary)}</span>` : ""}${s.diff ? diffHtml(s.diff) : ""}</div>`)
+    .map((s) => {
+      const path = s.diff && s.diff.path; // 有 diff 的步驟（write/edit）→ 可點開預覽該檔（過程↔工作區連動）
+      const inner = `▸ ${esc(TOOL_ZH[s.name] || s.name)}${s.summary ? ` <span class="dim">${esc(s.summary)}</span>` : ""}${s.diff ? diffHtml(s.diff) : ""}`;
+      return path
+        ? `<button class="log-step linked ${s.isError ? "error" : ""}" type="button" onclick="wbView('${encodeURIComponent(path)}','${jsAttr(path)}')" title="預覽 ${esc(path)}">${inner}</button>`
+        : `<div class="log-step ${s.isError ? "error" : ""}">${inner}</div>`;
+    })
     .join("");
 }
 
@@ -1453,7 +1501,7 @@ async function loadHistory() {
     </button>`
         )
         .join("")
-    : `<div class="empty">還沒有任何任務。</div>`;
+    : `<div class="empty">還沒有成品<br><span class="empty-hint">在右側說出你的第一個願望 →</span></div>`;
 }
 
 async function openTask(id) {
@@ -1501,7 +1549,7 @@ async function loadFiles() {
     }).join("");
 
   if (!(r.dirs || []).length && !(r.files || []).length)
-    html += `<div class="empty">（${wbSub ? "空資料夾" : "還沒有檔案"}）</div>`;
+    html += `<div class="empty">${wbSub ? "（空資料夾）" : "還沒有檔案<br><span class=\"empty-hint\">完成任務後，成品會出現在這裡</span>"}</div>`;
 
   $("#wbfiles").innerHTML = html;
 }

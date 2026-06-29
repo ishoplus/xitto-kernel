@@ -442,6 +442,47 @@ body {
   margin: var(--sp-1) 0;
 }
 
+/* 視圖切換鈕 */
+.view-toggle { font-size: 12px; padding: var(--sp-1) var(--sp-2); white-space: nowrap; }
+
+/* ── 終端機視圖（Claude Code 風轉錄）：monospace、扁平全寬、› / ⏺ xitto / ⎿ 工具行 ── */
+.thread.tui { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.thread.tui .thread-wrap { max-width: 880px; }
+
+/* 扁平：去泡泡、去頭像、全寬左對齊 */
+.thread.tui .msg { display: block; margin: 0 0 var(--sp-5); animation: none; }
+.thread.tui .avatar { display: none; }
+.thread.tui .bubble,
+.thread.tui .msg.user .bubble { max-width: none; text-align: left; }
+
+/* 你的訊息：› 提示符 */
+.thread.tui .msg.user .who { display: none; }
+.thread.tui .msg.user .body { font-size: 13.5px; color: var(--fg); }
+.thread.tui .msg.user .body::before { content: "› "; color: var(--accent); font-weight: 700; }
+
+/* AI：⏺ xitto 標頭 + 縮排內容 */
+.thread.tui .msg.asst .who { display: block; color: var(--accent); font-weight: 700; margin-bottom: var(--sp-1); font-size: 13.5px; }
+.thread.tui .msg.asst .who::before { content: "⏺ "; }
+.thread.tui .msg.asst .body { padding-left: 2ch; font-size: 13.5px; }
+.thread.tui .phase { padding-left: 2ch; }
+
+/* 工具行：⎿ 縮排、總是展開、隱藏摺疊鈕與原前標 */
+.thread.tui .proc { border: none; background: none; margin: var(--sp-1) 0 0; padding-left: 2ch; }
+.thread.tui .proc-toggle { display: none; }
+.thread.tui .proc-list { display: block !important; border: none; padding: 0; }
+.thread.tui .proc-step { padding: 1px 0; color: var(--dim); display: block; }
+.thread.tui .proc-step .pmark { display: none; }
+.thread.tui .proc-step::before { content: "⎿ "; color: var(--faint); }
+.thread.tui .proc-step.done .ptext { color: var(--fg); }
+.thread.tui .proc-step.done .ptext::after { content: " ✓"; color: var(--ok); }
+.thread.tui .proc-step.error .ptext { color: var(--danger); }
+.thread.tui .proc-step.error .ptext::after { content: " ✗"; color: var(--danger); }
+.thread.tui .proc-step.running .ptext::after { content: " …"; color: var(--accent); }
+.thread.tui .proc-step .diff { margin-left: 2ch; }
+
+/* 終端機視圖：markdown 標題不要過大，維持轉錄質感 */
+.thread.tui .body.md h1, .thread.tui .body.md h2, .thread.tui .body.md h3, .thread.tui .body.md h4 { font-size: 14px; margin: .6em 0 .3em; }
+
 /* ── 輸入區 ─────────────────────────────────────────── */
 .composer {
   border-top: 1px solid var(--line);
@@ -637,6 +678,7 @@ body {
           <span id="input-hint">Enter 送出 · Shift+Enter 換行</span>
           <span class="spacer" aria-hidden="true"></span>
           <span id="status-hint" aria-live="polite"></span>
+          <button class="ghost view-toggle" id="view-toggle" type="button" data-tooltip="切換終端機／泡泡視圖" aria-label="切換對話視圖">⌗ 終端機</button>
         </div>
       </div>
     </div>
@@ -650,6 +692,20 @@ body {
 $("#theme").onclick = () => {
   const t = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
   applyTheme(t);
+};
+
+/* 對話視圖切換：泡泡 ⇄ 終端機（Claude Code 風轉錄）。偏好記 localStorage(xk_chatview) */
+function applyView(v) {
+  const tui = v === "tui";
+  $("#thread").classList.toggle("tui", tui);
+  const b = $("#view-toggle");
+  if (b) b.textContent = tui ? "💬 泡泡" : "⌗ 終端機";   // 顯示「切換到」的目標
+}
+applyView(localStorage.getItem("xk_chatview") || "bubble");
+$("#view-toggle").onclick = () => {
+  const v = $("#thread").classList.contains("tui") ? "bubble" : "tui";
+  localStorage.setItem("xk_chatview", v);
+  applyView(v);
 };
 
 /* IME 保護 */
@@ -849,9 +905,9 @@ function procHtml(m, idx) {
   const steps = m.tools
     .map(
       (a) =>
-        `<div class="proc-step ${a.isError ? "error" : ""}">
-          ${a.done ? (a.isError ? "✗" : "⏺") : '<span class="spin">◐</span>'}
-          ${esc(toolText(a))}
+        `<div class="proc-step ${a.isError ? "error" : a.done ? "done" : "running"}">
+          <span class="pmark">${a.done ? (a.isError ? "✗" : "⏺") : '<span class="spin">◐</span>'}</span>
+          <span class="ptext">${esc(toolText(a))}</span>
           ${a.diff ? diffHtml(a.diff) : ""}
         </div>`
     )
