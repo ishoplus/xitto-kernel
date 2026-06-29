@@ -18,11 +18,12 @@ import { createGeneralPack } from '../packs/general/index.js';
 import { createDeepResearchPack } from '../packs/deep-research/index.js';
 import { createDevopsPack } from '../packs/devops/index.js';
 import { createPatentPack } from '../packs/patent/index.js';
+import { createUiuxPack } from '../packs/uiux/index.js';
 
 const PACKS = {
   coding: createCodingPack, 'data-query': createDataQueryPack, notes: createNotesPack,
   general: createGeneralPack, 'deep-research': createDeepResearchPack, devops: createDevopsPack,
-  patent: createPatentPack,
+  patent: createPatentPack, uiux: createUiuxPack,
 };
 
 const lastText = (history) => ([...(history || [])].reverse().find((m) => m.role === 'assistant')?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
@@ -38,7 +39,8 @@ const ROUTE_GUIDE =
   'data-query：對 SQLite 資料庫下 SQL 撈數據——僅當明確提到資料庫／SQL／.db 才選。\n' +
   'notes：管理筆記知識庫——僅當明確提到筆記才選。\n' +
   'devops：伺服器維運／部署／docker／CI／常駐服務。\n' +
-  'patent：撰寫專利交底書／找專利題目／挖掘發明點／現有技術初步檢索——提到專利／交底書／發明點時選。';
+  'patent：撰寫專利交底書／找專利題目／挖掘發明點／現有技術初步檢索——提到專利／交底書／發明點時選。\n' +
+  'uiux：設計或實作使用者介面——版面/排版、響應式/RWD、設計稿、CSS 樣式、可及性/a11y、視覺與互動設計時選。';
 
 // 關鍵字快速判斷（LLM 不可用/逾時時的備援；命中強訊號才回領域，否則 null→general）。
 export function heuristicPack(goal) {
@@ -48,6 +50,7 @@ export function heuristicPack(goal) {
   if (/(筆記本?|\bnotes?\b)/.test(g)) return 'notes';
   if (/(專利|专利|交底書?|交底书?|發明點|发明点|權利要求|权利要求|patent|invention\s*disclosure)/.test(g)) return 'patent';
   if (/(研究報告|深度研究|多來源|文獻|綜述|市場調查|競品分析|deep\s*research)/.test(g)) return 'deep-research';
+  if (/(ui\s*\/?\s*ux|\buiux\b|介面設計|使用者介面|用戶界面|版面|排版|響應式|\brwd\b|設計稿|線框|wireframe|figma|無障礙|可及性|\ba11y\b|accessibility|視覺設計|設計系統|design\s*system|配色方案|design\s*token)/.test(g)) return 'uiux';
   if (/(修\s*bug|debug|重構|refactor|單元測試|unit\s*test|程式碼|codebase|\brepo\b|git\s*commit|pull\s*request|\.(js|ts|jsx|tsx|py|go|rs|java|cpp?|rb|php)\b)/.test(g)) return 'coding';
   return null;
 }
@@ -62,7 +65,7 @@ export async function classifyPack(goal, { model, getApiKey, complete = complete
     const apiKey = await getApiKey(model.provider);
     if (!apiKey) return fallback;
     const ctx = {
-      systemPrompt: '你是任務分流器。把使用者的需求分到最適合的「領域」，只輸出一個領域代號（general/coding/deep-research/data-query/notes/devops/patent）其中之一，不要解釋、不要標點。\n領域說明：\n' + ROUTE_GUIDE,
+      systemPrompt: '你是任務分流器。把使用者的需求分到最適合的「領域」，只輸出一個領域代號（general/coding/deep-research/data-query/notes/devops/patent/uiux）其中之一，不要解釋、不要標點。\n領域說明：\n' + ROUTE_GUIDE,
       messages: [{ role: 'user', content: [{ type: 'text', text: `需求：${String(goal).slice(0, 600)}\n\n領域代號是？` }], timestamp: Date.now() }],
     };
     const res = await complete(model, ctx, { maxTokens: 12, apiKey, signal: ac.signal, cacheRetention: cacheRetentionFor(model) });
@@ -87,6 +90,15 @@ export const safeWs = (w) => (String(w || 'default').replace(/[^a-zA-Z0-9_-]/g, 
 // 否則（含託管模式收到絕對路徑）→ 消毒成管理空間 ws/<name>，不會逃逸到主機任意路徑。
 export function workspaceDir(baseDir, ws, local) {
   return (local && isAbsolute(String(ws || ''))) ? String(ws) : join(baseDir, 'ws', safeWs(ws));
+}
+
+// 列出可用磁碟（給 Windows 選夾器跨槽切換用）：探測 A:\ … Z:\ 是否存在。非 Windows 回空陣列。
+// 無依賴、不走 shell；26 次 existsSync 很快。
+export function listDrives() {
+  if (process.platform !== 'win32') return [];
+  const out = [];
+  for (let c = 65; c <= 90; c++) { const d = String.fromCharCode(c) + ':\\'; try { if (existsSync(d)) out.push(d); } catch { /* 略 */ } }
+  return out;
 }
 
 // 確保 workdir 可用：指到既有檔案 → 拋錯（清楚理由,而非 mkdir 的 ENOTDIR）；不存在 → 自動建立。
@@ -493,11 +505,17 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     // 資料夾瀏覽器（僅本地模式）：列某路徑下的子資料夾,給網頁「用選的」挑真實資料夾
     if (req.method === 'GET' && path === '/v1/fs') {
       if (!local) return json(res, 403, { error: '僅本地模式可瀏覽資料夾' });
-      const dir = resolve(url.searchParams.get('path') || homedir());
+      // 導覽用 base + name/up，由伺服器端 join/dirname 拼接(跨平台；避免前端把含反斜線的 Windows 絕對路徑
+      // 塞進 JS 字串而被跳脫吃掉分隔符)。name=進入子資料夾、up=1=上一層、皆無則用 base 或家目錄。
+      const baseParam = url.searchParams.get('path');
+      const name = url.searchParams.get('name');
+      const dir = (baseParam && name) ? join(resolve(baseParam), name)
+        : (baseParam && url.searchParams.get('up') === '1') ? dirname(resolve(baseParam))
+          : resolve(baseParam || homedir());
       const showHidden = url.searchParams.get('hidden') === '1'; // 預設藏 dot 開頭；前端勾「顯示隱藏資料夾」才帶 hidden=1
       try {
         const dirs = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name !== 'node_modules' && (showHidden || !e.name.startsWith('.'))).map((e) => e.name).sort();
-        return json(res, 200, { path: dir, parent: dirname(dir), home: homedir(), dirs });
+        return json(res, 200, { path: dir, parent: dirname(dir), home: homedir(), dirs, drives: listDrives() });
       } catch (e) { return json(res, 400, { error: '無法讀取：' + e.message }); }
     }
 

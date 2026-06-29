@@ -16,6 +16,7 @@ import { createGeneralPack } from '../packs/general/index.js';
 import { createDeepResearchPack } from '../packs/deep-research/index.js';
 import { createDevopsPack } from '../packs/devops/index.js';
 import { createPatentPack } from '../packs/patent/index.js';
+import { createUiuxPack } from '../packs/uiux/index.js';
 
 const e = (n) => (s) => `\x1b[${n}m${s}\x1b[0m`;
 const green = e(32); const gray = e(90); const red = e(31); const cyan = e(36); const yellow = e(33);
@@ -28,6 +29,7 @@ const PACKS = {
   'deep-research': createDeepResearchPack,
   devops: createDevopsPack,
   patent: createPatentPack,
+  uiux: createUiuxPack,
 };
 
 export async function main(argv = process.argv.slice(2)) {
@@ -170,7 +172,7 @@ function printHelp() {
     '  xitto-kernel --pack general --goal "..." [--yes]         目標驅動自主循環（headless）',
     '  xitto-kernel new-agent <name>                            產出依賴 kernel 的獨立 agent 專案',
     '',
-    '  --pack <name>   選擇內建 DomainPack（coding | data-query | notes | general | deep-research | devops | patent；預設 coding）',
+    '  --pack <name>   選擇內建 DomainPack（coding | data-query | notes | general | deep-research | devops | patent | uiux；預設 coding）',
     '  --cwd <dir>     工作目錄（沙箱根；相對路徑以當前目錄展開，不存在自動建立。別名 --dir / -C；預設當前目錄）',
     '  --goal "..."    給目標，agent 自主反覆做到完成（建議搭配 --pack general）',
     '  --model <id>    指定 model（預設用 providers.json 的 defaultModel）',

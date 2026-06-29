@@ -135,7 +135,7 @@ $("#theme").onclick = () => { const t = document.documentElement.getAttribute("d
 
 // 工具動作翻人話（與許願台一致）
 const TOOL_ZH = { read:"讀取檔案", ls:"查看目錄", glob:"尋找檔案", grep:"搜尋內容", write:"建立檔案", edit:"修改檔案", bash:"執行指令", web_search:"搜尋網路", web_fetch:"讀取網頁", http:"呼叫 API", read_image:"看圖片", skill:"載入技能", skill_save:"記錄技能", skills_check:"複查技能", playbook_update:"記下做法", episode_record:"記下經驗", episode_recall:"回想經驗", memory_save:"記住重點", todo_write:"規劃步驟", spawn_agent:"派出子助手", ask_user:"來問你" };
-const LABELS = { general:"通用", coding:"程式", "data-query":"查資料", notes:"筆記", "deep-research":"研究", devops:"維運" };
+const LABELS = { general:"通用", coding:"程式", "data-query":"查資料", notes:"筆記", "deep-research":"研究", devops:"維運", patent:"專利", uiux:"介面" };
 const packLabel = (p) => LABELS[p] || p;
 const toolText = (a) => { const z=TOOL_ZH[a.name]||a.name; const d=a.args&&(a.args.command||a.args.path||a.args.query||a.args.url||a.args.topic||a.args.name)||""; return z+(d?` ${String(d).slice(0,60)}`:""); };
 

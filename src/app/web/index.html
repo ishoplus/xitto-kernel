@@ -109,6 +109,9 @@
   .fslist { flex:1; overflow:auto; border:1px solid var(--line); border-radius:8px; }
   .fsrow { padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--line); font-size:14px; }
   .fsrow:hover { background:var(--inset); } .fsrow.up { color:var(--dim); } .fsrow.hid { color:var(--dim); }
+  .fsdrives { display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px; border-bottom:1px solid var(--line); background:var(--inset); }
+  .drivebtn { font-size:12.5px; padding:3px 10px; cursor:pointer; background:transparent; color:var(--fg); border:1px solid var(--line); border-radius:6px; }
+  .drivebtn:hover { border-color:var(--accent); }
   .fshidden { font-size:12.5px; color:var(--dim); display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none; } .fshidden input { cursor:pointer; }
   .fsbar { display:flex; align-items:center; gap:8px; margin-top:10px; }
   .viewer { margin-top:10px; border:1px solid var(--line); border-radius:10px; padding:12px; background:var(--inset); }
@@ -190,6 +193,8 @@ const LOCAL = __LOCAL__;  // 本地模式：可把專案指向真實資料夾（
 const $ = (s) => document.querySelector(s);
 const api = (p, opts={}) => fetch(p, { ...opts, headers: { authorization:"Bearer "+TOKEN, "content-type":"application/json", ...(opts.headers||{}) } });
 const esc = (s) => String(s==null?"":s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// 內嵌進「雙引號 HTML 屬性裡的單引號 JS 字串」用：先 JS 跳脫(反斜線/單引號，避免 Windows 路徑被吃掉)，再 HTML 屬性跳脫。
+const jsAttr = (s) => String(s==null?"":s).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 // 白天／夜晚切換（xk_theme 兩頁共用；鈕顯示「將切到」的圖示）
 function applyTheme(t){ document.documentElement.setAttribute("data-theme", t); const b=$("#theme"); if(b) b.textContent = t==="light" ? "🌙" : "☀️"; }
@@ -213,7 +218,7 @@ let liveTask = null;
 setInterval(() => { if (liveTask && (liveTask.status==="running"||liveTask.status==="queued")) { const el=document.getElementById("elapsed"); if (el) el.textContent = elapsedOf(liveTask)+"s"; } }, 1000);
 
 // 領域選單（非技術使用者預設「通用」）
-const LABELS = { general:"通用", coding:"程式", "data-query":"查資料", notes:"筆記", "deep-research":"研究", devops:"維運" };
+const LABELS = { general:"通用", coding:"程式", "data-query":"查資料", notes:"筆記", "deep-research":"研究", devops:"維運", patent:"專利", uiux:"介面" };
 const packLabel = (p) => LABELS[p] || p;
 // 預設「自動判斷」：使用者不必懂領域,系統依願望文字挑;要手動指定可在此覆蓋
 $("#pack").innerHTML = `<option value="auto" selected>🪄 自動判斷領域</option>` + PACKS.map(p=>`<option value="${p}">${packLabel(p)}</option>`).join("");
@@ -240,15 +245,25 @@ renderSpaces();
 if(LOCAL) $("#browsebtn").style.display="";
 $("#browsebtn").onclick = ()=>{ $("#fsmodal").style.display="flex"; $("#fshidden").checked=fsShowHidden; fsGo(null); };
 let fsPath=null, fsShowHidden=localStorage.getItem("xk_fshidden")==="1";
-async function fsGo(p){
-  const qs=[]; if(p) qs.push("path="+encodeURIComponent(p)); if(fsShowHidden) qs.push("hidden=1");
+// 導覽以 {path,name,up} 交給後端拼路徑(跨平台)；前端 onclick 只帶資料夾名，不內嵌絕對路徑，
+// 避免含反斜線的 Windows 路徑被 JS 字串跳脫吃掉分隔符(如 C:\Users\showang → C:Usersshowang)。
+async function fsList(opts){
+  opts=opts||{}; const qs=[];
+  if(opts.path) qs.push("path="+encodeURIComponent(opts.path));
+  if(opts.name) qs.push("name="+encodeURIComponent(opts.name));
+  if(opts.up) qs.push("up=1");
+  if(fsShowHidden) qs.push("hidden=1");
   const r=await api("/v1/fs"+(qs.length?("?"+qs.join("&")):"")).then(r=>r.json()).catch(()=>({error:"讀取失敗"}));
   if(r.error){ alert(r.error); return; }
   fsPath=r.path; window._fsHome=r.home;
   $("#fspath").textContent="📂 "+r.path;
-  const base=r.path.endsWith("/")?r.path:r.path+"/";
-  $("#fslist").innerHTML=`<div class="fsrow up" onclick="fsGo('${esc(r.parent)}')">⬆ 上一層</div>`+(r.dirs.length?r.dirs.map(d=>`<div class="fsrow${d.startsWith(".")?" hid":""}" onclick="fsGo('${esc(base+d)}')">📁 ${esc(d)}</div>`).join(""):`<div class="empty" style="padding:10px">（沒有子資料夾，可直接選這個）</div>`);
+  // Windows：頂部一排磁碟按鈕可跨槽切換(C:/D:/E:…)；非 Windows r.drives 為空，不顯示。
+  const drivesRow=(r.drives&&r.drives.length)?`<div class="fsdrives">${r.drives.map(dv=>`<button class="drivebtn" onclick="fsList({path:'${jsAttr(dv)}'})" title="切換到 ${esc(dv)}">💽 ${esc(dv.replace(/\\$/,''))}</button>`).join("")}</div>`:"";
+  $("#fslist").innerHTML=drivesRow+`<div class="fsrow up" onclick="fsUp()">⬆ 上一層</div>`+(r.dirs.length?r.dirs.map(d=>`<div class="fsrow${d.startsWith(".")?" hid":""}" onclick="fsEnter('${jsAttr(d)}')">📁 ${esc(d)}</div>`).join(""):`<div class="empty" style="padding:10px">（沒有子資料夾，可直接選這個）</div>`);
 }
+function fsGo(p){ return fsList(p?{path:p}:{}); }          // 絕對路徑 / 家目錄 / 初始
+function fsEnter(name){ return fsList({path:fsPath, name}); } // 進入子資料夾(後端 join)
+function fsUp(){ return fsList({path:fsPath, up:true}); }     // 上一層(後端 dirname)
 function fsToggleHidden(){ fsShowHidden=$("#fshidden").checked; localStorage.setItem("xk_fshidden", fsShowHidden?"1":"0"); fsGo(fsPath); }
 function fsHome(){ fsGo(window._fsHome||null); }
 function closeFs(){ $("#fsmodal").style.display="none"; }
