@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.8
+
+- **新增 `patent`（專利交底書）pack**：協助使用者完成專利交底書——從與使用者的討論、或用 `grep/glob/read` 探勘進行中專案，挖掘具新穎性/進步性的發明點（一次提數個候選題目讓使用者選，不武斷定題）；`web_search/web_fetch` 做現有技術初步檢索；不確定的技術細節用 `ask` 問使用者、不臆造。
+  - 內建固定 5 段式格式（現有技術及問題 / 技術方案 / 意想不到的效果 / 技術重點 / 技術特徵的檢索式）+ 半導體與智能體領域撰寫要點；`verify` 每輪守門 5 段是否齊全，缺則回灌補齊。
+  - `PATENT.md` 可作專案級格式覆蓋（附 `PATENT.template.md` 範本）；CLI + 許願台雙端註冊，含 `heuristicPack`/`ROUTE_GUIDE` 自動分流。
+- **共用基礎工具加固（`shared/`）**：
+  - `fs-tools`：`write`/`edit` 自動建父目錄 + 原子寫（暫存檔 + rename）+ `try/catch` 結構化錯誤 + symlink 防逃逸（canonical 解析最近存在祖先）+ 讀後變更檢測（`readFiles` 升級為 `Map<realpath,mtime>`，對齊 Claude Code staleness）；`read` 加目錄/二進位/超大檔守衛；`ls` 容忍壞 symlink、傳檔報錯；`bash` 逾時改 `SIGKILL`。
+  - `code-nav`：修正 `grep` 二進位偵測——原始碼中的裸 NUL 位元組改為顯式 `'\x00'`，避免被編輯器/格式化破壞後退化成「跳過所有含空格檔案」。
+  - `web-tools`：`web_fetch`/`http` 加 `content-length` 上限（25MB），防巨型回應 OOM。
+- **本地工作目錄依使用者選擇生成**：
+  - CLI 新增 `--cwd`/`--dir`/`-C`：相對路徑展開、不存在自動建立、指到既有檔案報錯；貫穿 `--goal`/`--tui`/互動 CLI，沙箱（`within` + Seatbelt）與資料目錄全部錨定其下。
+  - 許願台 local 模式對齊 CLI：抽 `ensureWorkdir` 統一 `/v1/tasks`、`/v1/run`、`/v1/stream` 三端點——缺失目錄自動建立 + `isDirectory` 守衛。
+- **跨平台啟動許願台**：`serve:local` 改為 `node scripts/serve-local.js`，Windows/macOS/Linux 通用（取代原本 Unix-only 的 `VAR=value cmd` shell 語法）；README（en + zh-TW）補 Windows PowerShell/cmd 啟動指令、`patent` pack、`--cwd`。
+- 測試 202/202。
+
 ## 0.9.7
 
 - **獨立對話式網頁 `/chat`（與許願台並存）**：同一 kernel 的另一個前端——許願台是「願望→交付物」（`mode:goal`），對話頁是「逐句協作、記得上下文」（`mode:turn` + 固定 `sessionId` 多輪 + SSE 串流）。後端零改動（`/v1/stream` 早已支援 `mode:turn`）。
