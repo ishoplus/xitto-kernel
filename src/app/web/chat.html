@@ -445,6 +445,45 @@ body {
 /* 視圖切換鈕 */
 .view-toggle { font-size: 12px; padding: var(--sp-1) var(--sp-2); white-space: nowrap; }
 
+/* 檔案預覽：浮層 modal（不夾在對話與輸入框之間）。只在有內容時才成為遮罩 */
+#file-preview:not(:empty) {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,.55);
+  padding: var(--sp-6);
+  animation: fade-in var(--duration-fast) var(--ease-out);
+}
+.preview-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+  width: min(820px, 100%);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.preview-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.preview-name { font-weight: 600; color: var(--fg); }
+.preview-bar a { color: var(--accent); }
+.preview-body { overflow: auto; padding: var(--sp-4); }
+.preview-pre { white-space: pre-wrap; font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 0; color: var(--fg); }
+.preview-img { max-width: 100%; border-radius: var(--r-md); display: block; margin: 0 auto; }
+
 /* ── 終端機視圖（Claude Code 風轉錄）：monospace、扁平全寬、› / ⏺ xitto / ⎿ 工具行 ── */
 .thread.tui { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .thread.tui .thread-wrap { max-width: 880px; }
@@ -708,6 +747,9 @@ $("#view-toggle").onclick = () => {
   applyView(v);
 };
 
+/* Esc 關閉檔案預覽浮層 */
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeFilePreview(); });
+
 /* IME 保護 */
 let composing = false;
 const inp = $("#input");
@@ -807,48 +849,39 @@ async function loadFiles() {
   $("#wbfiles").innerHTML = html;
 }
 
+function closeFilePreview() { const v = document.getElementById("file-preview"); if (v) v.innerHTML = ""; }
+
+// 檔案預覽用浮層 modal（蓋在上方，不夾在對話與輸入框之間切割版面）
 async function wbView(encPath, name) {
-  // 在 thread 區顯示檔案預覽
-  const path = decodeURIComponent(encPath);
   const v = document.getElementById("file-preview");
   if (!v) return;
-  
   const url = "/v1/workspaces/file?ws=" + encodeURIComponent(curSpace) + "&path=" + encPath + "&token=" + encodeURIComponent(TOKEN);
-  
-  const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
-  const MD = /\.(md|markdown)$/i;
-  const JSONF = /\.json$/i;
-  const HTMLF = /\.html?$/i;
-  
-  let content = "";
+  const IMG = /\.(png|jpe?g|gif|webp|svg)$/i, MD = /\.(md|markdown)$/i, JSONF = /\.json$/i, HTMLF = /\.html?$/i;
+
+  let body = "";
   if (IMG.test(name)) {
-    content = `<div style="padding:${8}px"><img style="max-width:100%;border-radius:${6}px" src="${url}" alt="${esc(name)}"></div>`;
+    body = `<img class="preview-img" src="${url}" alt="${esc(name)}">`;
+  } else if (HTMLF.test(name)) {
+    body = `<div class="empty">（HTML 檔案，請用「開新分頁」檢視）</div>`;
   } else {
     const txt = await fetch(url).then((r) => (r.ok ? r.text() : null)).catch(() => null);
-    if (txt == null) {
-      content = `<div class="empty">（無法預覽）</div>`;
-    } else if (MD.test(name)) {
-      content = `<div class="md" style="padding:${12}px;max-height:400px;overflow:auto">${mdRender(txt)}</div>`;
-    } else if (JSONF.test(name)) {
-      try { content = `<pre style="padding:${12}px;overflow:auto;max-height:400px;white-space:pre-wrap;font-size:13px">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`; }
-      catch { content = `<pre style="padding:${12}px;overflow:auto;max-height:400px">${esc(txt)}</pre>`; }
-    } else if (HTMLF.test(name)) {
-      content = `<div class="empty">（HTML 檔案，請用「開新分頁」檢視）</div>`;
-    } else {
-      content = `<pre style="padding:${12}px;overflow:auto;max-height:400px;white-space:pre-wrap;font-size:13px">${esc(txt)}</pre>`;
-    }
+    if (txt == null) body = `<div class="empty">（無法預覽）</div>`;
+    else if (MD.test(name)) body = `<div class="md">${mdRender(txt)}</div>`;
+    else if (JSONF.test(name)) { try { body = `<pre class="preview-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`; } catch { body = `<pre class="preview-pre">${esc(txt)}</pre>`; } }
+    else body = `<pre class="preview-pre">${esc(txt)}</pre>`;
   }
-  
-  v.innerHTML = `<div style="border-top:1px solid var(--line);padding:${12}px ${24}px">
-    <div style="display:flex;align-items:center;gap:${8}px;margin-bottom:${8}px;font-size:12px;color:var(--dim)">
-      📄 ${esc(name)}
-      <a href="${url}" target="_blank" style="color:var(--accent)">開新分頁</a>
-      <a href="${url}&download=1" style="color:var(--accent)">下載</a>
+
+  v.innerHTML = `<div class="preview-panel" role="dialog" aria-modal="true" aria-label="檔案預覽：${esc(name)}">
+    <div class="preview-bar">
+      <span class="preview-name">📄 ${esc(name)}</span>
+      <a href="${url}" target="_blank">開新分頁</a>
+      <a href="${url}&download=1">下載</a>
+      <span class="spacer" aria-hidden="true"></span>
+      <button class="ghost" onclick="closeFilePreview()" aria-label="關閉預覽" type="button">✕ 關閉</button>
     </div>
-    ${content}
-    <button class="ghost" onclick="this.parentElement.parentElement.remove()" style="margin-top:${8}px;font-size:12px" type="button">✕ 關閉</button>
+    <div class="preview-body">${body}</div>
   </div>`;
-  scrollDown();
+  v.onclick = (e) => { if (e.target === v) closeFilePreview(); }; // 點背景關閉
 }
 
 function openChat(id) {
