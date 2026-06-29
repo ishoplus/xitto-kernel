@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createKernel } from '../src/kernel/index.js';
-import { createUiuxPack, auditHtml } from '../src/packs/uiux/index.js';
+import { createUiuxPack, auditHtml, auditAssets, bareTemplateTokens } from '../src/packs/uiux/index.js';
 
 test('uiux pack：工具齊（fs + glob/grep + web_search/web_fetch + bash）', () => {
   const k = createKernel(createUiuxPack());
@@ -70,6 +70,44 @@ test('auditHtml：合規頁面 → 無問題', () => {
     <a href="/x">關於我們</a>
   </body></html>`;
   assert.deepEqual(auditHtml(ok, 'ok.html'), []);
+});
+
+test('bareTemplateTokens：抓裸佔位符、放過字串內與小寫', () => {
+  assert.deepEqual(bareTemplateTokens('const P = __PACKS__; const L = __LOCAL__;').sort(), ['__LOCAL__', '__PACKS__']);
+  assert.deepEqual(bareTemplateTokens('const T = "__SERVER_TOKEN__";'), [], '引號內字串不算（會被替換）');
+  assert.deepEqual(bareTemplateTokens('console.log(__dirname)'), [], '小寫/非 __X__ 不算');
+});
+
+test('auditAssets：抓壞引用 + 引入 JS 的裸佔位符；外部資源略過', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'uxa-'));
+  try {
+    // app.js 含裸佔位符（= 這次回歸的根因）；styles.css 存在；missing.js 不存在
+    writeFileSync(join(dir, 'app.js'), 'const PACKS = __PACKS__;\nconst $ = s => document.querySelector(s);');
+    writeFileSync(join(dir, 'styles.css'), 'body{margin:0}');
+    const html = `<!doctype html><html lang="en"><head>
+      <link rel="stylesheet" href="styles.css">
+      <link rel="stylesheet" href="https://cdn.example.com/x.css">
+      <script src="app.js"></script>
+      <script src="missing.js"></script>
+    </head><body></body></html>`;
+    const issues = auditAssets(html, join(dir, 'index.html')).join('\n');
+    assert.match(issues, /__PACKS__/, '抓出 app.js 裸佔位符');
+    assert.match(issues, /missing\.js/, '抓出不存在的本地資產');
+    assert.doesNotMatch(issues, /cdn\.example\.com/, '外部資源略過');
+    assert.doesNotMatch(issues, /styles\.css/, '存在的本地資產不報');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('uiux pack：verify 抓「重構破壞執行期契約」（引入 JS 含裸佔位符）', async () => {
+  const pack = createUiuxPack();
+  const dir = mkdtempSync(join(tmpdir(), 'uxc-'));
+  try {
+    writeFileSync(join(dir, 'app.js'), 'const PACKS = __PACKS__;');
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><html lang="en"><head><meta name="viewport" content="x"><script src="app.js"></script></head><body></body></html>');
+    const v = await pack.verify.run({ turnModified: true, cwd: dir });
+    assert.equal(v.ok, false);
+    assert.match(v.output, /ReferenceError|裸佔位符/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('uiux pack：verify 在改動且有 HTML 問題時回灌、合規時放行', async () => {

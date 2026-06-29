@@ -3,7 +3,7 @@
 // coding 守 lint/型別；uiux 守「設計一致性 + 可及性(a11y) + 響應式 + 視覺層次」，verify 以 a11y 靜態檢查守門。
 // 工具：read/ls/glob/grep(探勘既有 UI 與 design token) + web_search/web_fetch(參考設計/元件範式/WCAG) + write/edit + bash(跑 build/格式化/起 dev server)。
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname, basename, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
 import { createFsTools } from '../shared/fs-tools.js';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
@@ -22,6 +22,11 @@ const SYSTEM_PROMPT = [
   '【先對齊，再動手】',
   '- 啟動先讀 contextFile（DESIGN.md／STYLEGUIDE.md）與既有樣式：沿用專案既有的 design token（顏色/間距/字級/圓角/陰影）、元件慣例與框架（純 CSS / Tailwind / styled / React 等），不要另起一套不一致的風格。',
   '- 品牌調性、視覺方向、目標客群或裝置不明確時，用 ask 問使用者，不要自行臆斷視覺風格。',
+  '',
+  '【改既有檔：不可破壞執行期契約（重要）】',
+  '- 美化/重構既有 UI 時，先理解它如何被執行：模板佔位符（如 __FOO__ / {{ }} / <% %>）、被 JS 參照的 id 與 data-* 屬性、外部資產路徑、build/serve 對特定檔的特殊處理。',
+  '- 抽離 CSS/JS 到外部檔前，確認那段內容有沒有被後端注入或模板替換——若有，佔位符不能搬到「不會被替換」的靜態檔（會在瀏覽器變成未定義而炸掉）。寧可先 read 後端/server 怎麼供應這頁，或用 ask 確認，也不要憑空搬。',
+  '- 重構後務必確認頁面「還能跑」：沒有壞掉的資產引用、沒有未替換的裸佔位符、開瀏覽器沒有 console error——不是只有 markup 漂亮。',
   '',
   '【可及性 a11y（WCAG 2.2 AA，硬底線）】',
   '- 語意化 HTML：用 button/a/nav/main/header/label 等正確標籤，而非 div/span + onclick（後者鍵盤與報讀器都不可用）。',
@@ -121,6 +126,43 @@ export function auditHtml(src, file) {
   return issues.map((s) => `  [${file}] ${s}`);
 }
 
+// 找出「裸」模板佔位符（__UPPER_SNAKE__ 且不在引號內）——當作 JS 識別字用會直接 ReferenceError。
+// （引號內的 "__X__" 視為字串字面值，不算；__dirname 等小寫不符。）
+const BARE_TOKEN_RE = /(^|[^'"\w])(__[A-Z][A-Z0-9_]*__)(?![\w'"])/g;
+export function bareTemplateTokens(text) {
+  return [...new Set([...String(text).matchAll(BARE_TOKEN_RE)].map((m) => m[2]))];
+}
+
+// 行為感知檢查：解析 HTML 引用的本地資產，抓「會讓頁面跑不起來」的問題——
+// ① 引用的本地檔不存在（壞路徑）；② 引入的 JS 含裸佔位符（載入即 ReferenceError，例如把 __PACKS__ 搬進靜態 JS）。
+// htmlPath：該 HTML 的絕對路徑，用來解析相對 src/href。
+export function auditAssets(src, htmlPath) {
+  const issues = [];
+  const base = dirname(htmlPath);
+  const label = basename(htmlPath);
+  // 只查 script 與 stylesheet：缺了頁面真的會壞（JS 不執行 / 沒樣式）。
+  // <img> 缺檔常是開發中佔位、<link rel=icon/manifest> 缺了不影響運作 → 不硬查，避免雜訊（img 缺 alt 由 auditHtml 守）。
+  const refs = [];
+  for (const m of src.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)) refs.push(m[1]);
+  for (const m of src.matchAll(/<link\b[^>]*>/gi)) {
+    if (!/\brel\s*=\s*["'][^"']*\bstylesheet\b/i.test(m[0])) continue;
+    const href = (m[0].match(/\bhref\s*=\s*["']([^"']+)["']/i) || [])[1];
+    if (href) refs.push(href);
+  }
+  for (const ref of refs) {
+    if (/^(https?:|data:|mailto:|tel:|#|\/\/)/i.test(ref)) continue; // 外部/協定相對/錨點/內嵌：略過
+    const clean = ref.replace(/[?#].*$/, '');                        // 去掉 query/hash
+    const abs = isAbsolute(clean) ? clean : join(base, clean);
+    if (!existsSync(abs)) { issues.push(`引用的本地資產不存在：${ref}`); continue; }
+    if (/\.m?js$/i.test(clean)) {
+      let js = ''; try { js = readFileSync(abs, 'utf8'); } catch { continue; }
+      const bare = bareTemplateTokens(js);
+      if (bare.length) issues.push(`引入的腳本 ${ref} 含未替換的裸佔位符 ${bare.slice(0, 4).join('、')}——瀏覽器載入即 ReferenceError`);
+    }
+  }
+  return issues.map((s) => `  [${label}] ${s}`);
+}
+
 /**
  * @param {{ cwd?: string }} [opts]
  * @returns {import('../../types.js').DomainPack}
@@ -168,7 +210,8 @@ export function createUiuxPack({ cwd = process.cwd() } = {}) {
         for (const f of findHtml(root)) {
           let body = '';
           try { body = readFileSync(f, 'utf8'); } catch { continue; }
-          issues.push(...auditHtml(body, f.slice(root.length + 1) || f));
+          issues.push(...auditHtml(body, f.slice(root.length + 1) || f)); // markup a11y
+          issues.push(...auditAssets(body, f));                            // 行為：壞引用 / 裸佔位符
           if (issues.length >= 30) break;
         }
         // 專案若自備 a11y 工具（pa11y/axe/lighthouse）→ 跑「真檢查」，把失敗折進回灌（仿 coding 的 detectVerifyCmd）。
@@ -180,7 +223,7 @@ export function createUiuxPack({ cwd = process.cwd() } = {}) {
         if (!issues.length) return { ok: true };
         return {
           ok: false,
-          output: `可及性(a11y)檢查發現問題，請修正：\n${issues.join('\n')}\n（語意標籤 / img alt / 表單標籤 / 圖示按鈕 aria-label / lang / viewport / 重複id / 正值tabindex / div+onclick。純裝飾圖片用 alt=""；裝飾性 emoji 可加 aria-hidden。）`,
+          output: `可及性與執行期檢查發現問題，請修正：\n${issues.join('\n')}\n（a11y：語意標籤 / img alt / 表單標籤 / 圖示按鈕 aria-label / lang / viewport / 重複id / 正值tabindex / div+onclick。執行期：壞掉的本地資產引用、引入的 JS 含未替換佔位符——抽離 CSS/JS 別把後端要替換的佔位符搬進靜態檔。純裝飾圖片用 alt=""。）`,
         };
       },
       maxRounds: 1,
