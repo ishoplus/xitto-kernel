@@ -522,6 +522,30 @@ body {
 /* 終端機視圖：markdown 標題不要過大，維持轉錄質感 */
 .thread.tui .body.md h1, .thread.tui .body.md h2, .thread.tui .body.md h3, .thread.tui .body.md h4 { font-size: 14px; margin: .6em 0 .3em; }
 
+/* 終端機輸入框：命令列樣式（› 提示符、monospace、扁平內凹，不做圓角卡片）*/
+.composer.tui .composer-box {
+  background: var(--inset);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.25);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.composer.tui .composer-box::before {
+  content: "›";
+  color: var(--accent);
+  font: 700 16px/1.4 ui-monospace, Menlo, monospace;
+  flex-shrink: 0;
+  padding-left: var(--sp-1);
+}
+.composer.tui .composer-textarea {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13.5px;
+}
+.composer.tui .composer-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.25), 0 0 0 2px var(--accent-soft);
+}
+.composer.tui #input-hint { font-family: ui-monospace, Menlo, monospace; }
+
 /* ── 輸入區 ─────────────────────────────────────────── */
 .composer {
   border-top: 1px solid var(--line);
@@ -737,6 +761,8 @@ $("#theme").onclick = () => {
 function applyView(v) {
   const tui = v === "tui";
   $("#thread").classList.toggle("tui", tui);
+  const composer = document.getElementById("main-input");
+  if (composer) composer.classList.toggle("tui", tui);   // 輸入框也跟著變終端機樣式
   const b = $("#view-toggle");
   if (b) b.textContent = tui ? "💬 泡泡" : "⌗ 終端機";   // 顯示「切換到」的目標
 }
