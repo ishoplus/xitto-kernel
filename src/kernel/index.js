@@ -19,6 +19,7 @@ import { createEpisodes } from './episodes.js';
 import { extractFacts } from './extract.js';
 import { createTodo } from './todo.js';
 import { createSpawnTool, createMapTool } from './subagent.js';
+import { createAgents } from './agents.js';
 import { createSkills } from './skills.js';
 import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
 import { maybeCompact, resolveCompactionSettings } from './compaction.js';
@@ -220,6 +221,7 @@ export function createKernel(pack, config = {}) {
     return { ok: r.status === 0, code: r.status, output: output || '(no output)' };
   };
   const skills = createSkills(join(dataDir, 'skills'), { verifyRunner: runVerify }); // 漸進揭露 + 結晶（須驗證）
+  const agents = createAgents(join(dataDir, 'agents')); // 自訂 agent 類型（spawn_agent/spawn_agents 的 agentType）
 
   // 澄清通道：app 提供 askUser 才有 ask_user 工具（結果導向:自主完成,只在非問不可時才打斷使用者）。
   const askUserTool = typeof config.askUser === 'function' ? {
@@ -254,6 +256,7 @@ export function createKernel(pack, config = {}) {
     getApiKey: config.getApiKey,
     getStreamFn: () => config.streamFn, // 與 kernel 同一個 provider（測試可注入 fake）；未給則 subagent 內 fallback pi-ai
     getReadOnlyTools: () => allTools.filter((t) => t.readOnly === true && t.name !== 'spawn_agent' && t.name !== 'spawn_agents'),
+    getAgentType: (name) => agents.get(name), // 自訂 agent 類型：以其專屬 prompt + 工具子集跑子 agent
   };
   const spawnTool = createSpawnTool(subDeps);
   const mapTool = createMapTool(subDeps);
@@ -279,7 +282,8 @@ export function createKernel(pack, config = {}) {
     (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '') +
     (pbText ? `\n\n# 專案手冊（這個專案怎麼做事，跨 session 累積）\n${pbText}` : '') +
     (askUserTool ? '\n\n# 詢問\n盡量自主完成目標。只在缺少關鍵資訊、無法合理推斷、或決策會明顯改變結果時，才用 ask_user 問使用者；能用合理預設就別問。' : '') +
-    skills.promptSection();
+    skills.promptSection() +
+    agents.promptSection();
 
   const getPlanMode = config.getPlanMode || (() => false);
 
@@ -330,6 +334,7 @@ export function createKernel(pack, config = {}) {
     playbook: { list: playbook.list, update: playbook.update, remove: playbook.remove, clear: playbook.clear, load: playbook.load, path: join(dataDir, 'playbook.md') },
     // 技能（結晶層 + 自我維護）：列出 / 移除 / 重掃 / 漂移複查；path 為技能資料夾。
     skills: { list: skills.list, remove: skills.remove, reload: skills.reload, check: skills.check, path: join(dataDir, 'skills') },
+    agents: { list: agents.list, get: agents.get, reload: agents.reload, count: agents.count, path: join(dataDir, 'agents') },
     // 情節（情節層 + 相關性召回）：記錄 / 召回 / 列出 / 清空；path 為落地檔。
     episodes: { record: episodes.record, recall: episodes.recall, list: episodes.list, clear: episodes.clear, count: episodes.count, path: join(dataDir, 'episodes.jsonl') },
     todo: { get: todo.get },
