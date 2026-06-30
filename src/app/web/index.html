@@ -656,7 +656,58 @@
   margin-bottom: var(--sp-2);
 }
 
-/* 檔案預覽（與任務區互斥；顯示時填滿工作區並自捲）*/
+/* 工作區頁籤列（任務/記憶固定 + 檔案動態頁籤）*/
+.wz-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-1);
+  padding: var(--sp-3) 0 0;
+  margin-bottom: var(--sp-2);
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;          /* 頁籤多時可橫向捲動，不擠壓 */
+  scrollbar-width: thin;
+}
+.wz-tab {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 200px;
+  padding: var(--sp-2) var(--sp-3);
+  background: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--r-md) var(--r-md) 0 0;
+  color: var(--dim);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wz-tab:hover { color: var(--fg); background: var(--inset); }
+.wz-tab.active {
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--card);
+  border-color: var(--line);
+  margin-bottom: -1px;        /* 蓋住底線，做出「連到內容」的分頁感 */
+}
+.wz-tab .wz-tab-lbl { overflow: hidden; text-overflow: ellipsis; }
+.wz-tab-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  border-radius: var(--r-sm);
+  color: var(--faint);
+  font-size: 11px;
+}
+.wz-tab-x:hover { color: var(--danger); background: var(--line); }
+
+/* 檔案預覽（顯示時填滿工作區並自捲）*/
 .file-viewer {
   flex: 1;
   min-height: 0;
@@ -992,6 +1043,7 @@
 
     <!-- 工作區（填滿剩餘高度）-->
     <div class="work">
+      <div class="wz-tabs" id="wz-tabs" role="tablist" aria-label="工作區頁籤"></div>
       <div id="current-task" aria-live="polite" aria-label="當前任務">
         <div class="welcome">
           <div class="welcome-icon" aria-hidden="true">🪄</div>
@@ -1043,6 +1095,7 @@ function resetMainTask() {
   stopStream();
   activeId = null;
   liveTask = null;
+  openFiles = [];        // 換專案：清掉所有檔案頁籤
   closeExperience();
   closePreview();
   $("#current-task").innerHTML = `<div class="welcome">
@@ -1501,32 +1554,94 @@ const taskFileUrl = (taskId) => (p, extra = "") =>
 const wsFileUrl = (ws) => (p, extra = "") =>
   "/v1/workspaces/file?ws=" + encodeURIComponent(ws) + "&path=" + encodeURIComponent(p) + "&token=" + encodeURIComponent(TOKEN) + extra;
 
-// 預覽與任務區互斥（同一工作區，避免兩者同時渲染而重疊）
-function showPreview() { $("#current-task").hidden = true; $("#file-viewer").hidden = false; }
-function closePreview() { $("#file-viewer").hidden = true; $("#current-task").hidden = false; }
+// 工作區頁籤：任務／記憶固定，檔案為動態多頁籤（可同時開多個、各自可關，上限 6）。同一時間只顯示一個面板。
+const FILE_TAB_MAX = 6;
+let activeTab = "task";   // "task" | "exp" | "file:<key>"
+let openFiles = [];       // [{key, name, urlFn, encPath}]（依開啟順序）
 
-// 以給定的 urlFn 渲染檔案預覽（圖片/HTML/md/json/純文字）。
-async function renderFile(urlFn, encPath, name) {
-  const path = decodeURIComponent(encPath);
+function renderTabs() {
+  const el = $("#wz-tabs"); if (!el) return;
+  const fixed = (id, label, onclick) =>
+    `<button class="wz-tab${activeTab === id ? " active" : ""}" type="button" role="tab" aria-selected="${activeTab === id}" onclick="${onclick}"><span class="wz-tab-lbl">${label}</span></button>`;
+  let html = fixed("task", "🪄 任務", "setTab('task')")
+           + fixed("exp", "🧠 記憶", "openExperience()");
+  openFiles.forEach((f, i) => {
+    const on = activeTab === "file:" + f.key;
+    html += `<button class="wz-tab${on ? " active" : ""}" type="button" role="tab" aria-selected="${on}" onclick="setFileTab(${i})" title="${esc(f.name)}">`
+      + `<span class="wz-tab-lbl">📄 ${esc(f.name)}</span>`
+      + `<span class="wz-tab-x" role="button" tabindex="0" aria-label="關閉 ${esc(f.name)}" onclick="event.stopPropagation();closeFileAt(${i})">✕</span>`
+      + `</button>`;
+  });
+  el.innerHTML = html;
+}
+
+function showOnly(which) { // "task" | "exp" | "file"
+  $("#current-task").hidden = which !== "task";
+  $("#exp-viewer").hidden = which !== "exp";
+  $("#file-viewer").hidden = which !== "file";
+}
+
+// 切換頁籤。固定頁純切可見性；檔案頁切到對應檔並重抓渲染。
+function setTab(id) {
+  if (id.startsWith("file:")) {
+    const f = openFiles.find((x) => "file:" + x.key === id);
+    if (!f) return setTab("task");
+    activeTab = id; expOpen = false;
+    showOnly("file"); renderTabs(); renderFileBody(f);
+    return;
+  }
+  activeTab = id; expOpen = id === "exp";
+  showOnly(id === "exp" ? "exp" : "task");
+  renderTabs();
+}
+function setFileTab(i) { const f = openFiles[i]; if (f) setTab("file:" + f.key); }
+
+function closePreview() { setTab("task"); }   // 回任務（新任務／開任務）；不清空已開檔案頁籤
+
+// 關閉某個檔案頁籤：是當前頁→切到相鄰檔或任務；否則只更新頁籤列
+function closeFile(key) {
+  const wasActive = activeTab === "file:" + key;
+  openFiles = openFiles.filter((x) => x.key !== key);
+  if (wasActive) setTab(openFiles.length ? "file:" + openFiles[openFiles.length - 1].key : "task");
+  else renderTabs();
+}
+function closeFileAt(i) { const f = openFiles[i]; if (f) closeFile(f.key); }
+function closeActiveFile() { if (activeTab.startsWith("file:")) closeFile(activeTab.slice(5)); }
+
+// 開檔（或聚焦已開的同檔）。src 區分來源（任務成品 vs 工作區），讓 key 穩定可去重。
+function renderFile(urlFn, encPath, name, src) {
+  const key = (src || "") + "|" + encPath;
+  let f = openFiles.find((x) => x.key === key);
+  if (f) { f.urlFn = urlFn; f.name = name; }   // 已開：更新 urlFn（token/ws 可能變）並聚焦
+  else {
+    f = { key, name, urlFn, encPath };
+    openFiles.push(f);
+    if (openFiles.length > FILE_TAB_MAX) {     // 超過上限：淘汰最舊（非剛開的那個）
+      const victimIdx = openFiles.findIndex((x) => x !== f);
+      if (victimIdx >= 0) openFiles.splice(victimIdx, 1);
+    }
+  }
+  setTab("file:" + key);
+}
+
+// 把單一檔案的內容渲染進 #file-viewer（圖片/HTML/md/json/文件/純文字）。切走則放棄（避免非同步覆蓋）。
+async function renderFileBody(f) {
   const v = $("#file-viewer");
-  showPreview();
+  const { urlFn, name } = f;
+  const path = decodeURIComponent(f.encPath);
+  const mine = () => activeTab === "file:" + f.key; // 仍是當前檔才寫入
 
-  const bar = `<div class="viewer-bar"><span>📄 ${esc(name)}</span> · <a href="${urlFn(path)}" target="_blank">開新分頁</a> · <a href="${urlFn(path, "&download=1")}">下載</a><span class="spacer" aria-hidden="true"></span><button class="ghost" onclick="closePreview()" aria-label="關閉預覽">✕ 關閉</button></div>`;
+  const bar = `<div class="viewer-bar"><span>📄 ${esc(name)}</span> · <a href="${urlFn(path)}" target="_blank">開新分頁</a> · <a href="${urlFn(path, "&download=1")}">下載</a><span class="spacer" aria-hidden="true"></span><button class="ghost" onclick="closeActiveFile()" aria-label="關閉預覽">✕ 關閉</button></div>`;
 
-  if (IMG.test(name)) {
-    v.innerHTML = bar + `<img class="viewer-img" src="${urlFn(path)}" alt="${esc(name)}">`;
-    return;
-  }
-  if (HTMLF.test(name)) {
-    v.innerHTML = bar + `<iframe class="viewer-iframe" sandbox src="${urlFn(path)}"></iframe>`;
-    return;
-  }
+  if (IMG.test(name)) { v.innerHTML = bar + `<img class="viewer-img" src="${urlFn(path)}" alt="${esc(name)}">`; return; }
+  if (HTMLF.test(name)) { v.innerHTML = bar + `<iframe class="viewer-iframe" sandbox src="${urlFn(path)}"></iframe>`; return; }
 
   v.innerHTML = bar + `<div class="empty">載入中…</div>`;
-  // 文件（Word/Excel/PPT/PDF…）走伺服器萃取成文字；其餘照原檔讀
   const isDoc = DOC.test(name);
   const resp = await fetch(urlFn(path, isDoc ? "&as=text" : "")).catch(() => null);
+  if (!mine()) return; // 已切到別的檔
   const txt = resp && resp.ok ? await resp.text() : null;
+  if (!mine()) return;
 
   if (txt == null) {
     const msg = resp && resp.status === 422 ? "（文件解析失敗，請下載原檔）" : "（無法以文字呈現，請下載）";
@@ -1538,11 +1653,8 @@ async function renderFile(urlFn, encPath, name) {
   if (isDoc) body = `<pre class="viewer-pre">${esc(txt)}</pre>`;
   else if (MD.test(name)) body = `<div class="md">${mdRender(txt)}</div>`;
   else if (JSONF.test(name)) {
-    try {
-      body = `<pre class="viewer-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`;
-    } catch {
-      body = `<pre class="viewer-pre">${esc(txt)}</pre>`;
-    }
+    try { body = `<pre class="viewer-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`; }
+    catch { body = `<pre class="viewer-pre">${esc(txt)}</pre>`; }
   } else body = `<pre class="viewer-pre">${esc(txt)}</pre>`;
 
   v.innerHTML = bar + body;
@@ -1550,7 +1662,7 @@ async function renderFile(urlFn, encPath, name) {
 
 // 任務成品檔（成品卡點檔案）
 function viewFile(taskId, encPath, name) {
-  return renderFile(taskFileUrl(taskId), encPath, name);
+  return renderFile(taskFileUrl(taskId), encPath, name, "task:" + taskId);
 }
 
 /* 歷史成品 */
@@ -1631,7 +1743,7 @@ async function wbDelete(encPath, name) {
 }
 
 function wbView(encPath, name) {
-  return renderFile(wsFileUrl(curSpace), encPath, name); // 工作區檔走 /v1/workspaces/file?ws=
+  return renderFile(wsFileUrl(curSpace), encPath, name, "ws:" + curSpace); // 工作區檔走 /v1/workspaces/file?ws=
 }
 
 /* ── 經驗層：讓「它越用越懂你」可見（Claude Code 沒有的差異點）──
@@ -1654,12 +1766,10 @@ async function refreshExp() {
   return e;
 }
 
-function showExp() { $("#current-task").hidden = true; $("#file-viewer").hidden = true; $("#exp-viewer").hidden = false; }
-function closeExperience() { expOpen = false; $("#exp-viewer").hidden = true; $("#file-viewer").hidden = true; $("#current-task").hidden = false; }
+function closeExperience() { setTab("task"); }   // expOpen 由 setTab 統一維護
 
 async function openExperience() {
-  expOpen = true;
-  showExp();
+  setTab("exp");   // 切到記憶頁籤（setTab 會把 expOpen 設為 true）
   $("#exp-viewer").innerHTML = expBar() + `<div class="exp-body"><div class="empty">載入中…</div></div>`;
   const e = await fetchExp();
   if (!expOpen) return; // 載入期間被關掉/切走
@@ -1698,6 +1808,7 @@ function renderExperience(e) {
 }
 
 /* 啟動 */
+renderTabs();
 loadHistory();
 loadFiles();
 refreshExp();
