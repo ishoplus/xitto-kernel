@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.11
+
+- **驗證裁決升級成「完成定義（DoD）」一級契約**：原本 `pack.verify` 跑完即使失敗，`runTurn` 仍回 `{text,…}`，呼叫端無從得知成品是否通過驗收——信任是「成品能否被自主採用」的綁定約束，這塊不該缺。
+  - `runTurn` 把最終裁決＋證據掛到 `result.verify = { ran, ok, output, rounds }`（`null` = 不適用：無 verify／已中斷／本回合沒改動）；`runGoal`→`runOutcome` 一併貫穿；server 的 goal/turn 回傳、SSE `done`、背景任務 `end` 與 webhook 都帶上。純附加、行為不變。
+  - **UI 驗收徽章**：對話頁 assistant 泡泡與許願台任務卡顯示 `✓ 驗收通過` / `⚠ 未通過驗收`（失敗可展開驗證輸出）；對話頁並存入 transcript（重整後仍在）。`null` 不顯示。
+  - 新增 `test/verify-contract.test.js`（通過／失敗／不適用）。
+- 測試 232/232。
+
 ## 0.9.10
 
 - **新增 `xitto-kernel serve` 子命令**：全域安裝者可直接 `xitto-kernel serve` 啟動 Web 前端（🪄 許願台 + 對話頁 `/chat`），不必 clone repo。
