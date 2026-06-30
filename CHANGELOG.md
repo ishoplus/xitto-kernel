@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.15
+
+- **私有脈絡複利迴路閉環：`runOutcome` 完成後自動記情節**。召回早已自動（相關過往經驗注入 systemPrompt），但記錄原本靠 agent 主動呼叫 `episode_record`——不記就不累積。現在每個 outcome 完成自動記一筆（goal + 結果 success/stalled/incomplete + 產出檔數，tag = pack 名），與自動召回合成 `act → record → recall` 閉環，無需 agent 自律，系統自動「越用越懂你」。
+  - 去重沿用（Jaccard>0.85 跳過）；中斷不記；發 `episode_recorded` 事件；`config.autoRecordEpisode=false` 可關。Wishboard 的🧠經驗面板自動反映累積。
+  - 新增 `test/episode-loop.test.js`。
+- 測試 244/244。
+
 ## 0.9.14
 
 - **新增 `xitto-kernel map` 子命令**：`mapVerify`（可寫 map-verify）的 CLI 入口。`xitto-kernel map <items.json>`，`items.json` 為 JSON 陣列，每項是 `"任務字串"` 或 `{ task, verify }`；逐項可寫回合 → 驗收 → 通過保留、未通過 `undo` 回滾，逐項印 ✓/✗ 進度。
