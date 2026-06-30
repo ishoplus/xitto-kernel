@@ -22,6 +22,18 @@ The interactive CLI lives in the app layer (thin); a richer TUI or other fronten
 
 > **The kernel provides "how to run an agent"; a DomainPack provides "what this agent can do, and what it guards."**
 
+## Who is this for — and when to use Claude Code instead
+
+This is **not** trying to out-code Claude Code. On its own axis — a developer doing coding tasks with Claude — Claude Code is the more capable, more polished tool. **If that's you, use it.**
+
+**Reach for xitto-kernel when Claude Code structurally can't serve you:**
+- **A non-Claude model is required** — cost at scale, region/compliance (e.g. data-sovereignty), or air-gapped/on-prem local models. Claude Code only runs on Claude; the kernel runs on MiniMax / DeepSeek / OpenAI / local OSS / custom.
+- **You're building your *own* agent product** — your UI, your domain, your backend. The kernel is a library you `import`, not an end-product you adopt.
+- **Your users aren't developers** — the 🪄 Wishboard lets non-technical people type one line and collect a finished deliverable (PDF/DOCX/…), not a terminal/IDE.
+- **The domain isn't coding** — patent disclosures, data-query, knowledge bases, document generation, each with its own verify gate ("definition of done").
+
+The kernel's edge isn't raw capability — it's **reach** (which models, which users, which domains, which deployment) plus a verifiable "done" contract and per-workspace context that compounds ("the more you use it, the more it knows your project").
+
 ## Where the design comes from
 
 After scanning xitto-code, roughly **80% was already a domain-agnostic kernel**; only three things were truly coupled to coding:
