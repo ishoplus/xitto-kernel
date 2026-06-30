@@ -9,8 +9,19 @@ import { existsSync, realpathSync } from 'node:fs';
 // 網路相關命令
 const NET_RE = /\b(curl|wget|nc|ncat|netcat|ssh|scp|sftp|telnet|rsync|ftp|svn)\b/;
 
+// 受保護目錄：即使在工作目錄內，也禁止「刪除/覆寫」（對標 Codex 把 .git 設唯讀）。
+// 防 agent 毀掉版本歷史(.git)或 kernel 累積狀態(技能/記憶/情節，存於 .xitto-*)。
+// 只擋破壞性操作(rm/重導/tee/dd)；git 正常 porcelain（commit/add…）與讀取不受影響。
+export const PROTECTED_DIRS = ['.git', '.xitto-kernel', '.xitto-server', '.xitto-code'];
+
 // 預設允許寫入的絕對路徑前綴(其餘絕對路徑寫入視為違規；相對路徑視為工作目錄內，放行)
-export const DEFAULT_SANDBOX = { enabled: false, blockNetwork: true, allowWritePrefixes: ['/tmp', '/private/tmp', '/var/folders'] };
+export const DEFAULT_SANDBOX = { enabled: false, blockNetwork: true, allowWritePrefixes: ['/tmp', '/private/tmp', '/var/folders'], protectedDirs: PROTECTED_DIRS };
+
+// 受保護目錄是否出現在某路徑 token 內（作為完整路徑分段比對，避免誤傷 .gitignore / foo.git 等）
+function protectedPathRe(dirs) {
+  const alt = (dirs || PROTECTED_DIRS).map((d) => d.replace(/[.\\]/g, '\\$&')).join('|');
+  return new RegExp(`(?:^|[\\s"'=/])(?:\\.\\/)*(?:${alt})(?:$|[/\\s"'])`);
+}
 
 function underAny(p, prefixes) {
   return prefixes.some((pre) => p === pre || p.startsWith(pre.endsWith('/') ? pre : pre + '/'));
@@ -18,7 +29,7 @@ function underAny(p, prefixes) {
 
 // 回傳違規原因字串，無違規回 null。opts: { blockNetwork, allowWritePrefixes }
 export function sandboxViolation(command, opts = {}) {
-  const { blockNetwork = true, allowWritePrefixes = DEFAULT_SANDBOX.allowWritePrefixes } = opts;
+  const { blockNetwork = true, allowWritePrefixes = DEFAULT_SANDBOX.allowWritePrefixes, protectedDirs = DEFAULT_SANDBOX.protectedDirs } = opts;
   const cmd = String(command || '');
   if (!cmd.trim()) return null;
   const lc = cmd.toLowerCase();
@@ -37,6 +48,24 @@ export function sandboxViolation(command, opts = {}) {
   const dd = cmd.match(/\bof=\s*"?(\/[^\s"'<>;|&]*)/);
   if (dd && !underAny(dd[1], allowWritePrefixes)) return `沙箱模式禁止 dd 寫入：${dd[1]}`;
 
+  // 受保護目錄（.git / .xitto-* 等）：禁止刪除或覆寫（即使在工作目錄內）
+  if (protectedDirs && protectedDirs.length) {
+    const protRe = protectedPathRe(protectedDirs);
+    const names = protectedDirs.join(' / ');
+    // 刪除：rm / rmdir / unlink 指向受保護目錄（逐段切，避免跨 ; | & 誤判）
+    for (const seg of cmd.split(/[;|&\n]+/)) {
+      if (/\b(rm|rmdir|unlink)\b/.test(seg) && protRe.test(seg)) return `沙箱模式禁止刪除受保護目錄（${names}）`;
+    }
+    // 覆寫：重導 / tee / dd 寫入受保護目錄（含相對路徑，絕對路徑前面已另擋越界）
+    for (const m of cmd.matchAll(/>>?\s*"?([^\s"'<>;|&]+)/g)) {
+      if (protRe.test('/' + m[1])) return `沙箱模式禁止寫入受保護目錄：${m[1]}`;
+    }
+    const teeP = cmd.match(/\btee\b\s+(?:-a\s+)?"?([^\s"'<>;|&]+)/);
+    if (teeP && protRe.test('/' + teeP[1])) return `沙箱模式禁止 tee 寫入受保護目錄：${teeP[1]}`;
+    const ddP = cmd.match(/\bof=\s*"?([^\s"'<>;|&]+)/);
+    if (ddP && protRe.test('/' + ddP[1])) return `沙箱模式禁止 dd 寫入受保護目錄：${ddP[1]}`;
+  }
+
   return null;
 }
 
@@ -48,6 +77,7 @@ export function normalizeSandbox(raw) {
       enabled: raw.enabled !== false,
       blockNetwork: raw.blockNetwork !== false,
       allowWritePrefixes: Array.isArray(raw.allowWritePrefixes) ? raw.allowWritePrefixes : DEFAULT_SANDBOX.allowWritePrefixes,
+      protectedDirs: Array.isArray(raw.protectedDirs) ? raw.protectedDirs : DEFAULT_SANDBOX.protectedDirs,
     };
   }
   return { ...DEFAULT_SANDBOX };
