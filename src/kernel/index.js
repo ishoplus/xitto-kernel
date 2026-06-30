@@ -428,8 +428,12 @@ export function createKernel(pack, config = {}) {
 
       // 收尾自我驗收（pack.verify）：失敗則把輸出回灌讓 agent 修正，最多 maxRounds 輪。
       // 對標 xitto-code 的 runAutoVerify；機制在 kernel、「跑什麼/何時跑」由 pack 決定。
+      // 「完成定義」契約：把最終裁決＋證據掛到 result.verify，讓呼叫端能誠實呈現
+      // 「✓ 通過 / ⚠ 未通過」而非把未驗收的成品當 done（信任＝可被自主採用的前提）。
+      let verifyResult = null; // null = 不適用（pack 無 verify / 已中斷 / 本回合沒改動）
       if (pack.verify && !wasAborted()) {
         const maxRounds = Number.isInteger(pack.verify.maxRounds) ? pack.verify.maxRounds : 2;
+        let attempts = 0, last = null;
         for (let round = 0; round < maxRounds; round++) {
           const vctx = { turnModified, cwd };
           const shouldRun = pack.verify.shouldRun ? pack.verify.shouldRun(vctx) : turnModified;
@@ -438,11 +442,13 @@ export function createKernel(pack, config = {}) {
           let v;
           try { v = await pack.verify.run(vctx); } catch (e) { v = { ok: false, output: e?.message || String(e) }; }
           opts.onEvent?.({ type: 'verify_end', ok: !!v?.ok, output: v?.output });
+          attempts++; last = v;
           if (v?.ok) break;
           turnModified = false;
           await agent.prompt(`[自動驗收] 驗證失敗，輸出如下：\n${String(v?.output || '').slice(0, 4000)}\n請修正使其通過。`);
           if (wasAborted() || !turnModified) break; // 中斷或 agent 沒再改 → 停止避免空轉
         }
+        if (last) verifyResult = { ran: true, ok: !!last.ok, output: String(last.output || '').slice(0, 4000), rounds: attempts };
       }
 
       const messages = agent.state.messages;
@@ -450,7 +456,7 @@ export function createKernel(pack, config = {}) {
       const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
       const text = (lastAssistant?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
       const aborted = lastAssistant?.stopReason === 'aborted';
-      const result = { text, messages, agent, aborted, turnModified };
+      const result = { text, messages, agent, aborted, turnModified, verify: verifyResult };
       // 事實層自動萃取：非阻塞,把 promise 掛在 result 上供需要者 await（測試/headless）。
       if (config.autoExtractMemory && !aborted) {
         result.memoryExtraction = doExtract(messages)
@@ -479,6 +485,7 @@ export function createKernel(pack, config = {}) {
       let noProgress = 0;
       let verifyErrors = 0;
       let sameFeedback = 0;
+      let lastVerify = null; // 最後一次 pack.verify 裁決（DoD 證據，隨 outcome 回傳）
       for (let round = 1; round <= maxRounds; round++) {
         opts.onRound?.({ round, maxRounds });
         // 使用者中途補充（steering）：把上一輪之間累積的補充折進這一輪指令（回合內的即時補充走 agent.steer）。
@@ -488,30 +495,31 @@ export function createKernel(pack, config = {}) {
         }
         const r = await api.runTurn(instruction, { history, onEvent: opts.onEvent, onAgent: opts.onAgent, lang });
         history = r.messages;
-        if (r.aborted) return { done: false, aborted: true, rounds: round, history };
+        lastVerify = r.verify ?? lastVerify;
+        if (r.aborted) return { done: false, aborted: true, rounds: round, history, verify: lastVerify };
         let apiKey; try { apiKey = await config.getApiKey(config.model.provider); } catch { /* 略 */ }
         const judge = config.checkGoal || checkGoal; // 可注入自訂驗收（測試 / app 客製）
         const v = await judge(goal, history, config.model, apiKey, opts.signal);
         opts.onCheck?.({ round, done: v.done, remaining: v.remaining });
-        if (v.done) return { done: true, rounds: round, history };
+        if (v.done) return { done: true, rounds: round, history, verify: lastVerify };
         noProgress = r.turnModified ? 0 : noProgress + 1;
-        if (noProgress >= NO_PROGRESS_CAP) return { done: false, stalled: true, rounds: round, history };
+        if (noProgress >= NO_PROGRESS_CAP) return { done: false, stalled: true, rounds: round, history, verify: lastVerify };
         // 驗收壞掉（網路/解析）：remaining 是噪音，不拿來比對；連續壞 3 次就停（別空轉到上限）
         if (v.error) {
           verifyErrors += 1;
-          if (verifyErrors >= 3) return { done: false, verifyBroken: true, rounds: round, history };
+          if (verifyErrors >= 3) return { done: false, verifyBroken: true, rounds: round, history, verify: lastVerify };
           instruction = T.broken(goal);
           continue;
         }
         verifyErrors = 0;
         const rem = normalizeFeedback(v.remaining);
         // 驗收回饋重複 = agent 在繞圈（即使一直有動作也沒朝驗收要求收斂,如查不到的資訊一直換來源）→ 連 2 次相同就停,別空轉到上限
-        if (rem && rem === lastRemaining) { if (++sameFeedback >= 2) return { done: false, stalled: true, rounds: round, history }; }
+        if (rem && rem === lastRemaining) { if (++sameFeedback >= 2) return { done: false, stalled: true, rounds: round, history, verify: lastVerify }; }
         else sameFeedback = 0;
         lastRemaining = rem;
         instruction = T.retry(goal, v.remaining);
       }
-      return { done: false, maxedOut: true, rounds: maxRounds, history };
+      return { done: false, maxedOut: true, rounds: maxRounds, history, verify: lastVerify };
     },
 
     /**
@@ -527,7 +535,7 @@ export function createKernel(pack, config = {}) {
       const artifacts = diffWorkdir(before, scanWorkdir(cwd));
       const lastAssistant = [...(g.history || [])].reverse().find((m) => m.role === 'assistant');
       const summary = (lastAssistant?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim();
-      return { goal, done: !!g.done, rounds: g.rounds, aborted: !!g.aborted, stalled: !!g.stalled, summary, artifacts, history: g.history };
+      return { goal, done: !!g.done, rounds: g.rounds, aborted: !!g.aborted, stalled: !!g.stalled, summary, artifacts, verify: g.verify || null, history: g.history };
     },
   };
   return api;

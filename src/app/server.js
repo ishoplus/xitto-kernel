@@ -413,18 +413,18 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       sess.history = o.history || []; sessions.set(sessionId, sess); persistSession(sessionId, sess);
       try { rmSync(join(workdir, 'tmp'), { recursive: true, force: true }); } catch { /* 清過程檔,失敗無妨 */ }
       // 溯源：邏輯位置 workspace 永遠記；實體路徑只在本地模式給（託管不洩漏伺服器路徑）
-      return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: o.summary || lastText(sess.history), usage, rounds: o.rounds, done: o.done, aborted: o.aborted, artifacts: o.artifacts };
+      return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: o.summary || lastText(sess.history), usage, rounds: o.rounds, done: o.done, aborted: o.aborted, artifacts: o.artifacts, verify: o.verify || null };
     }
     const r = await kernel.runTurn(spec.input || '', { history: sess.history, onEvent: wrapped, onAgent });
     sess.history = r.messages || r.history || []; sessions.set(sessionId, sess); persistSession(sessionId, sess);
-    return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: r.text ?? lastText(sess.history), usage, rounds: r.rounds, done: r.done };
+    return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: r.text ?? lastText(sess.history), usage, rounds: r.rounds, done: r.done, verify: r.verify || null };
   }
 
   // 完成通知：POST 結果到 spec.webhook（http/https），單次嘗試、失敗記日誌不重試（PoC）
   async function fireWebhook(task) {
     const url = task.spec.webhook; if (!url || !/^https?:\/\//.test(url)) return;
     const r = task.result || {};
-    const body = JSON.stringify({ taskId: task.id, status: task.status, error: task.error, sessionId: r.sessionId, text: r.text, usage: r.usage, rounds: r.rounds, done: r.done, artifacts: r.artifacts, finishedAt: task.finishedAt });
+    const body = JSON.stringify({ taskId: task.id, status: task.status, error: task.error, sessionId: r.sessionId, text: r.text, usage: r.usage, rounds: r.rounds, done: r.done, verify: r.verify, artifacts: r.artifacts, finishedAt: task.finishedAt });
     try { const resp = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body }); log({ webhook: url, task: task.id, status: task.status, code: resp.status }); }
     catch (e) { log({ webhook: url, task: task.id, error: e.message }); }
   }
