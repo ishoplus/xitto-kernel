@@ -55,7 +55,10 @@ xitto-kernel --pack patent    # 專利交底書助手（找發明點、撰寫交
 xitto-kernel --pack uiux      # UI/UX 介面助手（可及、響應式；a11y verify 守門）
 xitto-kernel --cwd ~/my-proj  # 指定工作目錄（沙箱根；不存在自動建立）。預設當前目錄
 xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
+xitto-kernel map items.json   # 批次可寫 map-verify：逐項轉換+驗收，未通過自動回滾
 ```
+
+**批次 `map`（可寫 map-verify）**：`items.json` 為 JSON 陣列，每項是 `"任務字串"` 或 `{ "task": "...", "verify": "shell 指令（exit 0 = 通過）" }`。逐項跑可寫回合 → 驗收 → **通過保留、未通過 `undo` 回滾**（工作區保持乾淨）。序列執行（無平行寫衝突）。批次自動核准 mutating——安全來自驗收+回滾（加 `--sandbox` 可再關住命令）。
 
 **CLI 內操作**：直接打需求（模型會自己呼叫工具）；指令 `/help` `/goal <目標>` `/sandbox` `/plan` `/undo` `/tools` `/trust` `/memory` `/sessions` `/resume` `/exit`；`Ctrl+C` 中斷該輪、閒置時再按一次離開。
 

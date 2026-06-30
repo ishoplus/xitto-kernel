@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.14
+
+- **新增 `xitto-kernel map` 子命令**：`mapVerify`（可寫 map-verify）的 CLI 入口。`xitto-kernel map <items.json>`，`items.json` 為 JSON 陣列，每項是 `"任務字串"` 或 `{ task, verify }`；逐項可寫回合 → 驗收 → 通過保留、未通過 `undo` 回滾，逐項印 ✓/✗ 進度。
+  - 旗標 `--pack`/`--cwd`/`--sandbox`/`--model`；批次自動核准 mutating（安全靠驗收+回滾，可加 `--sandbox`）；缺檔/壞檔/未知 pack/無 model 皆友善報錯。
+  - README（en + zh-TW）快速開始補上 `map` 用法。
+- 測試 240/240。
+
 ## 0.9.13
 
 - **新增 `mapVerify` kernel API：可寫 map-verify（序列 + 快照回滾）**：對每個項目跑一個可寫回合 → 逐項驗收 → 通過保留、未通過 `undo` 回滾該項所有檔案改動，保持工作區乾淨。是 ①（驗收 DoD 契約）×②（fan-out）的綜合——「可信任 × 規模化的變更」。

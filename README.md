@@ -55,7 +55,10 @@ xitto-kernel --pack patent    # patent disclosure assistant (find inventions, dr
 xitto-kernel --pack uiux      # UI/UX agent (accessible, responsive UI; a11y verify gate)
 xitto-kernel --cwd ~/my-proj  # set the working directory (sandbox root; created if missing). default: current dir
 xitto-kernel --sandbox        # open the Seatbelt sandbox on startup
+xitto-kernel map items.json   # batch writable map-verify: transform each item, verify, roll back any that fail
 ```
+
+**Batch `map` (writable map-verify)**: `items.json` is a JSON array; each entry is either `"a task string"` or `{ "task": "...", "verify": "shell cmd (exit 0 = pass)" }`. Each item runs a writable turn → verify → **kept if it passes, `undo`-rolled-back if it fails** (the workspace stays clean). Sequential (no parallel-write conflicts). Batch auto-approves mutating tools — safety comes from verify+rollback (add `--sandbox` to also confine commands).
 
 **Inside the CLI**: just type what you want (the model calls tools itself); commands `/help` `/goal <goal>` `/sandbox` `/plan` `/undo` `/tools` `/trust` `/memory` `/sessions` `/resume` `/exit`; `Ctrl+C` interrupts the current turn, press again while idle to exit.
 
