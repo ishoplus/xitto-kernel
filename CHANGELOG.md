@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.17
+
+- **自訂 agent 類型 + 可寫委派（對標 Claude Code subagents）**：
+  - **自訂類型**：從 `<dataDir>/agents/*.md` 載入具名子 agent（frontmatter: `name`/`description`/`tools` 白名單/`model` + body=system prompt）；類型清單注入系統提示供主 agent 依描述委派。
+  - **spawn_agent / spawn_agents 支援 `agentType`**：用該類型的 prompt + 工具子集跑子 agent（唯讀調查；可平行）。
+  - **`delegate` 工具（可寫委派）**：把聚焦子任務交給某類型「可寫」執行——路由到 `runTurn`（重用守衛/沙箱/undo），用類型 prompt + 工具白名單（含可寫）+ 可選 per-agent model；委派情境剝除 delegate/spawn 防遞迴。
+  - **per-agent model**：`providers.js` 新增 `buildResolver`（跨 provider 解析 model + provider-aware apiKey）；`loadModel` 回傳 `resolveModel` 並貫穿 CLI/serve/map/tui/server → `delegate` 可換模型。
+  - **web 可見性**：delegate 與 spawn_agents 的子活動轉發為 `sub_tool`，對話頁嵌套顯示（父步驟改用當前進行中的工具）。
+  - 新增 `test/agent-types.test.js`、`test/delegate.test.js`。
+- 測試 256/256。
+
 ## 0.9.16
 
 - **可執行技能：技能可帶腳本 + `skill_run` 確定性重跑**。`skill_save` 新增可選 `script`，存成「## 腳本（可執行）」區塊（frontmatter 標 `executable: true`；verify 仍必過，確保結晶的是已驗證成功）。新增 `skill_run` 工具：抽出技能腳本、經安全檢查與沙箱（危險指令擋、開沙箱則 Seatbelt 包）執行，回 exit code 與輸出。讓 agent 摸出可重複流程後結晶成「能跑多次的能力」，往後免 LLM 重推——交付能力而非一次性成品。
