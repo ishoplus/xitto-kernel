@@ -96,6 +96,27 @@ export function detectRenderer() {
 }
 
 const isPdf = (p) => { try { return existsSync(p) && readFileSync(p).subarray(0, 5).toString() === '%PDF-'; } catch { return false; } };
+const isZip = (p) => { try { return existsSync(p) && readFileSync(p).subarray(0, 2).toString() === 'PK'; } catch { return false; } };
+
+// DOCX 轉檔器：pandoc（HTML→docx 最佳）> soffice。回 { kind, bin } 或 null。
+function detectDocx() {
+  const p = has('pandoc'); if (p) return { kind: 'pandoc', bin: p };
+  for (const b of ['soffice', 'libreoffice']) { const q = has(b); if (q) return { kind: 'soffice', bin: q }; }
+  return null;
+}
+function renderHtmlToDocx(htmlPath, outPath, r) {
+  try {
+    if (r.kind === 'pandoc') {
+      spawnSync(r.bin, [htmlPath, '-o', outPath], { encoding: 'utf8', timeout: 60000 });
+    } else {
+      const od = dirname(outPath);
+      spawnSync(r.bin, ['--headless', '--convert-to', 'docx', '--outdir', od, htmlPath], { encoding: 'utf8', timeout: 60000 });
+      const produced = join(od, basename(htmlPath).replace(/\.html?$/i, '') + '.docx');
+      if (produced !== outPath && isZip(produced)) { try { writeFileSync(outPath, readFileSync(produced)); rmSync(produced); } catch { /* 略 */ } }
+    }
+    return isZip(outPath) ? { ok: true, tool: r.kind } : { ok: false, reason: `${r.kind} 未產生有效 docx` };
+  } catch (e) { return { ok: false, reason: e?.message || String(e) }; }
+}
 
 // html 檔 → pdf（用偵測到的渲染器）。回 { ok, tool } 或 { ok:false, reason }。
 function renderHtmlToPdf(htmlPath, outPath, r) {
@@ -115,29 +136,35 @@ function renderHtmlToPdf(htmlPath, outPath, r) {
   } catch (e) { return { ok: false, reason: e?.message || String(e) }; }
 }
 
+// 各格式的轉檔規格（偵測器 + 轉檔函式 + 缺工具時的提示）。
+const FORMATS = {
+  pdf: { detect: detectRenderer, render: renderHtmlToPdf, tools: 'chrome / wkhtmltopdf / soffice' },
+  docx: { detect: detectDocx, render: renderHtmlToDocx, tools: 'pandoc / soffice' },
+};
+
 /**
- * 產生文件成品。outPath 副檔名 .pdf → 嘗試 PDF（無渲染器則改產同名 .html 並提示）；其餘 → HTML。
- * @returns {{ ok:boolean, format:'pdf'|'html', path:string, bytes:number, tool?:string, note?:string }}
+ * 產生文件成品。依 outPath 副檔名：.pdf / .docx → 轉檔（無工具則改產同名 .html 並提示）；其餘 → HTML。
+ * @returns {{ ok:boolean, format:'pdf'|'docx'|'html', path:string, bytes:number, tool?:string, note?:string }}
  */
 export function generateDoc(markdown, outPath, { title = '' } = {}) {
   const html = mdToHtml(markdown, { title });
-  const wantPdf = /\.pdf$/i.test(outPath);
-  if (!wantPdf) { writeFileSync(outPath, html); return { ok: true, format: 'html', path: outPath, bytes: html.length }; }
+  const ext = (outPath.match(/\.([a-z0-9]+)$/i)?.[1] || 'html').toLowerCase();
+  const writeHtml = (p, note) => { writeFileSync(p, html); return { ok: true, format: 'html', path: p, bytes: html.length, ...(note ? { note } : {}) }; };
 
-  const renderer = detectRenderer();
-  if (!renderer) {
-    const htmlPath = outPath.replace(/\.pdf$/i, '.html');
-    writeFileSync(htmlPath, html);
-    return { ok: true, format: 'html', path: htmlPath, bytes: html.length, note: '未偵測到 PDF 渲染器（chrome / wkhtmltopdf / soffice），已產出 HTML。安裝其一即可產 PDF。' };
-  }
+  if (ext === 'html' || ext === 'htm') return writeHtml(outPath);
+  const spec = FORMATS[ext];
+  if (!spec) return writeHtml(outPath, `未知格式 .${ext}，已將 HTML 內容寫入該檔。`);
+
+  const tool = spec.detect();
+  const htmlPath = outPath.replace(/\.[a-z0-9]+$/i, '.html');
+  if (!tool) return writeHtml(htmlPath, `未偵測到 ${ext.toUpperCase()} 轉檔工具（${spec.tools}），已產出 HTML。安裝其一即可產 ${ext.toUpperCase()}。`);
+
   const tmp = mkdtempSync(join(tmpdir(), 'docgen-'));
   const htmlTmp = join(tmp, 'doc.html');
   try {
     writeFileSync(htmlTmp, html);
-    const r = renderHtmlToPdf(htmlTmp, outPath, renderer);
-    if (r.ok) { let bytes = 0; try { bytes = readFileSync(outPath).length; } catch { /* 略 */ } return { ok: true, format: 'pdf', path: outPath, bytes, tool: r.tool }; }
-    const htmlPath = outPath.replace(/\.pdf$/i, '.html');
-    writeFileSync(htmlPath, html);
-    return { ok: true, format: 'html', path: htmlPath, bytes: html.length, note: `PDF 渲染失敗（${r.reason}），已產出 HTML。` };
+    const r = spec.render(htmlTmp, outPath, tool);
+    if (r.ok) { let bytes = 0; try { bytes = readFileSync(outPath).length; } catch { /* 略 */ } return { ok: true, format: ext, path: outPath, bytes, tool: r.tool }; }
+    return writeHtml(htmlPath, `${ext.toUpperCase()} 轉檔失敗（${r.reason}），已產出 HTML。`);
   } finally { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* 略 */ } }
 }

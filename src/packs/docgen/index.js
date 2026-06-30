@@ -11,7 +11,7 @@ const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s 
 const SYSTEM_PROMPT = [
   '你是文件產出助手：把使用者要的內容做成排版整齊、可直接交付的文件。準則：',
   '- 先用 read / ls / grep / glob 蒐集素材，不要憑空編造。',
-  '- 用 gen_doc 產出成品：要 PDF 就把 path 設成 .pdf（會用系統渲染器轉，支援中文；環境若無渲染器會自動產同名 .html 並提示）；其他副檔名產 HTML。',
+  '- 用 gen_doc 產出成品：path 設 .pdf（PDF）、.docx（Word）或 .html；會用系統工具轉檔、支援中文；環境若缺對應工具會自動產同名 .html 並提示。',
   '- 內容用 markdown（標題 # / 清單 - / 表格 | / 引言 > / code）；結構清楚、標題分層。',
   '- 交付前確認 gen_doc 回傳 ok，且 format/path 與預期一致；若退回 HTML，告知使用者原因與如何取得 PDF。',
 ].join('\n');
@@ -19,7 +19,7 @@ const SYSTEM_PROMPT = [
 function genDocTool(cwd) {
   return {
     name: 'gen_doc', label: '產生文件', mutating: true,
-    description: '把 markdown 內容產成可交付文件並寫到 path。path 以 .pdf 結尾 → 嘗試渲染成 PDF（中文支援；需系統有 chrome / wkhtmltopdf / soffice 其一，否則自動改產同名 .html 並回報）；其他副檔名 → HTML。回傳實際產出的 { ok, format, path, bytes, tool?, note? }。',
+    description: '把 markdown 內容產成可交付文件並寫到 path（中文支援）。副檔名決定格式：.pdf（需系統有 chrome / wkhtmltopdf / soffice）、.docx（需 pandoc / soffice）、其餘 → HTML。缺對應工具時自動改產同名 .html 並回報。回傳實際產出的 { ok, format, path, bytes, tool?, note? }。',
     parameters: {
       type: 'object',
       properties: {
