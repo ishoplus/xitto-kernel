@@ -53,6 +53,7 @@ xitto-kernel --pack notes     # 筆記 / 知識庫 agent
 xitto-kernel --pack data-query
 xitto-kernel --pack patent    # 專利交底書助手（找發明點、撰寫交底書）
 xitto-kernel --pack uiux      # UI/UX 介面助手（可及、響應式；a11y verify 守門）
+xitto-kernel --pack docgen    # 文件產出——交付排版好的 PDF/HTML（支援中文；PDF 經 Chrome/wkhtmltopdf/soffice，無則產 HTML）
 xitto-kernel --cwd ~/my-proj  # 指定工作目錄（沙箱根；不存在自動建立）。預設當前目錄
 xitto-kernel --sandbox        # 啟動就開 Seatbelt 沙箱
 xitto-kernel map items.json   # 批次可寫 map-verify：逐項轉換+驗收，未通過自動回滾

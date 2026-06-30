@@ -53,6 +53,7 @@ xitto-kernel --pack notes     # notes / knowledge-base agent
 xitto-kernel --pack data-query
 xitto-kernel --pack patent    # patent disclosure assistant (find inventions, draft the disclosure)
 xitto-kernel --pack uiux      # UI/UX agent (accessible, responsive UI; a11y verify gate)
+xitto-kernel --pack docgen    # document generation — deliver polished PDF/HTML (CJK-ready; PDF via Chrome/wkhtmltopdf/soffice if present, else HTML)
 xitto-kernel --cwd ~/my-proj  # set the working directory (sandbox root; created if missing). default: current dir
 xitto-kernel --sandbox        # open the Seatbelt sandbox on startup
 xitto-kernel map items.json   # batch writable map-verify: transform each item, verify, roll back any that fail

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.18
+
+- **新增 `docgen` pack：產出可交付文件（PDF / HTML，中文支援）**。把使用者收到的東西從「草稿 `.md`」變「可直接交付的成品」；與 `doc-extract` 對稱（那個讀 Office/PDF，這個產文件）。
+  - 核心 `shared/doc-gen.js`（零 npm 相依）：`md → 乾淨可列印 HTML`（中文用系統字體，HTML 本身即可交付）；**PDF＝偵測系統渲染器**（Chrome headless / wkhtmltopdf / soffice）把 HTML 轉檔，無則自動產同名 HTML 並提示（與 doc-extract 的 `pdftotext` fallback 同哲學）。
+  - `gen_doc` 工具：`path` 以 `.pdf` 結尾 → PDF（中文 OK），其餘 → HTML；回 `{ ok, format, path, bytes, tool?, note? }`。
+  - pack 含 read/ls/write/grep/glob + gen_doc；註冊進 CLI/server，並 `./packs/docgen` export。
+  - 新增 `test/doc-gen.test.js`（實測 Chrome headless 產出含中文的有效 PDF）。
+- 測試 261/261。
+
 ## 0.9.17
 
 - **自訂 agent 類型 + 可寫委派（對標 Claude Code subagents）**：
