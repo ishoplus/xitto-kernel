@@ -36,6 +36,9 @@ export async function main(argv = process.argv.slice(2)) {
   // 子指令：init —— 首次設定導引，產生 providers.json
   if (argv[0] === 'init') { await runInit(argv.slice(1)); return; }
 
+  // 子指令：serve —— 啟動 Web 前端（🪄 許願台 + 對話頁 /chat）
+  if (argv[0] === 'serve') { await runServe(argv.slice(1)); return; }
+
   // 子指令：new-agent <name> —— 產出獨立 agent 專案（不碰 kernel）
   if (argv[0] === 'new-agent') {
     const name = argv.find((a, i) => i >= 1 && !a.startsWith('--'));
@@ -145,6 +148,52 @@ function resolveCwd(dir) {
   return full;
 }
 
+// serve：啟動 Web 前端（許願台 + 對話頁）。旗標映射到 startServer(opts)；沿用 providers.json 載 model。
+async function runServe(args) {
+  const o = { local: false };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--help' || a === '-h') return printServeHelp();
+    else if (a === '--port' || a === '-p') o.port = Number(args[++i]);
+    else if (a === '--token') o.token = args[++i];
+    else if (a === '--local') o.local = true;
+    else if (a === '--sandbox') o.sandbox = true;
+    else if (a === '--no-sandbox') o.sandbox = false;
+    else if (a === '--concurrency') o.concurrency = Number(args[++i]);
+    else if (a === '--model') o.modelId = args[++i];
+  }
+  let model, getApiKey;
+  try { ({ model, getApiKey } = loadModel(o.modelId)); }
+  catch (err) {
+    console.error(red(err.message));
+    if (err.noConfig) {
+      console.error('\n' + cyan('首次使用？') + ' 先跑設定導引：');
+      console.error(green('  xitto-kernel init') + gray('   # 選 provider、填 model、設定 API key'));
+    }
+    process.exit(1);
+  }
+  const { startServer } = await import('./server.js');
+  startServer({ ...o, model, getApiKey });
+}
+
+function printServeHelp() {
+  console.log([
+    'xitto-kernel serve — 啟動 Web 前端（🪄 許願台 + 對話頁 /chat）',
+    '',
+    '用法:',
+    '  xitto-kernel serve [--port <n>] [--local] [--token <t>] [--no-sandbox] [--concurrency <n>] [--model <id>]',
+    '',
+    '  --port, -p <n>     監聽埠（預設 8787）',
+    '  --local            本地模式：可瀏覽/選真實資料夾、顯示檔案位置',
+    '  --token <t>        API token（預設 dev-token；對外請務必設定）',
+    '  --no-sandbox       關閉沙箱（預設開；macOS=Seatbelt 真隔離）',
+    '  --concurrency <n>  背景任務同時數（預設 2）',
+    '  --model <id>       指定 model（預設用 providers.json 的 defaultModel）',
+    '',
+    '啟動後瀏覽器開 http://localhost:<port>/ 即用。需先 `xitto-kernel init` 設好 providers.json。',
+  ].join('\n'));
+}
+
 function parse(argv) {
   const o = { pack: 'coding', model: undefined, sandbox: false, help: false, resume: null, yes: false, goal: null, cwd: null };
   for (let i = 0; i < argv.length; i++) {
@@ -170,6 +219,7 @@ function printHelp() {
     '  xitto-kernel init                                        首次設定導引（產生 providers.json）',
     '  xitto-kernel [--pack <name>] [--cwd <dir>] [--model <id>] [--sandbox] [--resume [id]] [--yes]   互動跑內建 pack',
     '  xitto-kernel --pack general --goal "..." [--yes]         目標驅動自主循環（headless）',
+    '  xitto-kernel serve [--port <n>] [--local]                啟動 Web 前端（🪄 許願台 + 對話頁）',
     '  xitto-kernel new-agent <name>                            產出依賴 kernel 的獨立 agent 專案',
     '',
     '  --pack <name>   選擇內建 DomainPack（coding | data-query | notes | general | deep-research | devops | patent | uiux；預設 coding）',

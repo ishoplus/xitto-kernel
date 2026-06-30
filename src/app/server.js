@@ -628,13 +628,15 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
   });
 }
 
-export function startServer() {
-  const port = Number(process.env.PORT || 8787);
-  const token = process.env.XITTO_SERVER_TOKEN || 'dev-token';
-  const sandbox = process.env.XITTO_SERVER_SANDBOX !== 'off';
-  const concurrency = Number(process.env.XITTO_SERVER_CONCURRENCY || 2);
-  const local = process.env.XITTO_SERVER_LOCAL === '1' || process.env.XITTO_SERVER_LOCAL === 'true';
-  const { model, getApiKey } = loadModel(process.env.XITTO_MODEL);
+// opts 優先於環境變數；未給則沿用 env / 預設（向後相容原本的 env-only 啟動）。
+// 可傳入已載入的 { model, getApiKey }（CLI serve 用），否則由 loadModel 依 providers.json 載入。
+export function startServer(opts = {}) {
+  const port = Number(opts.port ?? process.env.PORT ?? 8787);
+  const token = opts.token ?? process.env.XITTO_SERVER_TOKEN ?? 'dev-token';
+  const sandbox = opts.sandbox ?? (process.env.XITTO_SERVER_SANDBOX !== 'off');
+  const concurrency = Number(opts.concurrency ?? process.env.XITTO_SERVER_CONCURRENCY ?? 2);
+  const local = opts.local ?? (process.env.XITTO_SERVER_LOCAL === '1' || process.env.XITTO_SERVER_LOCAL === 'true');
+  const { model, getApiKey } = (opts.model && opts.getApiKey) ? opts : loadModel(opts.modelId ?? process.env.XITTO_MODEL);
   const server = createServerApp({ model, getApiKey, token, sandbox, concurrency, local });
   server.listen(port, () => {
     console.log(`🪄 許願台：http://localhost:${port}/  （瀏覽器打開即用——說出目標、交付成品）`);
