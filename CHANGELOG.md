@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.20
+
+- **docgen 加 CSV 產出（零相依，Excel 可開）**：`gen_doc` 的 path 以 `.csv` 結尾 → 取 markdown 第一個 GFM 表格，輸出 RFC4180 轉義的 CSV + UTF-8 BOM（讓 Excel 正確顯示中文）；無表格 → `ok:false` 並提示。作為 XLSX 的零相依替代（多數「給我數據表」需求即足，且 Excel 直接開）。
+- 測試 265/265。
+
 ## 0.9.19
 
 - **docgen 加 DOCX 產出**：`gen_doc` 的 path 以 `.docx` 結尾 → HTML 經 `pandoc`（優先）或 `soffice` 轉成 Word（零 npm 相依、中文支援）；缺工具時退回同名 HTML 並提示。`generateDoc` 一般化成「依副檔名 dispatch（pdf / docx / html）」，加格式只需補一條 `FORMATS` 規格。實測 pandoc 產出含中文的有效 `.docx`。
