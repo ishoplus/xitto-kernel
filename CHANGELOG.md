@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.25
+
+- **對齊 Node 22**：相依（`@earendil-works/pi-ai`、`ink`）實際要求 Node `>=22`，但 `engines` 與 CI 還停在 20（宣稱支援卻會噴 EBADENGINE、是定時炸彈）。`engines.node` `>=20`→`>=22`；CI 矩陣 `[20,22]`→`[22,24]`（最低支援 + 現行 LTS）；`release.yml` `node 20`→`22`、`setup-node@v4`→`@v6`（消除 Node 20 deprecation 警告）。
+- 測試 267/267。
+
 ## 0.9.24
 
 - **work log 全中文化**：補齊所有工具的人話標籤——新工具 `gen_doc`（產生文件），以及一批既有但漏標的工具（notes 增/列/讀/搜尋、git 狀態/diff/log/commit、bash 後台三件、SQL 查/寫/表結構、`memory_list`、`playbook_remove`）。對話頁/許願台的工作日誌不再出現生英文工具名，42 個工具全數有 `TOOL_ZH` 標籤；標籤皆取自各工具自身 `label`，未自編。

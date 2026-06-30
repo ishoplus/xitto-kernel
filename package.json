@@ -1,6 +1,6 @@
 {
   "name": "xitto-kernel",
-  "version": "0.9.24",
+  "version": "0.9.25",
   "type": "module",
   "description": "領域無關的 agent 底座（kernel + 可插拔 DomainPack），從 xitto-code 抽象而來",
   "keywords": [
@@ -24,7 +24,7 @@
     "url": "https://github.com/ishoplus/xitto-kernel/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "bin": {
     "xitto-kernel": "bin/xitto-kernel.js"
