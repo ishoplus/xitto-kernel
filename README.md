@@ -270,6 +270,8 @@ xitto-kernel/
 | [05-example-packs.md](docs/05-example-packs.md) | Example pack comparison (coding / data-query built in + ops sketch), proving the same interface runs different domains |
 | [06-authoring-a-pack.md](docs/06-authoring-a-pack.md) | **How to build a new domain agent on the foundation**: minimal pack, tool shape, three steps, tool vs prompt |
 | [07-agent-types.md](docs/07-agent-types.md) | **Custom agent types (≈ Claude Code subagents)**: file format, spawn_agent/spawn_agents (read-only) vs delegate (writable), per-agent model, copyable templates |
+| [08-docgen.md](docs/08-docgen.md) | **Generate deliverable documents**: gen_doc → PDF/DOCX/CSV/HTML (CJK), format matrix, required system tools & fallback, verify badge |
+| [09-batch-map-verify.md](docs/09-batch-map-verify.md) | **Batch writable map-verify** (`xitto-kernel map`): items.json format, per-item verify + rollback-on-fail, when to use, kernel API |
 
 ## Status and next steps
 

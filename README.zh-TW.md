@@ -270,6 +270,8 @@ xitto-kernel/
 | [05-example-packs.md](docs/05-example-packs.md) | 範例 pack 對照（coding / data-query 已內建 + ops 示意）驗證同介面能跑不同領域 |
 | [06-authoring-a-pack.md](docs/06-authoring-a-pack.md) | **怎麼用底座做一個新領域 agent**：最小 pack、工具形狀、三步驟、放工具 vs prompt |
 | [07-agent-types.md](docs/07-agent-types.md) | **自訂 agent 類型（對標 CC subagents）**：檔案格式、spawn_agent/spawn_agents（唯讀）vs delegate（可寫）、per-agent model、可複製範本 |
+| [08-docgen.md](docs/08-docgen.md) | **產出可交付文件**：gen_doc 產 PDF/DOCX/CSV/HTML（中文）、格式矩陣、需要的系統工具與 fallback、驗收徽章 |
+| [09-batch-map-verify.md](docs/09-batch-map-verify.md) | **批次可寫 map-verify**（`xitto-kernel map`）：items.json 格式、逐項驗收+失敗回滾、何時用、kernel API |
 
 ## 現況與後續
 
