@@ -51,6 +51,27 @@ const api = (p, opts = {}) =>
     },
   });
 
+/** 讀 SSE 串流：逐 `data:` 事件解析後丟給 onEv（許願台與對話頁共用）。*/
+async function readSSE(resp, onEv) {
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const chunk = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      if (!chunk.startsWith("data: ")) continue;
+      let ev;
+      try { ev = JSON.parse(chunk.slice(6)); } catch { continue; }
+      onEv(ev);
+    }
+  }
+}
+
 /* ── 5. 主題切換 ─────────────────────────────────────── */
 const applyTheme = (t) => {
   document.documentElement.setAttribute("data-theme", t);
@@ -99,6 +120,90 @@ function addSpace(space) {
   localStorage.setItem("xk_spaces", JSON.stringify(spaces));
 }
 
+/* ── 6b. 專案切換器（popover）+ 資料夾選擇（兩頁共用）──────────
+   頁面需提供 DOM：#proj-switch（內含 #proj-btn、#proj-menu）與 #fs-modal。
+   各頁呼叫 mountProjectSwitcher(onChange)；onChange 做頁面專屬刷新（對話：開新對話；許願台：重載歷史/檔案）。 */
+let _projOnChange = () => {};
+
+function mountProjectSwitcher(onChange) {
+  _projOnChange = onChange || (() => {});
+  renderProjectSwitcher();
+  const btn = $("#proj-btn");
+  if (btn) btn.onclick = (e) => { e.stopPropagation(); toggleProjMenu(); };
+  document.addEventListener("click", (e) => { if (!$("#proj-switch")?.contains(e.target)) closeProjMenu(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeProjMenu(); });
+}
+
+function renderProjectSwitcher() {
+  const btn = $("#proj-btn");
+  if (!btn) return;
+  const name = spaceLabel(curSpace).replace(/^📁 /, "");
+  btn.innerHTML = `<span class="proj-ic">📁</span><span class="proj-name" title="${esc(curSpace)}">${esc(name)}</span><span class="proj-caret">▾</span>`;
+}
+
+function toggleProjMenu() { const m = $("#proj-menu"); if (!m) return; m.hidden ? openProjMenu() : closeProjMenu(); }
+function closeProjMenu() { const m = $("#proj-menu"); if (m) m.hidden = true; const b = $("#proj-btn"); if (b) b.setAttribute("aria-expanded", "false"); }
+function openProjMenu() {
+  const m = $("#proj-menu"); if (!m) return;
+  const items = spaces.map((s) =>
+    `<button class="proj-item${s === curSpace ? " on" : ""}" type="button" role="option" aria-selected="${s === curSpace}" onclick="pickSpace('${jsAttr(s)}')">
+      <span class="proj-tick">${s === curSpace ? "✓" : ""}</span><span class="proj-lbl">${esc(spaceLabel(s))}</span></button>`).join("");
+  m.innerHTML = `<div class="proj-group">切換專案</div>${items}<div class="proj-sep"></div>`
+    + (LOCAL ? `<button class="proj-item action" type="button" onclick="projBrowse()"><span class="proj-tick">📁</span><span class="proj-lbl">選資料夾…</span></button>` : "")
+    + `<button class="proj-item action" type="button" onclick="projNew()"><span class="proj-tick">＋</span><span class="proj-lbl">新專案…</span></button>`;
+  m.hidden = false;
+  const b = $("#proj-btn"); if (b) b.setAttribute("aria-expanded", "true");
+}
+
+function pickSpace(s) { closeProjMenu(); if (s === curSpace) return; switchSpace(s); renderProjectSwitcher(); _projOnChange(); }
+function projNew() {
+  closeProjMenu();
+  const raw = (prompt(LOCAL
+    ? "新專案：輸入名稱，或貼上一個真實資料夾的絕對路徑（本地模式會就地改該資料夾）"
+    : "新專案名稱（英數/底線/連字號）：") || "").trim();
+  if (!raw) return;
+  const n = LOCAL && raw.startsWith("/") ? raw : raw.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!n) return;
+  addSpace(n); switchSpace(n); renderProjectSwitcher(); _projOnChange();
+}
+function projBrowse() { closeProjMenu(); openFs(); }
+
+/* 資料夾選擇 Modal（本地模式，用 /v1/fs 瀏覽真實目錄）*/
+let fsPath = null, fsShowHidden = localStorage.getItem("xk_fshidden") === "1";
+function openFs() { const mo = $("#fs-modal"); if (!mo) return; mo.hidden = false; const h = $("#fs-hidden"); if (h) h.checked = fsShowHidden; fsGo(null); }
+function fsGo(opts) {
+  opts = opts || {};
+  const qs = [];
+  if (opts.path) qs.push("path=" + encodeURIComponent(opts.path));
+  if (opts.name) qs.push("name=" + encodeURIComponent(opts.name));
+  if (opts.up) qs.push("up=1");
+  if (fsShowHidden) qs.push("hidden=1");
+  api("/v1/fs" + (qs.length ? "?" + qs.join("&") : ""))
+    .then((r) => r.json())
+    .then((r) => {
+      if (r.error) { alert(r.error); return; }
+      fsPath = r.path; window._fsHome = r.home;
+      const pathEl = $("#fs-path"); if (pathEl) pathEl.textContent = "📂 " + r.path;
+      const drivesRow = r.drives && r.drives.length
+        ? `<div class="fs-drives">${r.drives.map((dv) => `<button class="fs-drive" onclick="fsGo({path:'${jsAttr(dv)}'})" title="切換到 ${esc(dv)}">💽 ${esc(dv.replace(/\\$/, ""))}</button>`).join("")}</div>`
+        : "";
+      const rows = [
+        `<button class="fs-row up" onclick="fsUp()" role="treeitem" tabindex="0" type="button">⬆ 上一層</button>`,
+        ...(r.dirs.length
+          ? r.dirs.map((d) => `<button class="fs-row${d.startsWith(".") ? " hid" : ""}" onclick="fsEnter('${jsAttr(d)}')" role="treeitem" tabindex="0" type="button">📁 ${esc(d)}</button>`)
+          : [`<div class="empty" style="padding:12px">（沒有子資料夾，可直接選這個）</div>`]),
+      ];
+      $("#fs-list").innerHTML = drivesRow + rows.join("");
+    })
+    .catch(() => ({ error: "讀取失敗" }));
+}
+function fsEnter(name) { return fsGo({ path: fsPath, name }); }
+function fsUp() { return fsGo({ path: fsPath, up: true }); }
+function fsToggleHidden() { fsShowHidden = $("#fs-hidden").checked; localStorage.setItem("xk_fshidden", fsShowHidden ? "1" : "0"); fsGo(fsPath); }
+function fsHome() { fsGo(window._fsHome || null); }
+function closeFs() { const mo = $("#fs-modal"); if (mo) mo.hidden = true; }
+function chooseFs() { if (!fsPath) return; const p = fsPath; addSpace(p); switchSpace(p); renderProjectSwitcher(); closeFs(); _projOnChange(); }
+
 /* ── 7. 工具人話 ─────────────────────────────────────── */
 const TOOL_ZH = {
   read: "讀取檔案",
@@ -137,6 +242,20 @@ const LABELS = {
 
 const packLabel = (p) => LABELS[p] || p;
 
+/** 各領域一句話說明（給手動挑選時看，hover 也顯示）*/
+const PACK_DESC = {
+  general: "一般任務、查網頁、寫檔",
+  coding: "讀寫程式碼、跑指令、git",
+  "data-query": "用自然語言查資料庫",
+  notes: "知識庫、筆記整理",
+  "deep-research": "多來源查證後給結論",
+  devops: "部署、設定、健康檢查",
+  patent: "找發明點、起草揭露書",
+  uiux: "無障礙、響應式 UI",
+};
+
+const packDesc = (p) => PACK_DESC[p] || "";
+
 /** 工具動作翻人話 */
 const toolText = (a) => {
   const z = TOOL_ZH[a.name] || a.name;
@@ -155,8 +274,8 @@ const toolText = (a) => {
 /* ── 8. Markdown 渲染 ────────────────────────────────── */
 /**
  * 極簡 markdown 渲染（零依賴，可離線）。
- * 支援：h1-h4, p, ul/ol, code, pre, strong, em, a, blockquote。
- * 不足：表格、task list、巢狀列表。
+ * 支援：h1-h4, p, ul/ol, code, pre, strong, em, a, blockquote, GFM 表格。
+ * 不足：task list、巢狀列表。
  */
 const mdRender = (src) => {
   const lines = String(src).replace(/\r/g, "").split("\n");
@@ -180,7 +299,19 @@ const mdRender = (src) => {
     }
   };
 
-  for (const ln of lines) {
+  // GFM 表格：一行含 |，下一行是分隔列（| --- | :--: | ...）
+  const rowCells = (s) =>
+    s.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  const isSep = (s) =>
+    s.includes("-") && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(s);
+  const alignOf = (spec) => {
+    const t = spec.trim(), l = t.startsWith(":"), r = t.endsWith(":");
+    return l && r ? "center" : r ? "right" : l ? "left" : "";
+  };
+  const cellStyle = (a) => (a ? ` style="text-align:${a}"` : "");
+
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
     // 程式碼塊
     if (/^```/.test(ln)) {
       if (inCode) {
@@ -207,6 +338,32 @@ const mdRender = (src) => {
       out.push(
         `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`
       );
+      continue;
+    }
+
+    // GFM 表格
+    if (ln.includes("|") && i + 1 < lines.length && lines[i + 1].includes("|") && isSep(lines[i + 1])) {
+      closeL();
+      const header = rowCells(ln);
+      const aligns = rowCells(lines[i + 1]).map(alignOf);
+      let j = i + 2;
+      const body = [];
+      while (j < lines.length && lines[j].includes("|") && lines[j].trim() !== "") {
+        body.push(rowCells(lines[j]));
+        j++;
+      }
+      out.push("<table class='md-table'><thead><tr>" +
+        header.map((c, k) => `<th${cellStyle(aligns[k])}>${inline(c)}</th>`).join("") +
+        "</tr></thead>");
+      if (body.length) {
+        out.push("<tbody>" +
+          body.map((r) => "<tr>" +
+            header.map((_, k) => `<td${cellStyle(aligns[k])}>${inline(r[k] || "")}</td>`).join("") +
+            "</tr>").join("") +
+          "</tbody>");
+      }
+      out.push("</table>");
+      i = j - 1;
       continue;
     }
 
@@ -317,6 +474,9 @@ const fmtSize = (n) => {
 const renderPackSelect = (selectEl = $("#pack")) => {
   if (!selectEl) return;
   selectEl.innerHTML =
-    `<option value="auto" selected>🪄 自動判斷</option>` +
-    PACKS.map((p) => `<option value="${p}">${packLabel(p)}</option>`).join("");
+    `<option value="auto" selected title="依你的願望文字自動挑領域">🪄 自動判斷</option>` +
+    PACKS.map((p) => {
+      const d = packDesc(p);
+      return `<option value="${p}"${d ? ` title="${esc(d)}"` : ""}>${packLabel(p)}${d ? " — " + esc(d) : ""}</option>`;
+    }).join("");
 };

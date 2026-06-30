@@ -13,6 +13,13 @@ test('mapEvent：round / verify 事件 → 進度事件', () => {
   assert.deepEqual(mapEvent({ type: 'verify_end', ok: false }), { type: 'phase', phase: 'fixing' });
 });
 
+test('mapEvent：message_end 帶 usage → token 用量事件（給 UI 即時計數）', () => {
+  assert.deepEqual(mapEvent({ type: 'message_end', message: { usage: { input: 120, output: 45 } } }), { type: 'usage', input: 120, output: 45 });
+  // 無 usage（或無 message）仍為 null，不污染串流
+  assert.equal(mapEvent({ type: 'message_end' }), null);
+  assert.equal(mapEvent({ type: 'message_end', message: {} }), null);
+});
+
 test('progress：從事件累積 round / steps / recent / phase，完成轉 done', async () => {
   const gate = defer();
   const store = createTaskStore({

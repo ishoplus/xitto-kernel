@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { createWebSearchTool, createWebFetchTool } from '../shared/web-tools.js';
+import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -24,9 +25,14 @@ export function createDeepResearchPack({ cwd = process.cwd() } = {}) {
     execute: async (_id, { path, content }) => { writeFileSync(abs(path), content ?? '', 'utf8'); return txt({ written: path, bytes: Buffer.byteLength(content ?? '') }); },
   };
   const readTool = {
-    name: 'read', label: '讀檔', readOnly: true, description: '讀回已存的報告/筆記',
+    name: 'read', label: '讀檔', readOnly: true, description: `讀回已存的報告/筆記，或讀來源文件（Word/Excel/PPT/PDF 等 ${DOC_EXTENSIONS.join(' ')}，自動萃取成文字）`,
     parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
-    execute: async (_id, { path }) => { const p = abs(path); return existsSync(p) ? txt(readFileSync(p, 'utf8')) : txt({ error: '檔案不存在', path }); },
+    execute: async (_id, { path }) => {
+      const p = abs(path);
+      if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      if (isDocFile(p)) { try { return txt(extractDocText(p)); } catch (e) { return txt({ error: '文件解析失敗', detail: e.message, path }); } }
+      return txt(readFileSync(p, 'utf8'));
+    },
   };
 
   return {

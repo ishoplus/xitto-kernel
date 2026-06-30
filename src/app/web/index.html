@@ -60,8 +60,6 @@
   margin-top: var(--sp-3);
 }
 
-.project-bar select { flex: 1; min-width: 0; }
-
 .icon-btn {
   flex-shrink: 0;
   padding: var(--sp-2);
@@ -554,6 +552,10 @@
   font-size: 14px;
   line-height: 1.7;
 }
+/* markdown 渲染版：佈局交給 .md 規則，避免 pre-wrap 額外留白 */
+.summary-text.md { white-space: normal; }
+.summary-text.md > :first-child { margin-top: 0; }
+.summary-text.md > :last-child { margin-bottom: 0; }
 
 .artifacts {
   margin-top: var(--sp-4);
@@ -691,6 +693,42 @@
   overflow: auto;
   max-height: 420px;
 }
+
+/* ── 經驗入口（側欄）＋ 經驗面板（主區）：讓「越用越懂你」可見 ── */
+.exp-entry {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+  margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3);
+  background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md);
+  color: var(--fg); cursor: pointer; text-align: left; font-size: 13px;
+  transition: border-color .15s, background .15s;
+}
+.exp-entry:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--inset)); }
+.exp-entry .exp-ic { font-size: 15px; }
+.exp-entry .exp-lbl { font-weight: 600; }
+.exp-entry .exp-count { margin-left: auto; font-size: 11px; color: var(--dim); white-space: nowrap; }
+.exp-viewer .exp-body { flex: 1; min-height: 0; overflow: auto; padding-right: var(--sp-2); }
+.exp-sec { margin-bottom: var(--sp-5); }
+.exp-h { display: flex; align-items: center; gap: var(--sp-2); font-size: 13px; font-weight: 700; margin: 0 0 var(--sp-3); color: var(--fg); }
+.exp-h .exp-n { font-size: 11px; font-weight: 600; color: var(--dim); background: var(--inset); border-radius: 999px; padding: 1px 8px; }
+.exp-facts { display: flex; flex-direction: column; gap: var(--sp-1); }
+.exp-fact { font-size: 13.5px; line-height: 1.6; }
+.exp-item { padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2); background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); }
+.exp-item-t { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.exp-item-d { font-size: 12.5px; color: var(--dim); line-height: 1.55; margin-top: 2px; }
+.exp-pack { font-size: 10.5px; font-weight: 500; color: var(--dim); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
+.exp-used { font-size: 10.5px; font-weight: 500; color: var(--accent); }
+.exp-stale { font-size: 10.5px; font-weight: 600; color: var(--warn); }
+.exp-ep { padding: var(--sp-2) 0 var(--sp-2) var(--sp-3); border-left: 2px solid var(--line); margin-bottom: var(--sp-2); }
+.exp-ep.ok { border-left-color: var(--ok); }
+.exp-ep.fail { border-left-color: var(--danger); }
+.exp-ep-s { font-size: 13px; line-height: 1.55; }
+.exp-ep-m { font-size: 11px; color: var(--dim); margin-top: 3px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.exp-oc { font-weight: 600; }
+.exp-ep.ok .exp-oc { color: var(--ok); }
+.exp-ep.fail .exp-oc { color: var(--danger); }
+.exp-tag { background: var(--inset); border-radius: 999px; padding: 0 7px; }
+.exp-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.exp-chip { font: 11.5px/1.6 ui-monospace, Menlo, monospace; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 2px 8px; color: var(--fg); }
 
 .viewer-img {
   max-width: 100%;
@@ -895,11 +933,16 @@
         <p class="brand-tagline">說出你想完成的事，做完給你成品</p>
       </div>
       <div class="project-bar">
-        <label for="space" class="sr-only">專案</label>
-        <select id="space" aria-label="選擇專案空間"></select>
-        <button class="ghost icon-btn" id="browse-btn" style="display:none" data-tooltip="選資料夾（就地工作）" aria-label="瀏覽並選擇資料夾">📁</button>
-        <button class="ghost icon-btn" id="newspace-btn" data-tooltip="新專案" aria-label="新增專案空間">＋</button>
+        <div class="proj-switch" id="proj-switch">
+          <button class="proj-btn" id="proj-btn" aria-haspopup="listbox" aria-expanded="false" aria-label="切換專案"></button>
+          <div class="proj-menu" id="proj-menu" role="listbox" hidden></div>
+        </div>
       </div>
+      <button class="exp-entry" id="exp-btn" type="button" onclick="openExperience()" aria-label="查看它對你的了解（累積的記憶與技能）">
+        <span class="exp-ic" aria-hidden="true">🧠</span>
+        <span class="exp-lbl">它對你的了解</span>
+        <span class="exp-count" id="exp-count"></span>
+      </button>
     </div>
 
     <!-- 歷史成品 -->
@@ -958,6 +1001,8 @@
       </div>
       <!-- 檔案預覽 -->
       <div id="file-viewer" class="file-viewer" hidden aria-label="檔案預覽"></div>
+      <!-- 經驗面板：它對你的了解 -->
+      <div id="exp-viewer" class="file-viewer exp-viewer" hidden aria-label="它對你的了解"></div>
     </div>
   </main>
 </div>
@@ -990,114 +1035,23 @@ $("#theme").onclick = () => {
   applyTheme(t);
 };
 
-/* 專案空間 */
-renderSpaces($("#space"));
-$("#space").onchange = () => {
-  switchSpace($("#space").value);
-  loadHistory();
-  loadFiles();
-};
+/* 專案切換器（共用元件）：切換/新增/選資料夾後重載歷史與檔案，並把主任務區歸位 */
+mountProjectSwitcher(() => { resetMainTask(); loadHistory(); loadFiles(); refreshExp(); });
 
-/* 新增專案 */
-$("#newspace-btn").onclick = () => {
-  const raw = (
-    prompt(
-      LOCAL
-        ? "新專案：輸入名稱，或貼上一個真實資料夾的絕對路徑（本地模式會就地改該資料夾）"
-        : "新專案名稱（英數/底線/連字號）："
-    ) || ""
-  ).trim();
-  if (!raw) return;
-  const n = LOCAL && raw.startsWith("/") ? raw : raw.replace(/[^a-zA-Z0-9_-]/g, "");
-  if (!n) return;
-  addSpace(n);
-  switchSpace(n);
-  renderSpaces($("#space"));
-  loadHistory();
-  loadFiles();
-};
-
-/* 資料夾瀏覽器（本地模式）*/
-if (LOCAL) $("#browse-btn").style.display = "";
-
-let fsPath = null,
-  fsShowHidden = localStorage.getItem("xk_fshidden") === "1";
-
-$("#browse-btn").onclick = () => {
-  $("#fs-modal").hidden = false;
-  $("#fs-hidden").checked = fsShowHidden;
-  fsGo(null);
-  // focus trap
-  $("#fs-list").querySelector("button, [tabindex='0'], .fs-row")?.focus();
-};
-
-function fsGo(opts) {
-  opts = opts || {};
-  const qs = [];
-  if (opts.path) qs.push("path=" + encodeURIComponent(opts.path));
-  if (opts.name) qs.push("name=" + encodeURIComponent(opts.name));
-  if (opts.up) qs.push("up=1");
-  if (fsShowHidden) qs.push("hidden=1");
-  api("/v1/fs" + (qs.length ? "?" + qs.join("&") : ""))
-    .then((r) => r.json())
-    .then((r) => {
-      if (r.error) {
-        alert(r.error);
-        return;
-      }
-      fsPath = r.path;
-      window._fsHome = r.home;
-      $("#fs-path").textContent = "📂 " + r.path;
-
-      const drivesRow =
-        r.drives && r.drives.length
-          ? `<div class="fs-drives">${r.drives.map(
-              (dv) =>
-                `<button class="fs-drive" onclick="fsGo({path:'${jsAttr(dv)}'})" title="切換到 ${esc(dv)}">💽 ${esc(dv.replace(/\\$/, ""))}</button>`
-            ).join("")}</div>`
-          : "";
-
-      const rows = [
-        `<button class="fs-row up" onclick="fsUp()" role="treeitem" tabindex="0" type="button">⬆ 上一層</button>`,
-        ...(r.dirs.length
-          ? r.dirs.map(
-              (d) =>
-                `<button class="fs-row${d.startsWith(".") ? " hid" : ""}" onclick="fsEnter('${jsAttr(d)}')" role="treeitem" tabindex="0" type="button">📁 ${esc(d)}</button>`
-            )
-          : [`<div class="empty" style="padding:${12}px">（沒有子資料夾，可直接選這個）</div>`]),
-      ];
-
-      $("#fs-list").innerHTML = drivesRow + rows.join("");
-    })
-    .catch(() => ({ error: "讀取失敗" }));
-}
-
-function fsEnter(name) {
-  return fsGo({ path: fsPath, name });
-}
-function fsUp() {
-  return fsGo({ path: fsPath, up: true });
-}
-function fsToggleHidden() {
-  fsShowHidden = $("#fs-hidden").checked;
-  localStorage.setItem("xk_fshidden", fsShowHidden ? "1" : "0");
-  fsGo(fsPath);
-}
-function fsHome() {
-  fsGo(window._fsHome || null);
-}
-function closeFs() {
-  $("#fs-modal").hidden = true;
-}
-function chooseFs() {
-  if (!fsPath) return;
-  const p = fsPath;
-  addSpace(p);
-  switchSpace(p);
-  renderSpaces($("#space"));
-  closeFs();
-  loadHistory();
-  loadFiles();
+/* 切換專案時主任務區回到初始：清掉殘留的上一個專案任務（含進行中輪詢狀態）與預覽 */
+function resetMainTask() {
+  stopStream();
+  activeId = null;
+  liveTask = null;
+  closeExperience();
+  closePreview();
+  $("#current-task").innerHTML = `<div class="welcome">
+    <div class="welcome-icon" aria-hidden="true">🪄</div>
+    <h2 class="welcome-title">說出你想完成的事</h2>
+    <p class="welcome-sub">在上方輸入一句話，交給它去做——做完把成品給你。<br>左邊可看歷史成品與工作區檔案，點任一個在這裡展開。</p>
+  </div>`;
+  const rh = $("#route-hint");
+  if (rh) rh.innerHTML = "";
 }
 
 /* 領域選單 */
@@ -1142,8 +1096,7 @@ $("#go-btn").onclick = async () => {
   $("#goal").value = "";
   closePreview();
   expandedLog = false;
-  activeId = r.taskId;
-  poll();
+  streamTask(r.taskId, { taskId: r.taskId, pack: r.pack || picked, auto: !!r.routed, workspace: curSpace, goal, status: r.status || "queued", mode: "goal", startedAt: null });
   loadHistory();
 };
 
@@ -1166,7 +1119,10 @@ async function poll() {
   clearTimeout(polling);
   if (!activeId) return;
 
+  const reqId = activeId;
   const t = await api("/v1/tasks/" + activeId).then((r) => r.json());
+  // 切換專案/任務時 activeId 已變或被清空 → 丟棄這次過期回應，避免舊任務閃回
+  if (activeId !== reqId) return;
   liveTask = t;
 
   const terminal = t.status === "done" || t.status === "error";
@@ -1174,10 +1130,118 @@ async function poll() {
   if (terminal) {
     loadHistory();
     loadFiles();
+    refreshExp();
     return;
   }
   if (t.status === "needs-input") return;
   polling = setTimeout(poll, 1200);
+}
+
+/* ── 即時串流（SSE）：取代 1.2s 輪詢，逐事件更新，體感等同 Claude Code ──
+   server /v1/tasks/:id/events 會先回放緩衝事件、再即時推送；前端依事件型別
+   重建 t.progress（與 server emit() 同邏輯）逐步渲染。SSE 不可用時退回 poll()。*/
+let streamCtl = null;
+
+/** 取工具參數摘要（對應 server argSummary，用於「展開過程」步驟列）*/
+const argSummary = (args) => {
+  if (!args || typeof args !== "object") return "";
+  const v = args.command ?? args.path ?? args.pattern ?? args.query ?? args.url ?? args.name ?? args.topic;
+  return v != null && v !== "" ? String(v).replace(/\s+/g, " ").slice(0, 80) : "";
+};
+
+/** 把單一事件套用到任務物件（重建進度），對應 server 的 emit() */
+function applyEvent(t, ev) {
+  const p = (t.progress ||= { steps: 0, round: 0, maxRounds: 0, recent: [], phase: "starting", thinking: "", todos: [], log: [] });
+  switch (ev.type) {
+    case "status":
+      t.status = ev.status;
+      if (ev.status === "running" && !t.startedAt) t.startedAt = new Date().toISOString(); // 純 SSE 下補計時起點，心跳才會跑
+      break;
+    case "tool":
+      if (ev.name === "todo_write") { if (Array.isArray(ev.args?.todos)) p.todos = ev.args.todos; }
+      else {
+        p.steps++; p.phase = "acting"; p.thinking = ""; t._tb = "";
+        p.recent.push({ name: ev.name, args: ev.args }); if (p.recent.length > 6) p.recent.shift();
+        if (p.log.length < 100) p.log.push({ name: ev.name, summary: argSummary(ev.args) });
+      }
+      break;
+    case "tool_end": {
+      const last = p.log[p.log.length - 1];
+      if (last && last.name === ev.name && !("isError" in last)) { last.isError = ev.isError; if (ev.diff) last.diff = ev.diff; }
+      break;
+    }
+    case "text":
+      p.phase = "thinking";
+      t._tb = ((t._tb || "") + (ev.delta || "")).slice(-400);
+      p.thinking = t._tb.replace(/\s+/g, " ").trim().slice(-150);
+      break;
+    case "round": p.round = ev.round; if (ev.maxRounds) p.maxRounds = ev.maxRounds; p.thinking = ""; t._tb = ""; break;
+    case "phase": p.phase = ev.phase; break;
+    case "steered": (p.steers ||= []).push(ev.text); if (p.steers.length > 8) p.steers.shift(); break;
+    case "needs_input": t.status = "needs-input"; p.phase = "needs-input"; t.pending = { question: ev.question, options: ev.options || null }; break;
+    case "answered": t.status = "running"; t.pending = null; p.phase = "acting"; break;
+    case "end":
+      t.status = ev.status; p.phase = ev.status;
+      if (ev.result) { t.result = ev.result; if (ev.result.rounds != null) t.rounds = ev.result.rounds; if (ev.result.sessionId) t.sessionId = ev.result.sessionId; }
+      if (ev.error) t.error = ev.error;
+      break;
+  }
+}
+
+/** 停止當前串流＋輪詢（切換任務/專案前呼叫）*/
+function stopStream() {
+  if (streamCtl) { try { streamCtl.abort(); } catch {} streamCtl = null; }
+  clearTimeout(polling);
+}
+
+/** 串流監看一個任務：SSE 即時重建並渲染；連線失敗則退回輪詢 */
+async function streamTask(taskId, base) {
+  stopStream();
+  activeId = taskId;
+  // 基底（任務 metadata：goal/pack/workspace/sessionId）：用 POST 回應或補一次 GET
+  let t = base || (await api("/v1/tasks/" + taskId).then((r) => r.json()).catch(() => null));
+  if (!t || activeId !== taskId) return;
+  // 進度一律由事件流重建（replay 帶完整歷史），避免和既有 progress 雙重計數
+  t.progress = { steps: 0, round: 0, maxRounds: 0, recent: [], phase: "starting", thinking: "", todos: [], log: [] };
+  liveTask = t;
+  renderCurrent(t);
+
+  const ctl = new AbortController();
+  streamCtl = ctl;
+  let resp;
+  try {
+    resp = await api("/v1/tasks/" + taskId + "/events", { signal: ctl.signal });
+  } catch (e) {
+    if (streamCtl === ctl) streamCtl = null;
+    if (e.name !== "AbortError" && activeId === taskId) poll();
+    return;
+  }
+  if (!resp.ok || !resp.body) { if (streamCtl === ctl) streamCtl = null; if (activeId === taskId) poll(); return; }
+
+  let raf = 0;
+  const paint = () => {
+    raf = 0;
+    if (activeId !== taskId) return;
+    const terminal = t.status === "done" || t.status === "error";
+    if (!terminal) {
+      if (composing) return; // 願望框 IME 組字中
+      const se = document.getElementById("steerin");
+      if (se && document.activeElement === se && se.value) return; // 使用者正在打補充指示 → 暫不打斷
+    }
+    renderCurrent(t);
+  };
+  try {
+    await readSSE(resp, (ev) => {
+      if (activeId !== taskId) return;
+      applyEvent(t, ev);
+      if (ev.type === "end") { if (raf) { cancelAnimationFrame(raf); raf = 0; } renderCurrent(t); loadHistory(); loadFiles(); refreshExp(); return; }
+      if (!raf) raf = requestAnimationFrame(paint); // 合批：避免逐 delta 重繪過載
+    });
+  } catch (e) {
+    if (e.name !== "AbortError" && activeId === taskId) poll(); // 連線中斷 → 退回輪詢
+  } finally {
+    if (streamCtl === ctl) streamCtl = null;
+  }
 }
 
 /* 心跳：每秒更新「已進行 Ns」*/
@@ -1312,7 +1376,7 @@ function renderCurrent(t) {
 
     ${t.status === "done" ? `<div class="summary">
       <div class="summary-label">摘要</div>
-      <div class="summary-text">${esc(t.result?.text || "")}</div>
+      <div class="summary-text md">${mdRender(t.result?.text || "")}</div>
     </div>` : ""}
 
     ${t.status === "error" ? `<div class="error-msg">⚠ ${esc(t.error)}</div>` : ""}
@@ -1348,7 +1412,7 @@ function renderCurrent(t) {
           method: "POST",
           body: JSON.stringify({ answer: ans }),
         });
-        poll();
+        if (!streamCtl) poll(); // 串流模式下 server 會推 answered 事件，毋須輪詢
       }
     };
   }
@@ -1419,10 +1483,8 @@ async function submitFollowup(sessionId, pack, workspace) {
     alert(r.error);
     return;
   }
-  activeId = r.taskId;
   expandedLog = false;
-  liveTask = null;
-  poll();
+  streamTask(r.taskId, { taskId: r.taskId, pack, workspace, goal, status: r.status || "queued", mode: "goal", auto: false, startedAt: null, sessionId, continued: true });
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -1431,6 +1493,7 @@ const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
 const MD = /\.(md|markdown)$/i;
 const HTMLF = /\.html?$/i;
 const JSONF = /\.json$/i;
+const DOC = /\.(docx|pptx|xlsx|odt|odp|ods|rtf|pdf)$/i; // Word/Excel/PPT/PDF：伺服器萃取成文字（?as=text）
 
 // 取檔 URL 產生器：任務成品走 /v1/tasks/<id>/file，工作區檔走 /v1/workspaces/file?ws=
 const taskFileUrl = (taskId) => (p, extra = "") =>
@@ -1460,15 +1523,20 @@ async function renderFile(urlFn, encPath, name) {
   }
 
   v.innerHTML = bar + `<div class="empty">載入中…</div>`;
-  const txt = await fetch(urlFn(path)).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+  // 文件（Word/Excel/PPT/PDF…）走伺服器萃取成文字；其餘照原檔讀
+  const isDoc = DOC.test(name);
+  const resp = await fetch(urlFn(path, isDoc ? "&as=text" : "")).catch(() => null);
+  const txt = resp && resp.ok ? await resp.text() : null;
 
   if (txt == null) {
-    v.innerHTML = bar + `<div class="empty">（無法以文字呈現，請下載）</div>`;
+    const msg = resp && resp.status === 422 ? "（文件解析失敗，請下載原檔）" : "（無法以文字呈現，請下載）";
+    v.innerHTML = bar + `<div class="empty">${msg}</div>`;
     return;
   }
 
   let body;
-  if (MD.test(name)) body = `<div class="md">${mdRender(txt)}</div>`;
+  if (isDoc) body = `<pre class="viewer-pre">${esc(txt)}</pre>`;
+  else if (MD.test(name)) body = `<div class="md">${mdRender(txt)}</div>`;
   else if (JSONF.test(name)) {
     try {
       body = `<pre class="viewer-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`;
@@ -1505,13 +1573,15 @@ async function loadHistory() {
 }
 
 async function openTask(id) {
+  stopStream();
   activeId = id;
   const t = await api("/v1/tasks/" + id).then((r) => r.json());
+  if (activeId !== id) return;
   liveTask = t;
   closePreview();
   renderCurrent(t);
   loadHistory();
-  if (t.status === "running" || t.status === "queued") poll();
+  if (t.status === "running" || t.status === "queued") streamTask(id, t); // 進行中 → 即時串流
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -1564,9 +1634,73 @@ function wbView(encPath, name) {
   return renderFile(wsFileUrl(curSpace), encPath, name); // 工作區檔走 /v1/workspaces/file?ws=
 }
 
+/* ── 經驗層：讓「它越用越懂你」可見（Claude Code 沒有的差異點）──
+   讀 /v1/workspaces/experience 聚合的五層（記憶/手冊/技能/情節/信任），
+   在側欄入口顯示計數，點開在主區呈現。任務完成、切換專案時自動刷新。*/
+let expOpen = false;
+
+const fetchExp = () =>
+  api("/v1/workspaces/experience?ws=" + encodeURIComponent(curSpace)).then((r) => r.json()).catch(() => null);
+
+// 更新側欄入口計數（並在面板開著時同步重繪）
+async function refreshExp() {
+  const e = await fetchExp();
+  const c = (e && e.counts) || {};
+  const learned = (c.skills || 0) + (c.playbook || 0);
+  const total = (c.memory || 0) + learned + (c.episodes || 0);
+  const badge = $("#exp-count");
+  if (badge) badge.textContent = total ? `記得 ${c.memory || 0}·會 ${learned}·歷 ${c.episodes || 0}` : "尚無累積";
+  if (expOpen && e) renderExperience(e);
+  return e;
+}
+
+function showExp() { $("#current-task").hidden = true; $("#file-viewer").hidden = true; $("#exp-viewer").hidden = false; }
+function closeExperience() { expOpen = false; $("#exp-viewer").hidden = true; $("#file-viewer").hidden = true; $("#current-task").hidden = false; }
+
+async function openExperience() {
+  expOpen = true;
+  showExp();
+  $("#exp-viewer").innerHTML = expBar() + `<div class="exp-body"><div class="empty">載入中…</div></div>`;
+  const e = await fetchExp();
+  if (!expOpen) return; // 載入期間被關掉/切走
+  if (!e) { $("#exp-viewer").innerHTML = expBar() + `<div class="exp-body"><div class="empty">讀取失敗</div></div>`; return; }
+  renderExperience(e);
+}
+
+const expBar = () =>
+  `<div class="viewer-bar"><span>🧠 它對你的了解</span> · <span class="dim">在「${esc(spaceLabel(curSpace).replace(/^📁 /, ""))}」累積，越用越懂你</span><span class="spacer" aria-hidden="true"></span><button class="ghost" onclick="closeExperience()" aria-label="關閉">✕ 關閉</button></div>`;
+
+function renderExperience(e) {
+  const v = $("#exp-viewer");
+  const c = e.counts || {};
+  if (!((c.memory || 0) + (c.playbook || 0) + (c.skills || 0) + (c.episodes || 0) + (c.trust || 0))) {
+    v.innerHTML = expBar() + `<div class="exp-body"><div class="welcome">
+      <div class="welcome-icon" aria-hidden="true">🧠</div>
+      <h2 class="welcome-title">還沒有累積經驗</h2>
+      <p class="welcome-sub">多交辦幾次任務——它會記住你的偏好、學會這個專案的做法、把可重複的流程結晶成技能。<br>這些跨任務累積，讓它越用越懂你（這是 Claude Code 沒有的）。</p>
+    </div></div>`;
+    return;
+  }
+  const sec = (icon, title, n, inner) => (n ? `<section class="exp-sec"><h3 class="exp-h">${icon} ${title} <span class="exp-n">${n}</span></h3>${inner}</section>` : "");
+  const memHtml = (e.memory || []).map((m) => `<div class="exp-fact">• ${esc(m)}</div>`).join("");
+  const pbHtml = (e.playbook || []).map((p) => `<div class="exp-item"><div class="exp-item-t">${esc(p.topic)} <span class="exp-pack">${esc(packLabel(p.pack))}</span></div><div class="exp-item-d">${esc(p.note)}</div></div>`).join("");
+  const skHtml = (e.skills || []).map((s) => `<div class="exp-item"><div class="exp-item-t">⚡ ${esc(s.name)}${s.used ? ` <span class="exp-used">用過 ${s.used} 次</span>` : ""}${s.stale ? ` <span class="exp-stale">⚠ 待修</span>` : ""} <span class="exp-pack">${esc(packLabel(s.pack))}</span></div>${s.desc ? `<div class="exp-item-d">${esc(s.desc)}</div>` : ""}</div>`).join("");
+  const ocText = (o) => (o === "success" ? "✓ 成功" : o === "failure" ? "✗ 失敗" : esc(o));
+  const epHtml = (e.episodes || []).map((ep) => `<div class="exp-ep ${ep.outcome === "success" ? "ok" : ep.outcome === "failure" ? "fail" : ""}"><div class="exp-ep-s">${esc(ep.summary)}</div><div class="exp-ep-m">${ep.outcome ? `<span class="exp-oc">${ocText(ep.outcome)}</span>` : ""}${(ep.tags || []).map((t) => `<span class="exp-tag">${esc(t)}</span>`).join("")}<span>${fmtTime(ep.ts)}</span></div></div>`).join("");
+  const trust = e.trust || { tools: [], bash: [] };
+  const trHtml = [...(trust.tools || []).map((t) => ["🔧", t]), ...(trust.bash || []).map((b) => ["$", b])].map(([ic, x]) => `<span class="exp-chip">${ic} ${esc(x)}</span>`).join("");
+  v.innerHTML = expBar() + `<div class="exp-body">
+    ${sec("🧠", "記得你", (e.memory || []).length, `<div class="exp-facts">${memHtml}</div>`)}
+    ${sec("📘", "學會的做法", (e.playbook || []).length + (e.skills || []).length, pbHtml + skHtml)}
+    ${sec("🗂", "做過的事", (e.episodes || []).length, epHtml)}
+    ${sec("🔓", "已放行的操作", (trust.tools || []).length + (trust.bash || []).length, `<div class="exp-chips">${trHtml}</div>`)}
+  </div>`;
+}
+
 /* 啟動 */
 loadHistory();
 loadFiles();
+refreshExp();
 </script>
 </body>
 </html>

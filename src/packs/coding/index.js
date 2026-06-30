@@ -7,6 +7,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
 import { createBackgroundTools } from '../../kernel/bg.js';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
+import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -37,13 +38,18 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
 
   const readTool = {
     name: 'read', label: '讀檔', readOnly: true,
-    description: '讀取檔案內容（每行附行號，方便對照與編輯）。大檔可用 offset(起始行,1-based)+limit(行數) 讀一段。',
+    description: `讀取檔案內容（每行附行號，方便對照與編輯）。大檔可用 offset(起始行,1-based)+limit(行數) 讀一段。也能讀 Word/Excel/PPT/PDF 等文件（${DOC_EXTENSIONS.join(' ')}），自動萃取成文字。`,
     parameters: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['path'] },
     execute: async (_id, { path, offset, limit }) => {
       const p = abs(path);
       if (!existsSync(p)) return txt({ error: '檔案不存在', path });
       readFiles.add(p);
-      const lines = readFileSync(p, 'utf8').split('\n');
+      let content;
+      if (isDocFile(p)) {                                      // Word/Excel/PPT/ODF/RTF/PDF → 萃取文字
+        try { content = extractDocText(p); }
+        catch (e) { return txt({ error: '文件解析失敗', detail: e.message, path }); }
+      } else content = readFileSync(p, 'utf8');
+      const lines = content.split('\n');
       const start = Math.max(0, (offset || 1) - 1);
       const count = limit && limit > 0 ? limit : 2000;
       const slice = lines.slice(start, start + count);

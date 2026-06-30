@@ -5,6 +5,7 @@ import { isAbsolute, join, extname, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
 import { createWebFetchTool, createWebSearchTool, createHttpTool } from '../shared/web-tools.js';
+import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 
@@ -29,9 +30,15 @@ export function createGeneralPack({ cwd = process.cwd() } = {}) {
   const escapeErr = (path) => txt({ error: `只能寫在工作目錄內：${cwd}`, hint: '請用相對路徑（如 report.md），不要寫到工作區之外', path });
 
   const read = {
-    name: 'read', label: '讀檔', description: '讀取檔案內容', readOnly: true,
+    name: 'read', label: '讀檔', description: `讀取檔案內容（也能讀 Word/Excel/PPT/PDF 等文件 ${DOC_EXTENSIONS.join(' ')}，自動萃取成文字）`, readOnly: true,
     parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
-    execute: async (_id, { path }) => { const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path }); readFiles.add(p); return txt(readFileSync(p, 'utf8')); },
+    execute: async (_id, { path }) => {
+      const p = abs(path);
+      if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      readFiles.add(p);
+      if (isDocFile(p)) { try { return txt(extractDocText(p)); } catch (e) { return txt({ error: '文件解析失敗', detail: e.message, path }); } }
+      return txt(readFileSync(p, 'utf8'));
+    },
   };
   const ls = {
     name: 'ls', label: '列目錄', description: '列出目錄內容', readOnly: true,

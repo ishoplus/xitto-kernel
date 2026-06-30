@@ -370,6 +370,87 @@ a:focus-visible {
   padding-left: var(--sp-4);
   color: var(--dim);
 }
+.md .md-table {
+  border-collapse: collapse;
+  margin: .6em 0;
+  font-size: .92em;
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.md .md-table th,
+.md .md-table td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+}
+.md .md-table th {
+  background: var(--inset);
+  font-weight: 600;
+  color: var(--fg);
+}
+.md .md-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--fg) 3%, transparent); }
+
+/* ── 6c. 專案切換器（popover，對話頁與許願台共用）──────────── */
+.proj-switch { position: relative; flex: 1; min-width: 0; }
+.proj-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.proj-btn:hover { border-color: var(--accent); }
+.proj-btn .proj-ic { flex-shrink: 0; }
+.proj-btn .proj-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.proj-btn .proj-caret { flex-shrink: 0; color: var(--dim); font-size: 11px; }
+
+.proj-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 50vh;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  padding: var(--sp-1);
+  animation: fade-in var(--duration-fast) var(--ease-out);
+}
+.proj-menu[hidden] { display: none; }
+.proj-group { font-size: 11px; color: var(--faint); padding: var(--sp-1) var(--sp-2) 2px; letter-spacing: .03em; }
+.proj-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.proj-item:hover { background: var(--inset); }
+.proj-item.on { color: var(--accent); }
+.proj-item.action { color: var(--dim); }
+.proj-item.action:hover { color: var(--fg); }
+.proj-item .proj-tick { flex-shrink: 0; width: 1.2em; text-align: center; color: var(--accent); }
+.proj-item .proj-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-sep { height: 1px; background: var(--line); margin: var(--sp-1) 0; }
 
 /* ── 7. 動畫 ───────────────────────────────────────────── */
 @keyframes blink {

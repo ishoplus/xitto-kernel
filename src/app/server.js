@@ -10,6 +10,11 @@ import { homedir } from 'node:os';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { createKernel } from '../kernel/index.js';
 import { cacheRetentionFor } from '../kernel/provider.js';
+import { createMemory } from '../kernel/memory.js';
+import { createEpisodes } from '../kernel/episodes.js';
+import { createSkills } from '../kernel/skills.js';
+import { createPlaybook } from '../kernel/playbook.js';
+import { fileAllowStore } from '../kernel/security/allow-store.js';
 import { loadModel } from './providers.js';
 import { createCodingPack } from '../packs/coding/index.js';
 import { createDataQueryPack } from '../packs/data-query/index.js';
@@ -18,6 +23,7 @@ import { createGeneralPack } from '../packs/general/index.js';
 import { createDeepResearchPack } from '../packs/deep-research/index.js';
 import { createDevopsPack } from '../packs/devops/index.js';
 import { createPatentPack } from '../packs/patent/index.js';
+import { isDocFile, extractDocText } from '../packs/shared/doc-extract.js';
 import { createUiuxPack } from '../packs/uiux/index.js';
 
 const PACKS = {
@@ -141,6 +147,33 @@ export function listDir(wsDir, sub) {
   return { sub: rel, dirs: dirs.sort(), files: files.sort((a, b) => b.mtime - a.mtime) };
 }
 
+// 讀一個 workspace 累積的「五層經驗」（跨 pack 聚合）→ 給 Wishboard 視覺化「它對你的了解」。
+// 純讀不寫（各 store 構造只讀檔，不會建檔/落地）。回傳事實/手冊/技能/情節/信任 + 計數。
+const _tsNum = (t) => (typeof t === 'number' ? t : Date.parse(t) || 0);
+export function readWorkspaceExperience(wsDir) {
+  const root = join(wsDir, '.xitto-kernel');
+  const out = { packs: [], memory: [], playbook: [], skills: [], episodes: [], trust: { tools: [], bash: [] }, counts: {} };
+  let packDirs = [];
+  if (existsSync(root)) {
+    try { packDirs = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch { /* 略 */ }
+  }
+  const memSeen = new Set(), trustTools = new Set(), trustBash = new Set();
+  for (const pack of packDirs) {
+    const d = join(root, pack); let had = false;
+    try { for (const m of createMemory(join(d, 'memory.md')).list()) { had = true; if (!memSeen.has(m)) { memSeen.add(m); out.memory.push(m); } } } catch { /* 略 */ }
+    try { for (const e of createPlaybook(join(d, 'playbook.md')).list()) { out.playbook.push({ ...e, pack }); had = true; } } catch { /* 略 */ }
+    try { for (const s of createSkills(join(d, 'skills')).list()) { out.skills.push({ ...s, pack }); had = true; } } catch { /* 略 */ }
+    try { for (const ep of createEpisodes(join(d, 'episodes.jsonl')).list(50)) { out.episodes.push({ ...ep, pack }); had = true; } } catch { /* 略 */ }
+    try { const t = fileAllowStore(join(d, 'allow.json')).list(); t.tools.forEach((x) => trustTools.add(x)); t.bash.forEach((x) => trustBash.add(x)); if (t.tools.length || t.bash.length) had = true; } catch { /* 略 */ }
+    if (had) out.packs.push(pack);
+  }
+  out.episodes.sort((a, b) => _tsNum(b.ts) - _tsNum(a.ts));
+  out.episodes = out.episodes.slice(0, 30);
+  out.trust = { tools: [...trustTools], bash: [...trustBash] };
+  out.counts = { memory: out.memory.length, playbook: out.playbook.length, skills: out.skills.length, episodes: out.episodes.length, trust: trustTools.size + trustBash.size };
+  return out;
+}
+
 // 交付檔案路徑解析（防穿越）：rel 必須是 workdir 內的相對路徑,否則回 null。
 export function resolveArtifact(workdir, rel) {
   if (typeof rel !== 'string' || !rel || isAbsolute(rel)) return null;
@@ -158,10 +191,19 @@ const chatHtml = () => (_chatHtml ??= readFileSync(join(dirname(fileURLToPath(im
 export const mapEvent = (ev) => {
   if (ev.type === 'tool_execution_start') return { type: 'tool', name: ev.toolName, args: ev.args };
   if (ev.type === 'tool_execution_end') return { type: 'tool_end', name: ev.toolName, isError: !!ev.isError, diff: ev.result?._diff || undefined };
+  // 子 agent（spawn_agent）內部工具活動：嵌套顯示在父步驟底下
+  if (ev.type === 'tool_execution_update' && ev.partialResult?.kind === 'subagent') {
+    const p = ev.partialResult;
+    if (p.phase === 'end') return { type: 'sub_tool_end', name: p.name, isError: !!p.isError };
+    if (p.phase === 'think') return { type: 'sub_think', text: p.text || '' };
+    return { type: 'sub_tool', name: p.name, args: p.args };
+  }
   if (ev.type === 'message_update' && ev.assistantMessageEvent?.type === 'text_delta') return { type: 'text', delta: ev.assistantMessageEvent.delta };
   if (ev.type === 'round') return { type: 'round', round: ev.round, maxRounds: ev.maxRounds };
   if (ev.type === 'verify_start') return { type: 'phase', phase: 'verifying' };
   if (ev.type === 'verify_end') return { type: 'phase', phase: ev.ok ? 'verified' : 'fixing' };
+  // token 用量（每則訊息結束結算）：給 UI 即時顯示累計 token（像 Claude Code 的進度列）
+  if (ev.type === 'message_end' && ev.message?.usage) return { type: 'usage', input: ev.message.usage.input || 0, output: ev.message.usage.output || 0 };
   return null;
 };
 
@@ -332,9 +374,16 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
   const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 1e6) req.destroy(); }); req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch { resolve({}); } }); });
   const sseHead = (res) => res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
   // 依副檔名給 content-type 回傳檔案（圖片顯示/md 渲染/下載皆走這）。
-  const serveFile = (res, full, rel, download) => {
+  const serveFile = (res, full, rel, download, asText) => {
     if (!existsSync(full)) return json(res, 404, { error: '檔案不存在' });
     try {
+      // ?as=text 且為 Word/Excel/PPT/PDF 等文件 → 萃取成純文字回傳（給網頁預覽；下載仍走原檔）
+      if (asText && !download && isDocFile(full)) {
+        try {
+          res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+          return res.end(extractDocText(full));
+        } catch (e) { return json(res, 422, { error: '文件解析失敗', detail: e.message }); }
+      }
       const ct = contentTypeFor(rel);
       const isText = /^text\/|json|xml|javascript|svg/.test(ct);
       const headers = { 'content-type': ct + (isText ? '; charset=utf-8' : '') };
@@ -517,7 +566,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       const rel = url.searchParams.get('path');
       const full = resolveArtifact(workspaceDir(baseDir, ws, local), rel);
       if (!full) return json(res, 400, { error: 'path 不合法' });
-      return serveFile(res, full, rel, url.searchParams.get('download'));
+      return serveFile(res, full, rel, url.searchParams.get('download'), url.searchParams.get('as') === 'text');
     }
 
     // 資料夾瀏覽器（僅本地模式）：列某路徑下的子資料夾,給網頁「用選的」挑真實資料夾
@@ -542,6 +591,12 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
       const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
       return json(res, 200, listDir(dir, url.searchParams.get('sub') || '') || { sub: '', dirs: [], files: [] });
     }
+    // 工作區累積的「五層經驗」（給 Wishboard 視覺化「它越用越懂你」——Claude Code 沒有的差異點）
+    if (req.method === 'GET' && path === '/v1/workspaces/experience') {
+      const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
+      try { return json(res, 200, readWorkspaceExperience(dir)); }
+      catch (e) { return json(res, 200, { packs: [], memory: [], playbook: [], skills: [], episodes: [], trust: { tools: [], bash: [] }, counts: { memory: 0, playbook: 0, skills: 0, episodes: 0, trust: 0 }, error: e.message }); }
+    }
     // 工作台：取檔（看/下載）/ 刪檔
     if (path === '/v1/workspaces/file' && (req.method === 'GET' || req.method === 'DELETE')) {
       const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
@@ -552,7 +607,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
         try { if (existsSync(full)) rmSync(full); log({ action: 'delete', path: rel }); return json(res, 200, { ok: true }); }
         catch (e) { return json(res, 500, { error: e.message }); }
       }
-      return serveFile(res, full, rel, url.searchParams.get('download'));
+      return serveFile(res, full, rel, url.searchParams.get('download'), url.searchParams.get('as') === 'text');
     }
 
     // 附掛背景任務的事件流（replay 緩衝 + 即時；已結束則回放後關閉）

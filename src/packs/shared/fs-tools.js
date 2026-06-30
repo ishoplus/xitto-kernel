@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, renameSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, dirname, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { isDocFile, extractDocText, DOC_EXTENSIONS } from './doc-extract.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -39,7 +40,7 @@ export function createFsTools(cwd) {
 
   const read = {
     name: 'read', label: '讀檔', readOnly: true,
-    description: '讀取檔案內容（每行附行號）。大檔可用 offset(起始行,1-based)+limit(行數)。',
+    description: `讀取檔案內容（每行附行號）。大檔可用 offset(起始行,1-based)+limit(行數)。也能讀 Word/Excel/PPT/PDF 等文件（${DOC_EXTENSIONS.join(' ')}），自動萃取成文字。`,
     parameters: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['path'] },
     execute: async (_id, { path, offset, limit }) => {
       const p = abs(path);
@@ -48,10 +49,17 @@ export function createFsTools(cwd) {
         const st = statSync(p);
         if (st.isDirectory()) return txt({ error: '這是目錄，請用 ls', path });
         if (st.size > 50 * 1024 * 1024) return txt({ error: `檔案過大（${(st.size / 1048576).toFixed(1)}MB），請用 bash 處理`, path });
-        const buf = readFileSync(p);
-        if (buf.includes(0)) return txt({ error: '二進位檔案，無法以文字讀取', path, bytes: st.size }); // null byte → 視為二進位
+        let content;
+        if (isDocFile(p)) {                                    // Word/Excel/PPT/ODF/RTF/PDF → 萃取文字
+          try { content = extractDocText(p); }
+          catch (e) { return txt({ error: '文件解析失敗', detail: e.message, path }); }
+        } else {
+          const buf = readFileSync(p);
+          if (buf.includes(0)) return txt({ error: '二進位檔案，無法以文字讀取', path, bytes: st.size }); // null byte → 視為二進位
+          content = buf.toString('utf8');
+        }
         markRead(p);
-        const lines = buf.toString('utf8').split('\n');
+        const lines = content.split('\n');
         const start = Math.max(0, (offset || 1) - 1);
         const count = limit && limit > 0 ? limit : 2000;
         const numbered = lines.slice(start, start + count).map((l, i) => `${String(start + i + 1).padStart(6)}\t${l}`).join('\n');

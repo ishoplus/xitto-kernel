@@ -13,7 +13,17 @@
 <style>
 /* ── Chat 頁面樣式 ──────────────────────────────────────── */
 
-:root { --sidebar-w: 280px; --thread-w: 780px; }
+:root { --sidebar-w: 280px; --thread-w: 780px; --rail-w: 320px; }
+
+/* TUI 工具類別色（彩色終端機）：讀＝藍／改＝金／執行＝綠／網路＝紫／其他＝灰 */
+:root {
+  --tool-read: var(--accent);
+  --tool-edit: var(--warn);
+  --tool-run:  var(--ok);
+  --tool-net:  #b694ff;
+  --tool-meta: var(--dim);
+}
+[data-theme="light"] { --tool-net: #7c3fd8; }
 
 html, body { height: 100%; }
 
@@ -87,22 +97,89 @@ body {
   margin-top: var(--sp-3);
 }
 
-.space-select {
+/* 資料夾選擇 Modal（與許願台一致）*/
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: fade-in var(--duration-fast) var(--ease-out);
+}
+.modal[hidden] { display: none; }
+.modal-box {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-4);
+  box-shadow: var(--shadow-card);
+}
+.modal-title { font-weight: 600; margin-bottom: var(--sp-3); }
+.fs-path {
+  font: 12px ui-monospace, Menlo, monospace;
+  color: var(--dim);
+  margin-bottom: var(--sp-2);
+  word-break: break-all;
+}
+.fs-list {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.fs-row {
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  font-size: 14px;
+  border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  width: 100%;
+  text-align: left;
+  background: none;
 }
-
-.space-select label {
+.fs-row:last-child { border-bottom: none; }
+.fs-row:hover { background: var(--inset); }
+.fs-row.up { color: var(--dim); }
+.fs-row.hid { color: var(--dim); }
+.fs-drives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--inset);
+}
+.fs-drive {
   font-size: 12px;
-  color: var(--dim);
-  white-space: nowrap;
+  padding: 3px var(--sp-2);
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
 }
-
-.space-select select {
-  flex: 1;
-  min-width: 0;
-  max-width: none;
+.fs-drive:hover { border-color: var(--accent); }
+.fs-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.fs-hidden {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 12.5px;
+  color: var(--dim);
+  cursor: pointer;
 }
 
 .new-chat-btn {
@@ -434,6 +511,27 @@ body {
 .dl.add { color: var(--ok); }
 .dl.del { color: var(--danger); }
 
+/* 子 agent 巢狀工具步驟 */
+.substeps {
+  margin: 2px 0 var(--sp-1) var(--sp-4);
+  padding-left: var(--sp-2);
+  border-left: 1px dashed var(--line);
+}
+.thread.tui .substeps { margin-left: 3ch; border-left: none; padding-left: 0; }
+
+/* 子 agent 即時思考行 */
+.sub-think {
+  font-size: 12px;
+  color: var(--faint);
+  font-style: italic;
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sub-think::before { content: "◐ "; color: var(--accent); font-style: normal; animation: blink 1.2s steps(2) infinite; }
+.thread.tui .sub-think::before { content: "⎿ ◐ "; }
+
 /* 階段提示 */
 .phase {
   color: var(--dim);
@@ -512,15 +610,32 @@ body {
 .thread.tui .proc-step { padding: 1px 0; color: var(--dim); display: block; }
 .thread.tui .proc-step .pmark { display: none; }
 .thread.tui .proc-step::before { content: "⎿ "; color: var(--faint); }
-.thread.tui .proc-step.done .ptext { color: var(--fg); }
+
+/* 彩色工具行：依類別上色（讀＝藍／改＝金／執行＝綠／網路＝紫／其他＝灰）*/
+.thread.tui .proc-step.cat-read .ptext, .thread.tui .proc-step.cat-read::before { color: var(--tool-read); }
+.thread.tui .proc-step.cat-edit .ptext, .thread.tui .proc-step.cat-edit::before { color: var(--tool-edit); }
+.thread.tui .proc-step.cat-run  .ptext, .thread.tui .proc-step.cat-run::before  { color: var(--tool-run); }
+.thread.tui .proc-step.cat-net  .ptext, .thread.tui .proc-step.cat-net::before  { color: var(--tool-net); }
+.thread.tui .proc-step.cat-meta .ptext { color: var(--tool-meta); }
+
+/* 進行中壓暗，完成時轉為飽和類別色 */
+.thread.tui .proc-step.running { opacity: .55; }
 .thread.tui .proc-step.done .ptext::after { content: " ✓"; color: var(--ok); }
-.thread.tui .proc-step.error .ptext { color: var(--danger); }
-.thread.tui .proc-step.error .ptext::after { content: " ✗"; color: var(--danger); }
 .thread.tui .proc-step.running .ptext::after { content: " …"; color: var(--accent); }
+
+/* 錯誤：紅色蓋過類別色（須排在類別規則之後）*/
+.thread.tui .proc-step.error .ptext, .thread.tui .proc-step.error::before { color: var(--danger); }
+.thread.tui .proc-step.error .ptext::after { content: " ✗"; color: var(--danger); }
+
 .thread.tui .proc-step .diff { margin-left: 2ch; }
 
-/* 終端機視圖：markdown 標題不要過大，維持轉錄質感 */
-.thread.tui .body.md h1, .thread.tui .body.md h2, .thread.tui .body.md h3, .thread.tui .body.md h4 { font-size: 14px; margin: .6em 0 .3em; }
+/* 終端機視圖：markdown 標題不要過大，維持轉錄質感；彩色化內文 */
+.thread.tui .body.md h1, .thread.tui .body.md h2, .thread.tui .body.md h3, .thread.tui .body.md h4 { font-size: 14px; margin: .6em 0 .3em; color: var(--accent); }
+.thread.tui .body.md code { color: var(--warn); }
+.thread.tui .body.md pre.code { border-left: 2px solid var(--accent); }
+.thread.tui .body.md a { color: var(--tool-net); }
+.thread.tui .body.md .md-table { font-size: 12.5px; }
+.thread.tui .body.md .md-table th { color: var(--accent); border-color: var(--accent); }
 
 /* 終端機輸入框：命令列樣式（› 提示符、monospace、扁平內凹，不做圓角卡片）*/
 .composer.tui .composer-box {
@@ -628,6 +743,124 @@ body {
 
 .composer-footer .spacer { flex: 1; }
 
+/* 進行中狀態：跳動的點 + 經過時間（讓使用者知道任務仍在跑） */
+#status-hint:not(:empty) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: pulse-dot 1.2s var(--ease-out) infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .3; transform: scale(.6); }
+}
+/* Esc 中斷提示：弱化、非主資訊 */
+#status-hint .esc-hint { color: var(--dim); font-weight: 400; }
+
+/* ── 右側工作日誌軌道（寬螢幕 + 泡泡視圖：把工具/過程/diff 移出對話）── */
+.worklog {
+  display: none;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--inset);
+  overflow: hidden;
+  min-width: 0;
+}
+.app.rail-on { grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--rail-w); }
+.app.rail-on .worklog { display: flex; }
+
+.worklog-head {
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.worklog-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.wl-turn { margin-bottom: var(--sp-4); }
+.wl-turn:last-child { margin-bottom: 0; }
+
+.wl-turn-label {
+  font-size: 11px;
+  color: var(--faint);
+  margin-bottom: var(--sp-1);
+  padding-bottom: 3px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.wl-empty {
+  color: var(--faint);
+  font-size: 13px;
+  line-height: 1.8;
+  text-align: center;
+  padding: var(--sp-8) var(--sp-3);
+}
+.wl-empty span { font-size: 12px; opacity: .7; }
+
+/* TUI 軌道：工作階段 HUD（等寬看板，類 git status）*/
+.worklog.tui .worklog-body { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.hud-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  font-size: 12px;
+  padding: 2px 0;
+}
+.hud-k { color: var(--faint); }
+.hud-v { color: var(--fg); font-weight: 600; }
+.hud-divider { border-top: 1px dashed var(--line); margin: var(--sp-3) 0; }
+.hud-files-head {
+  font-size: 11px;
+  letter-spacing: .05em;
+  color: var(--faint);
+  margin-bottom: var(--sp-2);
+}
+.hud-file {
+  font-size: 12px;
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hud-file.changed { color: var(--ok); }
+.hud-file.read { color: var(--dim); }
+.hud-empty { font-size: 12px; color: var(--faint); opacity: .7; }
+
+/* 背景任務卡片（HUD／工作日誌軌道共用）*/
+.bg-task { padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); }
+.bg-task:last-child { border-bottom: none; }
+.bg-task-top { display: flex; align-items: center; gap: var(--sp-2); }
+.bg-task .bg-ic { flex: 0 0 auto; color: var(--accent); }
+.bg-task.done .bg-ic { color: var(--ok); }
+.bg-task.error .bg-ic { color: var(--danger); }
+.bg-task.cancelled .bg-ic { color: var(--faint); }
+.bg-goal { flex: 1; min-width: 0; font-size: 12px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bg-cancel { flex: 0 0 auto; background: none; border: none; color: var(--faint); cursor: pointer; font-size: 12px; padding: 0 2px; line-height: 1; }
+.bg-cancel:hover { color: var(--danger); }
+.bg-task-meta { font-size: 11px; color: var(--dim); margin-top: 2px; padding-left: 18px; }
+
+/* 背景模式開啟時，按鈕高亮 */
+#bg-toggle.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
 /* ── 響應式 ─────────────────────────────────────────── */
 @media (max-width: 1024px) {
   :root { --sidebar-w: 240px; }
@@ -688,9 +921,9 @@ body {
       <div class="side-tagline">逐句協作，記得上下文</div>
       
       <div class="side-controls">
-        <div class="space-select">
-          <label for="space">專案</label>
-          <select id="space" aria-label="選擇專案空間"></select>
+        <div class="proj-switch" id="proj-switch">
+          <button class="proj-btn" id="proj-btn" aria-haspopup="listbox" aria-expanded="false" aria-label="切換專案"></button>
+          <div class="proj-menu" id="proj-menu" role="listbox" hidden></div>
         </div>
       </div>
       
@@ -739,19 +972,46 @@ body {
           ></textarea>
           <div class="composer-actions">
             <label for="pack" class="sr-only">選擇領域</label>
-            <select id="pack" aria-label="選擇領域" style="max-width:120px"></select>
+            <select id="pack" aria-label="選擇領域" style="max-width:170px"></select>
             <button class="primary send-btn" id="send-btn" aria-label="送出訊息">送出</button>
+            <button class="stop-btn" id="stop-btn" type="button" style="display:none" data-tooltip="停止回覆（Esc）" aria-label="停止回覆（按 Esc）">■ 停止</button>
           </div>
         </div>
         <div class="composer-footer">
           <span id="input-hint">Enter 送出 · Shift+Enter 換行</span>
           <span class="spacer" aria-hidden="true"></span>
           <span id="status-hint" aria-live="polite"></span>
+          <button class="ghost view-toggle" id="bg-toggle" type="button" data-tooltip="前景串流／丟後台背景執行" aria-label="切換背景執行">⚡ 背景：關</button>
           <button class="ghost view-toggle" id="view-toggle" type="button" data-tooltip="切換終端機／泡泡視圖" aria-label="切換對話視圖">⌗ 終端機</button>
         </div>
       </div>
     </div>
   </main>
+
+  <!-- 右側工作日誌軌道（寬螢幕泡泡視圖才顯示，由 JS 控制 .app.rail-on）-->
+  <aside class="worklog" id="worklog" role="complementary" aria-label="工作軌道">
+    <div class="worklog-head" id="worklog-head">⚙ 工作日誌</div>
+    <div class="worklog-body" id="worklog-body"></div>
+  </aside>
+</div>
+
+<!-- 資料夾選擇 Modal（與許願台一致；position:fixed，置於 shell 外）-->
+<div id="fs-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="fs-modal-title">
+  <div class="modal-box">
+    <div class="modal-title" id="fs-modal-title">選一個資料夾（就地工作）</div>
+    <div class="fs-path" id="fs-path" aria-live="polite"></div>
+    <div class="fs-list" id="fs-list" role="tree" aria-label="資料夾列表"></div>
+    <div class="fs-bar">
+      <button class="ghost" onclick="fsHome()">🏠 家目錄</button>
+      <label class="fs-hidden">
+        <input type="checkbox" id="fs-hidden" onchange="fsToggleHidden()">
+        顯示隱藏資料夾
+      </label>
+      <span class="spacer" aria-hidden="true"></span>
+      <button class="ghost" onclick="closeFs()">取消</button>
+      <button class="primary" onclick="chooseFs()">✓ 選這個</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -764,7 +1024,9 @@ $("#theme").onclick = () => {
 };
 
 /* 對話視圖切換：泡泡 ⇄ 終端機（Claude Code 風轉錄）。偏好記 localStorage(xk_chatview) */
+let view = "bubble";
 function applyView(v) {
+  view = v;
   const tui = v === "tui";
   $("#thread").classList.toggle("tui", tui);
   const composer = document.getElementById("main-input");
@@ -773,14 +1035,51 @@ function applyView(v) {
   if (b) b.textContent = tui ? "💬 泡泡" : "⌗ 終端機";   // 顯示「切換到」的目標
 }
 applyView(localStorage.getItem("xk_chatview") || "bubble");
+
+/* 右側軌道：寬螢幕時一律顯示，內容依視圖不同——
+   泡泡視圖＝工作日誌（把工具/過程移出對話）；TUI 視圖＝工作階段 HUD（轉錄維持 ⎿ inline）。
+   窄螢幕兩種都退回原樣（泡泡 inline 過程、TUI 全寬轉錄）。 */
+const railMQ = window.matchMedia("(min-width: 1300px)");
+let wide = railMQ.matches;
+function railActive() { return wide; }                       // 軌道是否顯示
+function procInRail() { return wide && view === "bubble"; }  // 過程是否搬進軌道（僅泡泡）
+railMQ.addEventListener("change", (e) => { wide = e.matches; render(); });
+
 $("#view-toggle").onclick = () => {
   const v = $("#thread").classList.contains("tui") ? "bubble" : "tui";
   localStorage.setItem("xk_chatview", v);
   applyView(v);
+  render();        // 重新渲染：在 inline／軌道間搬移過程日誌
+  scrollDown();
 };
 
-/* Esc 關閉檔案預覽浮層 */
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeFilePreview(); });
+/* ── 背景任務（丟後台跑，進度顯示在 HUD/工作日誌軌道）──────── */
+let bgMode = localStorage.getItem("xk_bgmode") === "1"; // 送出時走背景任務而非前景串流
+const bgTasks = []; // [{id, pack, goal, status, phase, steps, startedAt, finishedAt, asst, session}]
+let bgTimer = null; // 每秒刷新 HUD 的經過時間
+
+/* 背景模式切換 */
+function applyBgMode() {
+  const b = $("#bg-toggle");
+  if (!b) return;
+  b.textContent = bgMode ? "⚡ 背景：開" : "⚡ 背景：關";
+  b.classList.toggle("on", bgMode);
+}
+$("#bg-toggle").onclick = () => {
+  bgMode = !bgMode;
+  localStorage.setItem("xk_bgmode", bgMode ? "1" : "0");
+  applyBgMode();
+};
+applyBgMode();
+
+/* Esc：優先關浮層（檔案預覽／資料夾 modal）；沒有浮層開著時，中斷前景回覆 */
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const preview = document.getElementById("file-preview");
+  const modalOpen = (preview && preview.innerHTML.trim()) || !$("#fs-modal").hidden;
+  if (modalOpen) { closeFilePreview(); closeFs(); return; }
+  if (streaming) stopStream();
+});
 
 /* IME 保護 */
 let composing = false;
@@ -788,14 +1087,8 @@ const inp = $("#input");
 inp.addEventListener("compositionstart", () => { composing = true; });
 inp.addEventListener("compositionend", () => { composing = false; });
 
-/* 專案空間 */
-renderSpaces($("#space"));
-$("#space").onchange = () => {
-  switchSpace($("#space").value);
-  newChat();
-  renderChats();
-  loadFiles();
-};
+/* 專案切換器（共用元件）：切換專案＝在該空間開新對話 */
+mountProjectSwitcher(() => { newChat(); renderChats(); loadFiles(); });
 
 /* 領域選單 */
 renderPackSelect($("#pack"));
@@ -889,12 +1182,17 @@ async function wbView(encPath, name) {
   if (!v) return;
   const url = "/v1/workspaces/file?ws=" + encodeURIComponent(curSpace) + "&path=" + encPath + "&token=" + encodeURIComponent(TOKEN);
   const IMG = /\.(png|jpe?g|gif|webp|svg)$/i, MD = /\.(md|markdown)$/i, JSONF = /\.json$/i, HTMLF = /\.html?$/i;
+  const DOC = /\.(docx|pptx|xlsx|odt|odp|ods|rtf|pdf)$/i; // Word/Excel/PPT/PDF：伺服器萃取成文字（?as=text）
 
   let body = "";
   if (IMG.test(name)) {
     body = `<img class="preview-img" src="${url}" alt="${esc(name)}">`;
   } else if (HTMLF.test(name)) {
     body = `<div class="empty">（HTML 檔案，請用「開新分頁」檢視）</div>`;
+  } else if (DOC.test(name)) {
+    const r = await fetch(url + "&as=text").catch(() => null);
+    if (!r || !r.ok) body = `<div class="empty">（無法預覽${r && r.status === 422 ? "：文件解析失敗，可下載原檔" : ""}）</div>`;
+    else body = `<pre class="preview-pre">${esc(await r.text())}</pre>`;
   } else {
     const txt = await fetch(url).then((r) => (r.ok ? r.text() : null)).catch(() => null);
     if (txt == null) body = `<div class="empty">（無法預覽）</div>`;
@@ -964,25 +1262,143 @@ const PHASE_TEXT = {
   "needs-input": "需要你回答",
 };
 
+/* 工具類別（決定 TUI 彩色行的顏色）：讀／改／執行／網路／其他 */
+function toolCat(name) {
+  if (["read", "ls", "glob", "grep", "read_image"].includes(name)) return "read";
+  if (["write", "edit"].includes(name)) return "edit";
+  if (name === "bash") return "run";
+  if (["web_search", "web_fetch", "http"].includes(name)) return "net";
+  return "meta";
+}
+
+/* 子 agent 的工具步驟（嵌套、無 diff）*/
+function subStepHtml(a) {
+  const state = a.isError ? "error" : a.done ? "done" : "running";
+  return `<div class="proc-step substep cat-${toolCat(a.name)} ${state}">
+    <span class="pmark">${a.done ? (a.isError ? "✗" : "⏺") : '<span class="spin">◐</span>'}</span>
+    <span class="ptext">${esc(toolText(a))}</span>
+  </div>`;
+}
+
+function stepHtml(a) {
+  const state = a.isError ? "error" : a.done ? "done" : "running";
+  // 子 agent 即時思考行（僅在 spawn_agent 仍進行中時顯示）
+  const think = a.name === "spawn_agent" && !a.done && a.subThinking
+    ? `<div class="sub-think">${esc(a.subThinking)}</div>`
+    : "";
+  const subBody = (a.sub && a.sub.length ? a.sub.map(subStepHtml).join("") : "") + think;
+  const sub = subBody ? `<div class="substeps">${subBody}</div>` : "";
+  return `<div class="proc-step cat-${toolCat(a.name)} ${state}">
+    <span class="pmark">${a.done ? (a.isError ? "✗" : "⏺") : '<span class="spin">◐</span>'}</span>
+    <span class="ptext">${esc(toolText(a))}</span>
+    ${a.diff ? diffHtml(a.diff) : ""}
+  </div>${sub}`;
+}
+
 function procHtml(m, idx) {
   if (!m.tools || !m.tools.length) return "";
   const open = m._procOpen;
-  const steps = m.tools
-    .map(
-      (a) =>
-        `<div class="proc-step ${a.isError ? "error" : a.done ? "done" : "running"}">
-          <span class="pmark">${a.done ? (a.isError ? "✗" : "⏺") : '<span class="spin">◐</span>'}</span>
-          <span class="ptext">${esc(toolText(a))}</span>
-          ${a.diff ? diffHtml(a.diff) : ""}
-        </div>`
-    )
-    .join("");
+  const steps = m.tools.map(stepHtml).join("");
   return `<div class="proc">
     <button class="proc-toggle" onclick="toggleProc(${idx})" aria-expanded="${open}" aria-controls="proc-${idx}">
       ${open ? "▾" : "▸"} 過程（${m.tools.length} 步）
     </button>
     <div id="proc-${idx}" class="proc-list" ${open ? "" : "hidden"}>${steps}</div>
   </div>`;
+}
+
+/* 右側軌道內容：彙整每一輪的工具步驟（步驟恆展開，按回合分組）。 */
+function renderRail() {
+  const bg = renderBgTasks();
+  const turns = messages
+    .map((m, i) => ({ m, i }))
+    .filter((x) => x.m.role !== "user" && x.m.tools && x.m.tools.length);
+  if (!turns.length) {
+    return bg
+      ? bg
+      : `<div class="wl-empty">工具活動會顯示在這裡<br><span>讀檔、編輯、執行指令、diff…</span></div>`;
+  }
+  const list = turns
+    .map(({ m }, n) =>
+      `<div class="wl-turn">
+        <div class="wl-turn-label">回合 ${n + 1}</div>
+        ${m.tools.map(stepHtml).join("")}
+      </div>`
+    )
+    .join("");
+  return list + bg;
+}
+
+/* 背景任務區塊（HUD 與工作日誌軌道共用）：即時狀態＋步數＋經過時間＋中斷鈕 */
+function fmtElapsed(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + "s";
+  return Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0") + "s";
+}
+function bgPhaseText(t) {
+  const map = { starting: "啟動中", acting: "動作中", thinking: "思考中", running: "執行中", queued: "排隊中", verifying: "驗收中", fixing: "修正中", "needs-input": "待回答", done: "完成", error: "錯誤", cancelled: "已取消", interrupted: "中斷" };
+  return map[t.phase] || map[t.status] || t.status;
+}
+function renderBgTasks() {
+  if (!bgTasks.length) return "";
+  const rows = bgTasks.slice(0, 6).map((t) => {
+    const live = t.status === "running" || t.status === "queued";
+    const el = t.startedAt ? fmtElapsed((t.finishedAt || Date.now()) - t.startedAt) : "";
+    const icon = t.status === "done" ? "✓" : t.status === "error" ? "✗" : t.status === "cancelled" ? "⊘" : '<span class="spin">◐</span>';
+    return `<div class="bg-task ${esc(t.status)}">
+      <div class="bg-task-top">
+        <span class="bg-ic">${icon}</span>
+        <span class="bg-goal" title="${esc(t.goal)}">${esc(t.goal.slice(0, 48))}</span>
+        ${live ? `<button class="bg-cancel" onclick="cancelBg('${esc(t.id)}')" title="中斷" aria-label="中斷任務">✕</button>` : ""}
+      </div>
+      <div class="bg-task-meta">${esc(packLabel(t.pack))} · ${esc(bgPhaseText(t))} · ${t.steps} 步${el ? " · " + el : ""}</div>
+    </div>`;
+  }).join("");
+  return `<div class="hud-divider"></div><div class="hud-files-head">背景任務（${bgTasks.length}）</div>${rows}`;
+}
+
+/* 路徑縮短：超過兩層只留「…/上層/檔名」，保住檔名可見。 */
+function shortPath(p) {
+  const seg = String(p).split("/").filter(Boolean);
+  return seg.length > 2 ? "…/" + seg.slice(-2).join("/") : p;
+}
+
+/* TUI 軌道內容：工作階段 HUD（pack／回合／工具數 + 本次動過的檔案，類 git status）。 */
+function renderHud() {
+  const turns = messages.filter((m) => m.role === "user").length;
+  let toolCount = 0;
+  const files = new Map(); // path -> "changed" | "read"（改動優先）
+  const tally = (a) => {
+    toolCount++;
+    const p = a.args && a.args.path;
+    if (!p) return;
+    if (a.name === "edit" || a.name === "write") files.set(p, "changed");
+    else if (a.name === "read" && !files.has(p)) files.set(p, "read");
+  };
+  for (const m of messages) {
+    if (!m.tools) continue;
+    for (const a of m.tools) {
+      tally(a);
+      if (a.sub) a.sub.forEach(tally); // 子 agent 的工具一併計入
+    }
+  }
+  const pack = (typeof packLabel === "function" ? packLabel($("#pack").value) : $("#pack").value) || "—";
+  const rows = `
+    <div class="hud-row"><span class="hud-k">pack</span><span class="hud-v">${esc(pack)}</span></div>
+    <div class="hud-row"><span class="hud-k">回合</span><span class="hud-v">${turns}</span></div>
+    <div class="hud-row"><span class="hud-k">工具</span><span class="hud-v">${toolCount}</span></div>`;
+  const fileList = files.size
+    ? [...files]
+        .map(([p, kind]) =>
+          `<div class="hud-file ${kind}" title="${esc(p)}">${kind === "changed" ? "✎" : "·"} ${esc(shortPath(p))}</div>`
+        )
+        .join("")
+    : `<div class="hud-empty">尚無檔案動作</div>`;
+  return `<div class="hud-sec">${rows}</div>
+    <div class="hud-divider"></div>
+    <div class="hud-files-head">FILES TOUCHED（${files.size}）</div>
+    ${fileList}
+    ${renderBgTasks()}`;
 }
 
 function msgHtml(m, idx) {
@@ -999,7 +1415,7 @@ function msgHtml(m, idx) {
     <div class="avatar" aria-hidden="true">${isUser ? "🙂" : "🤖"}</div>
     <div class="bubble">
       <div class="who" aria-hidden="true">${isUser ? "你" : "xitto"}</div>
-      ${!isUser ? procHtml(m, idx) : ""}
+      ${!isUser && !procInRail() ? procHtml(m, idx) : ""}
       ${phase}
       <div class="body ${isUser ? "" : "md"}">${bodyHtml}${cursor}</div>
     </div>
@@ -1015,9 +1431,19 @@ function render() {
         <p class="welcome-sub">它會記得整段上下文，逐步和你協作。<br>想「交辦一件明確的事、做完給成品」？改用 <a href="/">🪄 許願台</a>。</p>
       </div>
     </div>`;
-    return;
+  } else {
+    $("#thread").innerHTML = `<div class="thread-wrap">${messages.map((m, i) => msgHtml(m, i)).join("")}</div>`;
   }
-  $("#thread").innerHTML = `<div class="thread-wrap">${messages.map((m, i) => msgHtml(m, i)).join("")}</div>`;
+  // 右側軌道：泡泡＝工作日誌，TUI＝工作階段 HUD
+  const on = railActive();
+  document.querySelector(".app").classList.toggle("rail-on", on);
+  const rail = $("#worklog");
+  if (on && rail) {
+    const tui = view === "tui";
+    rail.classList.toggle("tui", tui);
+    $("#worklog-head").textContent = tui ? "◈ 工作階段" : "⚙ 工作日誌";
+    $("#worklog-body").innerHTML = tui ? renderHud() : renderRail();
+  }
 }
 
 function toggleProc(idx) {
@@ -1030,9 +1456,14 @@ function toggleProc(idx) {
 function scrollDown() {
   const t = $("#thread");
   t.scrollTop = t.scrollHeight;
+  const wl = $("#worklog-body");
+  if (wl) wl.scrollTop = wl.scrollHeight;
 }
 
-/* ── 送出訊息 + SSE 串流 ───────────────────────────────── */
+/* SSE 讀取：解析 data: 行、逐事件回呼（前景串流與背景任務事件流共用）*/
+/* readSSE 已移至共用 app.js（許願台亦用） */
+
+/* ── 送出訊息 ──────────────────────────────────────────── */
 async function send() {
   const text = $("#input").value.trim();
   if (!text || streaming) return;
@@ -1044,18 +1475,14 @@ async function send() {
   messages.push(asst);
   render();
   scrollDown();
-  setStreaming(true);
 
+  if (bgMode) { sendBackground(text, asst); return; } // 背景：不鎖輸入框，可連續派多個
+
+  // 前景串流
+  setStreaming(true);
   abortCtl = new AbortController();
   const pack = $("#pack").value;
-  const body = JSON.stringify({
-    pack,
-    mode: "turn",
-    input: text,
-    sessionId: sessionId || undefined,
-    workspace: curSpace,
-  });
-
+  const body = JSON.stringify({ pack, mode: "turn", input: text, sessionId: sessionId || undefined, workspace: curSpace });
   try {
     const resp = await api("/v1/stream", { method: "POST", body, signal: abortCtl.signal });
     if (!resp.ok || !resp.body) {
@@ -1065,29 +1492,7 @@ async function send() {
       setStreaming(false);
       return;
     }
-
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) >= 0) {
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        if (!chunk.startsWith("data: ")) continue;
-        let ev;
-        try {
-          ev = JSON.parse(chunk.slice(6));
-        } catch {
-          continue;
-        }
-        handleEvent(ev, asst);
-      }
-    }
+    await readSSE(resp, (ev) => handleEvent(ev, asst));
   } catch (e) {
     if (e.name !== "AbortError") {
       asst.phase = "";
@@ -1095,11 +1500,88 @@ async function send() {
       render();
     }
   }
-
   setStreaming(false);
   asst.phase = "";
   finalize(asst, text);
 }
+
+/* ── 背景任務：派到 /v1/tasks，訂閱事件流，進度進 HUD ───────── */
+async function sendBackground(text, asst) {
+  const pack = $("#pack").value;
+  let resp, j;
+  try {
+    resp = await api("/v1/tasks", { method: "POST", body: JSON.stringify({ pack, mode: "turn", input: text, sessionId: sessionId || undefined, workspace: curSpace }) });
+    j = await resp.json().catch(() => ({}));
+  } catch (e) {
+    asst.phase = ""; asst.text = "⚠ 背景任務建立失敗：" + esc(e.message); render(); return;
+  }
+  if (!resp.ok || !j.taskId) {
+    asst.phase = ""; asst.text = "⚠ 無法建立背景任務（" + resp.status + "）"; render(); return;
+  }
+  const task = { id: j.taskId, pack: j.pack || pack, goal: text, status: "running", phase: "starting", steps: 0, startedAt: Date.now(), finishedAt: null, asst, session: sessionId };
+  bgTasks.unshift(task);
+  render();
+  startBgTicker();
+  pumpBgEvents(task); // 不 await：讓輸入框立刻可用
+}
+
+async function pumpBgEvents(task) {
+  try {
+    const resp = await api("/v1/tasks/" + task.id + "/events");
+    if (!resp.ok || !resp.body) { task.status = "error"; updateHud(); return; }
+    await readSSE(resp, (ev) => { updateBgProgress(task, ev); handleEvent(ev, task.asst); });
+  } catch (e) {
+    task.status = "error"; task.error = e?.message || String(e);
+  }
+  if (task.status === "running") task.status = "done"; // 串流關閉但沒收到 end
+  task.finishedAt = task.finishedAt || Date.now();
+  task.asst.phase = "";
+  // 落地：仍在同一對話（asst 還在 messages）才寫入轉錄、採用 sessionId
+  if (messages.includes(task.asst)) {
+    if (task.session) sessionId = task.session;
+    finalize(task.asst, task.goal);
+  }
+  updateHud();
+}
+
+/* 背景任務進度（給 HUD），不碰前景 sessionId（避免切換對話時被污染）*/
+function updateBgProgress(task, ev) {
+  switch (ev.type) {
+    case "status": task.status = ev.status; break;
+    case "tool": task.steps++; task.phase = "acting"; break;
+    case "sub_tool": task.steps++; break;
+    case "text": task.phase = "thinking"; break;
+    case "round": task.phase = "thinking"; break;
+    case "phase": task.phase = ev.phase; break;
+    case "needs_input": task.phase = "needs-input"; break;
+    case "end":
+      task.status = ev.status || "done";
+      task.phase = task.status;
+      task.finishedAt = Date.now();
+      if (ev.result?.sessionId) task.session = ev.result.sessionId;
+      break;
+  }
+}
+
+function startBgTicker() {
+  if (bgTimer) return;
+  bgTimer = setInterval(() => {
+    if (!bgTasks.some((t) => t.status === "running" || t.status === "queued")) { clearInterval(bgTimer); bgTimer = null; return; }
+    updateHud(); // 只刷新軌道（更新經過時間），不重繪對話避免捲動跳動
+  }, 1000);
+}
+
+/* 只更新右側軌道內容（不動 thread）*/
+function updateHud() {
+  if (!railActive()) return;
+  const body = $("#worklog-body");
+  if (body) body.innerHTML = view === "tui" ? renderHud() : renderRail();
+}
+
+function cancelBg(id) {
+  api("/v1/tasks/" + id + "/cancel", { method: "POST" }).catch(() => {});
+}
+window.cancelBg = cancelBg; // 給 HUD 裡的 onclick 用
 
 function handleEvent(ev, asst) {
   switch (ev.type) {
@@ -1120,6 +1602,31 @@ function handleEvent(ev, asst) {
       }
       break;
     }
+    case "sub_tool": {
+      // 子 agent 的工具呼叫：掛在當前進行中的 spawn_agent 步驟底下
+      const parent = [...asst.tools].reverse().find((x) => x.name === "spawn_agent" && !x.done);
+      if (parent) {
+        (parent.sub || (parent.sub = [])).push({ name: ev.name, args: ev.args, done: false });
+        parent.subThinking = ""; // 進入工具動作，清掉思考行
+      }
+      break;
+    }
+    case "sub_think": {
+      // 子 agent 的即時思考（串流文字片段）
+      const parent = [...asst.tools].reverse().find((x) => x.name === "spawn_agent" && !x.done);
+      if (parent) parent.subThinking = ev.text;
+      break;
+    }
+    case "sub_tool_end": {
+      const parent = [...asst.tools].reverse().find((x) => x.name === "spawn_agent" && !x.done);
+      const s = parent && parent.sub && [...parent.sub].reverse().find((x) => x.name === ev.name && !x.done);
+      if (s) { s.done = true; s.isError = ev.isError; }
+      break;
+    }
+    case "usage":
+      // 累計 token（前景串流即時顯示在狀態列；背景任務 streaming=false，updateStreamStatus 會自動略過）
+      streamTokens += (ev.input || 0) + (ev.output || 0);
+      break;
     case "round":
       asst.phase = "thinking";
       break;
@@ -1131,6 +1638,9 @@ function handleEvent(ev, asst) {
       if (ev.sessionId) sessionId = ev.sessionId;
       if (!asst.text && ev.text) asst.text = ev.text;
       break;
+    case "end": // 背景任務結束：補文字即可，sessionId 由 pumpBgEvents 控管（避免污染前景）
+      if (!asst.text && ev.result?.text) asst.text = ev.result.text;
+      break;
     case "error":
       asst.phase = "";
       asst.text = (asst.text || "") + "\n⚠ " + (ev.error || "發生錯誤");
@@ -1140,6 +1650,7 @@ function handleEvent(ev, asst) {
     render();
     scrollDown();
   }
+  if (streaming) updateStreamStatus(); // 階段一變即時更新狀態列（不必等下一秒 tick）
 }
 
 /* 串流結束：落地 */
@@ -1162,10 +1673,42 @@ function stopStream() {
   setStreaming(false);
 }
 
+let streamStartedAt = null;
+let streamTimer = null;
+let streamTokens = 0; // 本輪累計 token（input+output，由 usage 事件累加）
+
 function setStreaming(on) {
   streaming = on;
   $("#send-btn").style.display = on ? "none" : "";
-  $("#status-hint").textContent = on ? "回覆中…" : "";
+  $("#stop-btn").style.display = on ? "" : "none";
+  if (on) {
+    streamStartedAt = Date.now();
+    streamTokens = 0;
+    updateStreamStatus();
+    if (!streamTimer) streamTimer = setInterval(updateStreamStatus, 1000);
+  } else {
+    if (streamTimer) { clearInterval(streamTimer); streamTimer = null; }
+    streamStartedAt = null;
+    $("#status-hint").innerHTML = "";
+  }
+}
+
+/* token 數壓縮顯示：1234 → 1.2k */
+function fmtTokens(n) {
+  if (n < 1000) return String(n);
+  return (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, "") + "k";
+}
+
+/* 前景串流狀態列：跳動點 + 當前階段 + 經過時間 + 累計 token + Esc 中斷提示（每秒刷新）*/
+function updateStreamStatus() {
+  if (!streaming || !streamStartedAt) return;
+  const last = messages[messages.length - 1];
+  const ph = last && last.phase ? (PHASE_TEXT[last.phase] || last.phase) : "回覆中";
+  const el = fmtElapsed(Date.now() - streamStartedAt);
+  const tok = streamTokens ? ` · ↑ ${fmtTokens(streamTokens)} tokens` : "";
+  $("#status-hint").innerHTML =
+    `<span class="live-dot" aria-hidden="true"></span>${esc(ph.replace(/…$/, ""))} · ${el}${tok}` +
+    ` · <span class="esc-hint">Esc 中斷</span>`;
 }
 
 /* ── 輸入框控制 ─────────────────────────────────────────── */
@@ -1184,6 +1727,7 @@ inp.addEventListener("keydown", (e) => {
 });
 
 $("#send-btn").onclick = send;
+$("#stop-btn").onclick = stopStream;
 
 /* ── 啟動 ──────────────────────────────────────────────── */
 renderChats();
