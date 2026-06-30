@@ -26,12 +26,12 @@ const preview = (result) => {
  * @param {() => string} o.getApiKey
  * @param {boolean} [o.sandbox]   初始沙箱狀態（預設關）
  */
-export function runCli({ pack, model, getApiKey, sandbox = false, resume = null, auto = false, extraTools = [], onExit = null }) {
+export function runCli({ pack, model, getApiKey, resolveModel, sandbox = false, resume = null, auto = false, extraTools = [], onExit = null }) {
   let sandboxOn = !!sandbox;
   let autoApprove = !!auto;
   let planMode = false;
   const kernel = createKernel(pack, {
-    model, getApiKey, extraTools,
+    model, getApiKey, resolveModel, extraTools,
     sandbox: { enabled: sandboxOn },        // 提供策略（blockNetwork/allowWritePrefixes）
     getSandbox: () => sandboxOn,            // on/off 由 CLI 即時切換
     getPlanMode: () => planMode,            // 計劃模式：守衛擋 mutating 工具

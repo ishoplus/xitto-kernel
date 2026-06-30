@@ -53,6 +53,25 @@ test('delegate：找不到 agent 類型 → 友善錯誤', async () => {
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
+test('delegate：per-agent model（type.model + config.resolveModel 生效）', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dg4-'));
+  try {
+    const dir = join(cwd, '.xitto-kernel', 'coding', 'agents');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'cheapie.md'), '---\nname: cheapie\ndescription: 用便宜模型查\nmodel: cheap\ntools: read\n---\n你是便宜調查員。');
+    let usedModel = null;
+    const capture = (m) => {
+      usedModel = m.id;
+      const msg = { role: 'assistant', content: [{ type: 'text', text: 'ok' }], usage: { input: 1, output: 1 } };
+      return { async *[Symbol.asyncIterator]() { yield { type: 'done', partial: msg }; }, result: async () => msg };
+    };
+    const resolveModel = (id) => (id === 'cheap' ? { ...FAKE_MODEL, id: 'cheap' } : null);
+    const k = createKernel(createCodingPack({ cwd }), { cwd, model: FAKE_MODEL, getApiKey: () => 'k', streamFn: capture, resolveModel });
+    await k.runTool('delegate', { agentType: 'cheapie', task: '查點東西' });
+    assert.equal(usedModel, 'cheap', 'delegate 應用 type 指定的 model（經 resolveModel）');
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('delegate 註冊存在；spawn 子 agent 工具集不含 delegate（防遞迴）', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'dg3-'));
   try {

@@ -1636,7 +1636,7 @@ function handleEvent(ev, asst) {
     }
     case "sub_tool": {
       // 子 agent 的工具呼叫：掛在當前進行中的 spawn_agent 步驟底下
-      const parent = [...asst.tools].reverse().find((x) => x.name === "spawn_agent" && !x.done);
+      const parent = [...asst.tools].reverse().find((x) => !x.done);
       if (parent) {
         (parent.sub || (parent.sub = [])).push({ name: ev.name, args: ev.args, done: false });
         parent.subThinking = ""; // 進入工具動作，清掉思考行
@@ -1645,12 +1645,12 @@ function handleEvent(ev, asst) {
     }
     case "sub_think": {
       // 子 agent 的即時思考（串流文字片段）
-      const parent = [...asst.tools].reverse().find((x) => x.name === "spawn_agent" && !x.done);
+      const parent = [...asst.tools].reverse().find((x) => !x.done);
       if (parent) parent.subThinking = ev.text;
       break;
     }
     case "sub_tool_end": {
-      const parent = [...asst.tools].reverse().find((x) => x.name === "spawn_agent" && !x.done);
+      const parent = [...asst.tools].reverse().find((x) => !x.done);
       const s = parent && parent.sub && [...parent.sub].reverse().find((x) => x.name === ev.name && !x.done);
       if (s) { s.done = true; s.isError = ev.isError; }
       break;

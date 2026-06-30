@@ -271,7 +271,7 @@ export function createKernel(pack, config = {}) {
       agentType: { type: 'string', description: 'agent 類型名（見「可用的 agent 類型」）' },
       task: { type: 'string', description: '要委派的具體子任務（自足、可獨立完成）' },
     }, required: ['agentType', 'task'] },
-    execute: async (_id, { agentType, task }) => {
+    execute: async (_id, { agentType, task }, _signal, onPartial) => {
       const type = agents.get(agentType);
       if (!type) return dTxt({ error: '找不到 agent 類型', agentType, available: agents.list().map((a) => a.name) });
       const model = (type.model && typeof config.resolveModel === 'function') ? (config.resolveModel(type.model) || config.model) : config.model;
@@ -281,6 +281,11 @@ export function createKernel(pack, config = {}) {
           toolNames: type.tools && type.tools.length ? type.tools : undefined,
           model,
           skipVerify: true, // 子委派不跑 pack.verify（驗證留給主 agent / orchestrator）
+          // 把委派子 agent 的工具活動即時轉發為 sub_tool（UI 嵌套在 delegate 步驟下，與 spawn_agent 一致）
+          onEvent: typeof onPartial === 'function' ? (ev) => {
+            if (ev.type === 'tool_execution_start') onPartial({ kind: 'subagent', phase: 'start', name: ev.toolName, args: ev.args });
+            else if (ev.type === 'tool_execution_end') onPartial({ kind: 'subagent', phase: 'end', name: ev.toolName, isError: !!ev.isError });
+          } : undefined,
         });
         return dTxt({ delegatedTo: type.name, aborted: !!r.aborted, text: r.text });
       } catch (e) { return dTxt({ error: e?.message || String(e), agentType }); }

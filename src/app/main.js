@@ -63,14 +63,14 @@ export async function main(argv = process.argv.slice(2)) {
   const make = PACKS[opts.pack];
   if (!make) { console.error(`未知 pack「${opts.pack}」。可用：${Object.keys(PACKS).join(', ')}`); process.exit(1); }
 
-  let model, getApiKey;
-  try { ({ model, getApiKey } = loadModel(opts.model)); }
+  let model, getApiKey, resolveModel;
+  try { ({ model, getApiKey, resolveModel } = loadModel(opts.model)); }
   catch (err) {
     // 沒設定 + 真實終端：直接帶進設定導引，完成後續跑；非 TTY 才只給提示
     if (err.noConfig && process.stdin.isTTY) {
       console.log(cyan('首次使用，沒找到 providers.json —— 進入設定導引。') + gray('（按 Ctrl+C 取消）'));
       await runInit([]);
-      try { ({ model, getApiKey } = loadModel(opts.model)); }
+      try { ({ model, getApiKey, resolveModel } = loadModel(opts.model)); }
       catch (err2) {
         console.error(red(err2.message));
         console.error(gray(err2.noConfig ? '（未完成設定，已取消）' : '（設定好像缺東西，可編輯該檔或重跑 `xitto-kernel init`）'));
@@ -98,7 +98,7 @@ export async function main(argv = process.argv.slice(2)) {
   // --goal "..."：headless 自主循環（給目標、自己做到完成）後退出，不進互動 CLI
   if (opts.goal) {
     const kernel = createKernel(make({ cwd }), {
-      model, getApiKey, extraTools: mcp.tools,
+      model, getApiKey, resolveModel, extraTools: mcp.tools,
       sandbox: { enabled: opts.sandbox }, getSandbox: () => opts.sandbox,
       confirm: opts.yes ? (async () => 'yes') : undefined, // headless：--yes 才自動核准 mutating
     });
@@ -126,13 +126,13 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (opts.tui && process.stdin.isTTY) {
-    runTui({ pack: make({ cwd }), model, getApiKey, sandbox: opts.sandbox, resume: opts.resume, cwd });
+    runTui({ pack: make({ cwd }), model, getApiKey, resolveModel, sandbox: opts.sandbox, resume: opts.resume, cwd });
     return;
   }
   if (opts.tui) console.error(gray('（--tui 需要真實終端，退回一般 CLI）'));
 
   runCli({
-    pack: make({ cwd }), model, getApiKey,
+    pack: make({ cwd }), model, getApiKey, resolveModel,
     sandbox: opts.sandbox, resume: opts.resume, auto: opts.yes,
     extraTools: mcp.tools, onExit: mcp.close,
   });
@@ -165,8 +165,8 @@ async function runServe(args) {
     else if (a === '--concurrency') o.concurrency = Number(args[++i]);
     else if (a === '--model') o.modelId = args[++i];
   }
-  let model, getApiKey;
-  try { ({ model, getApiKey } = loadModel(o.modelId)); }
+  let model, getApiKey, resolveModel;
+  try { ({ model, getApiKey, resolveModel } = loadModel(o.modelId)); }
   catch (err) {
     console.error(red(err.message));
     if (err.noConfig) {
@@ -176,7 +176,7 @@ async function runServe(args) {
     process.exit(1);
   }
   const { startServer } = await import('./server.js');
-  startServer({ ...o, model, getApiKey });
+  startServer({ ...o, model, getApiKey, resolveModel });
 }
 
 function printServeHelp() {
@@ -218,8 +218,8 @@ async function runMap(args) {
 
   const make = PACKS[o.pack];
   if (!make) { console.error(red(`未知 pack「${o.pack}」。可用：${Object.keys(PACKS).join(', ')}`)); process.exit(1); }
-  let model, getApiKey;
-  try { ({ model, getApiKey } = loadModel(o.model)); }
+  let model, getApiKey, resolveModel;
+  try { ({ model, getApiKey, resolveModel } = loadModel(o.model)); }
   catch (err) {
     console.error(red(err.message));
     if (err.noConfig) { console.error('\n' + cyan('首次使用？') + ' 先跑：' + green('  xitto-kernel init')); }
@@ -230,7 +230,7 @@ async function runMap(args) {
   catch (err) { console.error(red(err.message)); process.exit(1); }
 
   const kernel = createKernel(make({ cwd }), {
-    model, getApiKey,
+    model, getApiKey, resolveModel,
     sandbox: { enabled: o.sandbox }, getSandbox: () => o.sandbox,
     confirm: async () => 'yes', // 批次非互動：自動核准 mutating；安全靠 verify 通過才保留、未通過回滾（+ 可選沙箱）
   });

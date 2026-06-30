@@ -198,6 +198,14 @@ export const mapEvent = (ev) => {
     if (p.phase === 'think') return { type: 'sub_think', text: p.text || '' };
     return { type: 'sub_tool', name: p.name, args: p.args };
   }
+  // spawn_agents 平行 map 的逐項進度 → 嵌套在 spawn_agents 步驟下顯示
+  if (ev.type === 'tool_execution_update' && ev.partialResult?.kind === 'mapagent') {
+    const p = ev.partialResult;
+    const name = `項目 ${p.index + 1}/${p.total}`;
+    return p.phase === 'item_done'
+      ? { type: 'sub_tool_end', name, isError: !!p.isError }
+      : { type: 'sub_tool', name, args: { task: p.task } };
+  }
   if (ev.type === 'message_update' && ev.assistantMessageEvent?.type === 'text_delta') return { type: 'text', delta: ev.assistantMessageEvent.delta };
   if (ev.type === 'round') return { type: 'round', round: ev.round, maxRounds: ev.maxRounds };
   if (ev.type === 'verify_start') return { type: 'phase', phase: 'verifying' };
@@ -358,7 +366,7 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
  * @param {number} [o.concurrency]  背景任務同時數（預設 2）
  * @returns {import('node:http').Server}
  */
-export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false } = {}) {
+export function createServerApp({ model, getApiKey, resolveModel, token, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false } = {}) {
   const sessions = new Map(); // sessionId -> { history }
   mkdirSync(baseDir, { recursive: true });
 
@@ -404,7 +412,7 @@ export function createServerApp({ model, getApiKey, token, baseDir = '.xitto-ser
     // history 仍綁 sessionId（每個成品獨立對話：無 sessionId → 全新,不續接,避免 context 暴脹/混淆）
     const sessionId = spec.sessionId || newId();
     const sess = sessions.get(sessionId) || { history: [] };
-    const kernel = createKernel(make({ cwd: workdir }), { cwd: workdir, model, getApiKey, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes', autoExtractMemory: true, ...(ask ? { askUser: ask } : {}) });
+    const kernel = createKernel(make({ cwd: workdir }), { cwd: workdir, model, getApiKey, resolveModel, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes', autoExtractMemory: true, ...(ask ? { askUser: ask } : {}) });
     const usage = { input: 0, output: 0 };
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
     if (spec.mode === 'goal') {
@@ -636,8 +644,8 @@ export function startServer(opts = {}) {
   const sandbox = opts.sandbox ?? (process.env.XITTO_SERVER_SANDBOX !== 'off');
   const concurrency = Number(opts.concurrency ?? process.env.XITTO_SERVER_CONCURRENCY ?? 2);
   const local = opts.local ?? (process.env.XITTO_SERVER_LOCAL === '1' || process.env.XITTO_SERVER_LOCAL === 'true');
-  const { model, getApiKey } = (opts.model && opts.getApiKey) ? opts : loadModel(opts.modelId ?? process.env.XITTO_MODEL);
-  const server = createServerApp({ model, getApiKey, token, sandbox, concurrency, local });
+  const { model, getApiKey, resolveModel } = (opts.model && opts.getApiKey) ? opts : loadModel(opts.modelId ?? process.env.XITTO_MODEL);
+  const server = createServerApp({ model, getApiKey, resolveModel, token, sandbox, concurrency, local });
   server.listen(port, () => {
     console.log(`🪄 許願台：http://localhost:${port}/  （瀏覽器打開即用——說出目標、交付成品）`);
     console.log(`xitto-kernel server · model ${model.id} · 沙箱 ${sandbox ? '開' : '關'} · 背景並發 ${concurrency}${local ? ' · 本地模式(顯示檔案位置)' : ''}`);
