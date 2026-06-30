@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.19
+
+- **docgen 加 DOCX 產出**：`gen_doc` 的 path 以 `.docx` 結尾 → HTML 經 `pandoc`（優先）或 `soffice` 轉成 Word（零 npm 相依、中文支援）；缺工具時退回同名 HTML 並提示。`generateDoc` 一般化成「依副檔名 dispatch（pdf / docx / html）」，加格式只需補一條 `FORMATS` 規格。實測 pandoc 產出含中文的有效 `.docx`。
+- 測試 262/262。
+
 ## 0.9.18
 
 - **新增 `docgen` pack：產出可交付文件（PDF / HTML，中文支援）**。把使用者收到的東西從「草稿 `.md`」變「可直接交付的成品」；與 `doc-extract` 對稱（那個讀 Office/PDF，這個產文件）。
