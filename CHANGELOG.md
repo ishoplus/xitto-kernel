@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.12
+
+- **新增 `spawn_agents` 平行 map 原語**：對 N 個項目同時各派一個唯讀子 agent 做聚焦調查，回傳每項結論——解鎖「對很多項目做同一種需要理解的處理」（掃多檔/模組/來源），序列太慢時。
+  - 有界並發（一次最多 16 項、同時 4 個在跑）；整批韌性（個別子 agent 不順仍回滿 N 個結果、不整批崩）；超量截斷並回報。
+  - 抽出 `runSub` 與 `spawn_agent` 共用；子 agent 改用 kernel 注入的 `streamFn`（與主 provider 一致、可測，無則 fallback pi-ai）；子 agent 工具集排除 `spawn_agent`/`spawn_agents`（防遞迴/爆量）。
+  - 新增 `test/map-agents.test.js`（平行/順序/截斷/韌性/錯誤）。
+- 測試 237/237。
+
 ## 0.9.11
 
 - **驗證裁決升級成「完成定義（DoD）」一級契約**：原本 `pack.verify` 跑完即使失敗，`runTurn` 仍回 `{text,…}`，呼叫端無從得知成品是否通過驗收——信任是「成品能否被自主採用」的綁定約束，這塊不該缺。
