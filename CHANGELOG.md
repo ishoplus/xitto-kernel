@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.10
+
+- **新增 `xitto-kernel serve` 子命令**：全域安裝者可直接 `xitto-kernel serve` 啟動 Web 前端（🪄 許願台 + 對話頁 `/chat`），不必 clone repo。
+  - 旗標：`--port`/`-p`、`--local`（瀏覽/選真實資料夾、就地改檔）、`--token`、`--no-sandbox`（預設開）、`--concurrency`、`--model`；`serve --help` 有說明。沿用 `providers.json` 載 model，未設定時引導 `xitto-kernel init`。
+  - `startServer(opts)` 改為可接受參數（向後相容原本的 env-only 啟動）；web 靜態檔走模組相對路徑，全域安裝即可用。
+  - README（en + zh-TW）快速開始補上 `xitto-kernel serve`（原 `npm run serve` 改標示為 repo 開發用）。
+- 測試 229/229。
+
 ## 0.9.9
 
 - **新增 `uiux`（UI/UX 設計與前端介面）pack**：可存取、響應式 UI 的設計 agent；`verify` 接真 a11y 工具並行為感知化（抓壞引用/裸佔位符、改既有檔守執行期契約），附 EvalSuite 品質基準。

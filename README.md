@@ -104,6 +104,11 @@ In practice: given "create a config file but I haven't decided the filename/cont
 
 **🪄 Wishboard web UI (for non-technical users: open a browser and go)**
 ```bash
+xitto-kernel serve                         # global install → open http://localhost:8787/ (also serves the /chat page)
+xitto-kernel serve --port 9000 --local --token secret   # pick a real folder & edit in place; set a token
+```
+`xitto-kernel serve` flags: `--port` `--local` `--token` `--no-sandbox` `--concurrency` `--model` (run `xitto-kernel serve --help`). Developing this repo instead? Use the npm scripts:
+```bash
 XITTO_SERVER_TOKEN=secret npm run serve   # then open http://localhost:8787/ in a browser
 # Local in-place mode (pick a real folder, edit files in place, sandbox off):
 npm run serve:local                        # cross-platform (Windows/macOS/Linux); = LOCAL=1 SANDBOX=off, token defaults to secret (override with XITTO_SERVER_TOKEN)

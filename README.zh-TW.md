@@ -104,6 +104,11 @@ const o = await kernel.runOutcome('建立 greet.js 並寫個範例驗證');
 
 **🪄 許願台網頁（給非技術使用者：瀏覽器打開就用）**
 ```bash
+xitto-kernel serve                         # 全域安裝後直接開 → http://localhost:8787/（同時供應對話頁 /chat）
+xitto-kernel serve --port 9000 --local --token secret   # 選真實資料夾就地改檔、設 token
+```
+`xitto-kernel serve` 旗標：`--port` `--local` `--token` `--no-sandbox` `--concurrency` `--model`（`xitto-kernel serve --help`）。在本 repo 開發則用 npm 腳本：
+```bash
 XITTO_SERVER_TOKEN=secret npm run serve   # 然後瀏覽器開 http://localhost:8787/
 # 本地就地模式（可選真實資料夾、就地改檔，沙箱關）：
 npm run serve:local                        # 跨平台(Windows/macOS/Linux);= LOCAL=1 SANDBOX=off,token 預設 secret(可用 XITTO_SERVER_TOKEN 覆寫)
