@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.24
+
+- **work log 全中文化**：補齊所有工具的人話標籤——新工具 `gen_doc`（產生文件），以及一批既有但漏標的工具（notes 增/列/讀/搜尋、git 狀態/diff/log/commit、bash 後台三件、SQL 查/寫/表結構、`memory_list`、`playbook_remove`）。對話頁/許願台的工作日誌不再出現生英文工具名，42 個工具全數有 `TOOL_ZH` 標籤；標籤皆取自各工具自身 `label`，未自編。
+- 接縫健檢收尾：本版兩處修正即健檢找出的缺口（docgen 路由已於 0.9.23 補、工具標籤於本版補齊）。
+- 測試 267/267。
+
 ## 0.9.23
 
 - **修：`docgen` 納入自動分流**。docgen 之前已註冊為 pack，但不在 router 內（ROUTE_GUIDE / LLM 分類器列舉 / heuristicPack 都漏了），導致許願台「auto」模式打「做一份 PDF/Word/報告」不會被導到 docgen。三處補齊；heuristic 插在 uiux 後、coding 前，不搶 deep-research。
