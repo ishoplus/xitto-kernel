@@ -27,7 +27,7 @@ export function createAgents(dir) {
           const sp = body.trim();
           if (!name || !sp) continue;
           const tools = fm.tools ? String(fm.tools).split(',').map((t) => t.trim()).filter(Boolean) : null;
-          out.push({ name, description: (fm.description || '').trim(), tools, systemPrompt: sp });
+          out.push({ name, description: (fm.description || '').trim(), tools, model: (fm.model || '').trim() || null, systemPrompt: sp });
         } catch { /* 壞檔略 */ }
       }
     }

@@ -228,6 +228,7 @@ const TOOL_ZH = {
   todo_write: "規劃步驟",
   spawn_agent: "派出子助手",
   spawn_agents: "派出子助手群",
+  delegate: "委派子助手",
   ask_user: "來問你",
 };
 

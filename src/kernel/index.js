@@ -260,7 +260,33 @@ export function createKernel(pack, config = {}) {
   };
   const spawnTool = createSpawnTool(subDeps);
   const mapTool = createMapTool(subDeps);
-  const tools = [...baseTools, spawnTool, mapTool];
+  // delegate：把聚焦子任務委派給某 agent 類型「可寫」執行——路由到 runTurn（重用守衛/沙箱/undo/verify），
+  // 用該類型的 prompt + 工具白名單（含可寫）+ 可選 per-agent model。對標 CC subagents 的可寫委派。
+  const dTxt = (o) => ({ content: [{ type: 'text', text: typeof o === 'string' ? o : JSON.stringify(o) }] });
+  const delegateTool = {
+    name: 'delegate', label: '委派子 agent',
+    description: '把一個聚焦子任務委派給某個 agent 類型「可寫」執行（能改檔/跑命令，全程經守衛/沙箱）。'
+      + '用 agentType 指定類型（見系統提示「可用的 agent 類型」），回傳子 agent 結論。把獨立子任務交給專長子 agent，主對話保持乾淨。只需唯讀調查請改用 spawn_agent。',
+    parameters: { type: 'object', properties: {
+      agentType: { type: 'string', description: 'agent 類型名（見「可用的 agent 類型」）' },
+      task: { type: 'string', description: '要委派的具體子任務（自足、可獨立完成）' },
+    }, required: ['agentType', 'task'] },
+    execute: async (_id, { agentType, task }) => {
+      const type = agents.get(agentType);
+      if (!type) return dTxt({ error: '找不到 agent 類型', agentType, available: agents.list().map((a) => a.name) });
+      const model = (type.model && typeof config.resolveModel === 'function') ? (config.resolveModel(type.model) || config.model) : config.model;
+      try {
+        const r = await api.runTurn(String(task || ''), {
+          systemPromptOverride: type.systemPrompt,
+          toolNames: type.tools && type.tools.length ? type.tools : undefined,
+          model,
+          skipVerify: true, // 子委派不跑 pack.verify（驗證留給主 agent / orchestrator）
+        });
+        return dTxt({ delegatedTo: type.name, aborted: !!r.aborted, text: r.text });
+      } catch (e) { return dTxt({ error: e?.message || String(e), agentType }); }
+    },
+  };
+  const tools = [...baseTools, spawnTool, mapTool, delegateTool];
   allTools = tools;
   const registry = createToolRegistry(tools);
   const mutatingTools = new Set(deriveMutatingTools(pack, tools));
@@ -385,18 +411,25 @@ export function createKernel(pack, config = {}) {
       if (!config.getApiKey) throw new Error('runTurn 需要 config.getApiKey。');
       const { Agent } = await import('./agent-loop.js');
       const streamFn = config.streamFn || (await import('./provider.js')).defaultStreamFn();
-      const model = config.model;
+      const model = opts.model || config.model; // 可寫委派可指定 per-agent model
 
       // 語系驅動：偵測語言→注入該語言的具體指令在最前面（opts.lang > config.lang > 自動偵測）。
       const lang = opts.lang || config.lang || detectLang(input);
       // 自動相關性召回：把與本輪 input 最相關的過往情節注入 prompt（只 top-K,不全量倒）
-      const turnSystemPrompt = langDirectiveFor(lang) + systemPrompt + (config.recallEpisodes === false ? '' : episodes.recallSection(input));
+      // systemPromptOverride：委派子 agent 用其類型的 prompt 取代 pack 主 prompt（仍保留語系與召回）。
+      const turnSystemPrompt = langDirectiveFor(lang) + (opts.systemPromptOverride || systemPrompt) + (config.recallEpisodes === false ? '' : episodes.recallSection(input));
+      // toolNames：工具白名單（委派子 agent 只拿類型允許的工具；含可寫，仍經守衛）。
+      const baseTurnTools = opts.toolNames?.length ? registry.all().filter((t) => opts.toolNames.includes(t.name)) : registry.all();
+      // 委派情境（systemPromptOverride）剝除 delegate/spawn——子 agent 不能再委派/派生（防遞迴，單層深度）。
+      const turnTools = opts.systemPromptOverride
+        ? baseTurnTools.filter((t) => !['delegate', 'spawn_agent', 'spawn_agents'].includes(t.name))
+        : baseTurnTools;
 
       const agent = new Agent({
         initialState: {
           systemPrompt: turnSystemPrompt,
           model,
-          tools: registry.all(),
+          tools: turnTools,
           messages: opts.history || [],   // 多輪對話：延續歷史
           thinkingLevel: config.thinkingLevel || (model.reasoning ? 'medium' : 'off'),
         },
@@ -439,8 +472,8 @@ export function createKernel(pack, config = {}) {
       // 對標 xitto-code 的 runAutoVerify；機制在 kernel、「跑什麼/何時跑」由 pack 決定。
       // 「完成定義」契約：把最終裁決＋證據掛到 result.verify，讓呼叫端能誠實呈現
       // 「✓ 通過 / ⚠ 未通過」而非把未驗收的成品當 done（信任＝可被自主採用的前提）。
-      let verifyResult = null; // null = 不適用（pack 無 verify / 已中斷 / 本回合沒改動）
-      if (pack.verify && !wasAborted()) {
+      let verifyResult = null; // null = 不適用（pack 無 verify / 已中斷 / 本回合沒改動 / 委派時跳過）
+      if (pack.verify && !wasAborted() && !opts.skipVerify) {
         const maxRounds = Number.isInteger(pack.verify.maxRounds) ? pack.verify.maxRounds : 2;
         let attempts = 0, last = null;
         for (let round = 0; round < maxRounds; round++) {
