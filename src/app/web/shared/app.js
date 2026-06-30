@@ -219,6 +219,7 @@ const TOOL_ZH = {
   read_image: "看圖片",
   skill: "載入技能",
   skill_save: "記錄技能",
+  skill_run: "執行技能",
   skills_check: "複查技能",
   playbook_update: "記下做法",
   episode_record: "記下經驗",

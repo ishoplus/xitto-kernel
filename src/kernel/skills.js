@@ -26,6 +26,11 @@ function extractVerify(md) {
   const m = md.match(/##\s*驗證[^\n]*\n```(?:sh|bash)?\n([\s\S]*?)\n```/);
   return m ? m[1].trim() : null;
 }
+// 可執行腳本取自 `## 腳本（可執行）` 的 fenced 區塊（④：技能可帶腳本，supply skill_run 確定性重跑）。
+function extractScript(md) {
+  const m = md.match(/##\s*腳本[^\n]*\n```(?:sh|bash)?\n([\s\S]*?)\n```/);
+  return m ? m[1].trim() : null;
+}
 
 const firstDesc = (body) => {
   const fm = body.match(/^description:\s*(.+)$/mi);
@@ -82,7 +87,8 @@ export function createSkills(dir, { verifyRunner } = {}) {
   // 結晶層：把可重複流程寫成新技能。政策——須附 goal + 通過的 verify 才落地（verify 在沙箱實跑）。
   const saveTool = {
     name: 'skill_save', label: '結晶技能', readOnly: true,
-    description: '把一套你摸出來、會重複用到的流程「結晶」成可複用技能。政策：每個技能必須附 (1) goal 明確目標 (2) verify 一條可驗證它有效的指令——verify 會被實際執行,通過(exit 0)才會新增,否則拒絕並回傳輸出讓你修正。確保結晶的是「已驗證的成功」。與 playbook 的差別：playbook 是專案事實性 know-how，skill 是可複用且已驗證的操作流程/SOP。',
+    description: '把一套你摸出來、會重複用到的流程「結晶」成可複用技能。政策：每個技能必須附 (1) goal 明確目標 (2) verify 一條可驗證它有效的指令——verify 會被實際執行,通過(exit 0)才會新增,否則拒絕並回傳輸出讓你修正。確保結晶的是「已驗證的成功」。'
+      + '可選附 (3) script：一段可執行腳本——日後用 skill_run 直接「確定性重跑」，不必每次重推步驟（交付「能力」而非一次性成品）。與 playbook 的差別：playbook 是專案事實性 know-how，skill 是可複用且已驗證的操作流程/SOP。',
     parameters: {
       type: 'object',
       properties: {
@@ -90,11 +96,12 @@ export function createSkills(dir, { verifyRunner } = {}) {
         goal: { type: 'string', description: '這個技能要達成的明確目標（一句話）' },
         body: { type: 'string', description: '完整步驟內容（markdown）' },
         verify: { type: 'string', description: '一條能驗證此技能/成果有效的 shell 指令（須 exit 0；如 `npm test`、`test -f dist/app.js`）。會被實際執行。' },
+        script: { type: 'string', description: '可選；一段可執行 shell 腳本，封裝這個可重複流程。存檔後可用 skill_run <name> 直接重跑（確定性、免 LLM）。' },
         description: { type: 'string', description: '可選；省略則用 goal 當簡述' },
       },
       required: ['name', 'goal', 'body', 'verify'],
     },
-    execute: async (_id, { name, goal, body, verify, description }) => {
+    execute: async (_id, { name, goal, body, verify, script, description }) => {
       const nm = slug(name);
       if (!nm) return txt({ error: 'name 不合法（需含中英數）' });
       if (!goal || !String(goal).trim()) return txt({ error: '缺 goal：每個技能必須有明確目標' });
@@ -108,15 +115,17 @@ export function createSkills(dir, { verifyRunner } = {}) {
 
       const now = new Date().toISOString();
       const desc = (String(description || goal)).replace(/\s+/g, ' ').trim().slice(0, 120);
+      const hasScript = script && String(script).trim();
       const content =
-        `---\ndescription: ${desc}\ngoal: ${String(goal).replace(/\s+/g, ' ').trim()}\nverified: true\nverifiedAt: ${now}\n---\n\n` +
-        `## 目標\n${String(goal).trim()}\n\n${String(body).trim()}\n\n## 驗證（已通過 exit 0）\n\`\`\`sh\n${String(verify).trim()}\n\`\`\`\n`;
+        `---\ndescription: ${desc}\ngoal: ${String(goal).replace(/\s+/g, ' ').trim()}\nverified: true\nverifiedAt: ${now}${hasScript ? '\nexecutable: true' : ''}\n---\n\n` +
+        `## 目標\n${String(goal).trim()}\n\n${String(body).trim()}\n\n## 驗證（已通過 exit 0）\n\`\`\`sh\n${String(verify).trim()}\n\`\`\`\n` +
+        (hasScript ? `\n## 腳本（可執行）\n\`\`\`sh\n${String(script).trim()}\n\`\`\`\n` : '');
       try {
         mkdirSync(dir, { recursive: true });
         const existed = existsSync(fileOf(nm));
         writeFileSync(fileOf(nm), content);
         skills = readAll();
-        return txt({ [existed ? 'updated' : 'saved']: nm, verified: true, verifyOutput: vr.output, hint: '驗證通過,已結晶為技能；本 session 可用 skill 按名載入，下次 session 自動列入。' });
+        return txt({ [existed ? 'updated' : 'saved']: nm, verified: true, executable: !!hasScript, verifyOutput: vr.output, hint: `驗證通過,已結晶為技能${hasScript ? '（含可執行腳本，可用 skill_run 直接重跑）' : ''}；本 session 可用 skill 按名載入。` });
       } catch (e) { return txt({ error: e.message }); }
     },
   };
@@ -144,6 +153,27 @@ export function createSkills(dir, { verifyRunner } = {}) {
     execute: async () => txt({ checked: await check() }),
   };
 
+  // ④ 交付「能力」：直接執行含腳本技能的腳本（確定性重跑，免 LLM）。經 verifyRunner 的
+  // 安全檢查＋沙箱（危險指令擋、開沙箱則 Seatbelt 包）。mutating → 走 kernel 權限步驟。
+  const runSkillTool = {
+    name: 'skill_run', label: '執行技能', mutating: true,
+    description: '直接執行某個「含腳本」技能的腳本（確定性重跑、免 LLM 重推步驟）。技能須在 skill_save 時附 script。腳本會經安全檢查與沙箱執行；危險指令會被擋。回 exit code 與輸出。',
+    parameters: { type: 'object', properties: { name: { type: 'string', description: '要執行的技能名' } }, required: ['name'] },
+    execute: async (_id, { name }) => {
+      if (typeof verifyRunner !== 'function') return txt({ error: '此環境不支援執行技能腳本（須在 kernel 內）' });
+      const cur = readAll();
+      const s = cur.find((x) => x.name === name) || cur.find((x) => x.name === slug(name));
+      if (!s) return txt({ error: '找不到技能', name, available: cur.map((x) => x.name) });
+      const script = extractScript(s.body);
+      if (!script) return txt({ error: '此技能沒有可執行腳本（skill_save 時未附 script）', name: s.name });
+      patch(s.name, { usedCount: (s.used || 0) + 1, lastUsedAt: new Date().toISOString() });
+      skills = readAll();
+      const r = await verifyRunner(script);
+      if (r.blocked) return txt({ error: '腳本被安全策略擋下，未執行', reason: r.reason, name: s.name });
+      return txt({ ran: s.name, ok: !!r.ok, exitCode: r.code, output: r.output });
+    },
+  };
+
   const remove = (name) => {
     const nm = slug(name); const file = fileOf(nm);
     if (!existsSync(file)) return { error: '找不到技能', name };
@@ -153,7 +183,7 @@ export function createSkills(dir, { verifyRunner } = {}) {
   return {
     skills, promptSection,
     tool: loadTool,
-    tools: [loadTool, saveTool, checkTool],
+    tools: [loadTool, saveTool, checkTool, runSkillTool],
     list: () => readAll().map(({ name, desc, used, stale }) => ({ name, desc, used, stale })),
     check, remove,
     reload: () => { skills = readAll(); return skills; },

@@ -38,7 +38,7 @@ test('無 skills 目錄 → skill/skill_save 仍在；promptSection 引導結晶
   const dir = tmp('sk0-');
   try {
     const s = createSkills(join(dir, 'nope'));
-    assert.deepEqual(s.tools.map((t) => t.name), ['skill', 'skill_save', 'skills_check']); // 永遠在
+    assert.deepEqual(s.tools.map((t) => t.name), ['skill', 'skill_save', 'skills_check', 'skill_run']); // 永遠在
     assert.match(s.promptSection(), /skill_save/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

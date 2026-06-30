@@ -22,7 +22,7 @@ test('general pack：註冊 + 工具齊（含 web_search/web_fetch）', () => {
   const k = createKernel(createGeneralPack());
   for (const n of ['read', 'ls', 'write', 'edit', 'bash', 'web_fetch', 'web_search']) assert.ok(k.registry.has(n), n);
   assert.ok(k.registry.readOnlyNames().includes('web_search'));
-  assert.deepEqual([...k.mutatingTools].sort(), ['bash', 'edit', 'write']);
+  assert.deepEqual([...k.mutatingTools].sort(), ['bash', 'edit', 'skill_run', 'write']);
 });
 
 test('runGoal：驗收第 2 輪達成 → done', async () => {
