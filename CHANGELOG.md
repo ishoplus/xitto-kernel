@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.23
+
+- **修：`docgen` 納入自動分流**。docgen 之前已註冊為 pack，但不在 router 內（ROUTE_GUIDE / LLM 分類器列舉 / heuristicPack 都漏了），導致許願台「auto」模式打「做一份 PDF/Word/報告」不會被導到 docgen。三處補齊；heuristic 插在 uiux 後、coding 前，不搶 deep-research。
+- 測試 267/267。
+
 ## 0.9.22
 
 - **檔案列表刷新**：對話頁與許願台的「📂 檔案」加 ↻ 手動刷新鈕（轉動回饋）；對話頁補上「每輪結束自動刷新」（agent 產出/改動檔案後免手動點），許願台任務完成本就自動刷新。`.refresh-btn` 樣式進 shared，兩頁共用。
