@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.21
+
+- **docgen 接上 verify 徽章（完成定義）**：`gen_doc` 記錄實際產出的檔案，pack 的 `verify` 在產出後驗證每份有效（PDF=`%PDF`、DOCX=ZIP、HTML=含標籤、CSV=非空）→ `result.verify` 徽章顯示 ✓/⚠，對話頁/許願台自動呈現。使用者一眼知道「成品已驗證、可交付」。新增 `isValidDoc(path)`。
+- 測試 267/267。
+
 ## 0.9.20
 
 - **docgen 加 CSV 產出（零相依，Excel 可開）**：`gen_doc` 的 path 以 `.csv` 結尾 → 取 markdown 第一個 GFM 表格，輸出 RFC4180 轉義的 CSV + UTF-8 BOM（讓 Excel 正確顯示中文）；無表格 → `ok:false` 並提示。作為 XLSX 的零相依替代（多數「給我數據表」需求即足，且 Excel 直接開）。
