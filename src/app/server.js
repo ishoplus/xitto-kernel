@@ -25,11 +25,12 @@ import { createDevopsPack } from '../packs/devops/index.js';
 import { createPatentPack } from '../packs/patent/index.js';
 import { isDocFile, extractDocText } from '../packs/shared/doc-extract.js';
 import { createUiuxPack } from '../packs/uiux/index.js';
+import { createDocgenPack } from '../packs/docgen/index.js';
 
 const PACKS = {
   coding: createCodingPack, 'data-query': createDataQueryPack, notes: createNotesPack,
   general: createGeneralPack, 'deep-research': createDeepResearchPack, devops: createDevopsPack,
-  patent: createPatentPack, uiux: createUiuxPack,
+  patent: createPatentPack, uiux: createUiuxPack, docgen: createDocgenPack,
 };
 
 const lastText = (history) => ([...(history || [])].reverse().find((m) => m.role === 'assistant')?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');

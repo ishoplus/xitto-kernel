@@ -59,7 +59,8 @@
     "./packs/deep-research": "./src/packs/deep-research/index.js",
     "./packs/devops": "./src/packs/devops/index.js",
     "./packs/patent": "./src/packs/patent/index.js",
-    "./packs/uiux": "./src/packs/uiux/index.js"
+    "./packs/uiux": "./src/packs/uiux/index.js",
+    "./packs/docgen": "./src/packs/docgen/index.js"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.2",

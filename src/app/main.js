@@ -17,6 +17,7 @@ import { createDeepResearchPack } from '../packs/deep-research/index.js';
 import { createDevopsPack } from '../packs/devops/index.js';
 import { createPatentPack } from '../packs/patent/index.js';
 import { createUiuxPack } from '../packs/uiux/index.js';
+import { createDocgenPack } from '../packs/docgen/index.js';
 
 const e = (n) => (s) => `\x1b[${n}m${s}\x1b[0m`;
 const green = e(32); const gray = e(90); const red = e(31); const cyan = e(36); const yellow = e(33);
@@ -30,6 +31,7 @@ const PACKS = {
   devops: createDevopsPack,
   patent: createPatentPack,
   uiux: createUiuxPack,
+  docgen: createDocgenPack,
 };
 
 export async function main(argv = process.argv.slice(2)) {
