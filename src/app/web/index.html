@@ -177,6 +177,9 @@
   padding-bottom: var(--sp-2);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
 }
 
 /* 空狀態的引導（NN/g：空狀態要有狀態訊息 + 行動指引）*/
@@ -1004,7 +1007,7 @@
 
     <!-- 檔案瀏覽器 -->
     <section class="sidebar-section" aria-label="工作區檔案">
-      <h3>📂 檔案</h3>
+      <h3>📂 檔案 <button class="refresh-btn" id="files-refresh" type="button" onclick="refreshFiles()" title="刷新檔案列表" aria-label="刷新檔案列表">↻</button></h3>
       <div id="file-breadcrumb" class="file-breadcrumb" aria-live="polite"></div>
       <div class="scroll" id="wbfiles" role="tree" aria-label="檔案列表"></div>
     </section>
@@ -1720,6 +1723,13 @@ function wbNav(s) {
 
 function wbUp() {
   wbSub = wbSub.includes("/") ? wbSub.slice(0, wbSub.lastIndexOf("/")) : "";
+  loadFiles();
+}
+
+// 手動刷新：轉一下 ↻ 給回饋，再重載檔案列表（任務完成時 streamTask 已自動 loadFiles）
+function refreshFiles() {
+  const b = $("#files-refresh");
+  if (b) { b.classList.remove("spin"); void b.offsetWidth; b.classList.add("spin"); }
   loadFiles();
 }
 

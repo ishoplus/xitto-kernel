@@ -465,6 +465,22 @@ a:focus-visible {
 .proj-item .proj-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-sep { height: 1px; background: var(--line); margin: var(--sp-1) 0; }
 
+/* 檔案列表刷新鈕（對話頁 / 許願台共用）*/
+.refresh-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: var(--r-sm);
+}
+.refresh-btn:hover { color: var(--accent); background: var(--inset); }
+.refresh-btn.spin { animation: spin 0.6s linear; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ── 7. 動畫 ───────────────────────────────────────────── */
 @keyframes blink {
   50% { opacity: 0; }
