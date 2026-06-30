@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.13
+
+- **新增 `mapVerify` kernel API：可寫 map-verify（序列 + 快照回滾）**：對每個項目跑一個可寫回合 → 逐項驗收 → 通過保留、未通過 `undo` 回滾該項所有檔案改動，保持工作區乾淨。是 ①（驗收 DoD 契約）×②（fan-out）的綜合——「可信任 × 規模化的變更」。
+  - 驗收來源優先序：`item.verify`（shell 指令）> `pack.verify`（`result.verify`）> 無（不擋、標記未驗）；序列執行避開平行寫衝突、失敗自動復原。
+  - 重用既有 `undoStack`（記 mark → 失敗時 `undo()` 還原）與 runTurn 的可寫 agent/guards。限制：僅回滾帶 `path` 的檔案改動；bash 等非檔案副作用不在回滾內。
+  - 新增 `test/map-verify.test.js`。phase2b（git worktree 平行隔離）為後續速度優化。
+- 測試 240/240。
+
 ## 0.9.12
 
 - **新增 `spawn_agents` 平行 map 原語**：對 N 個項目同時各派一個唯讀子 agent 做聚焦調查，回傳每項結論——解鎖「對很多項目做同一種需要理解的處理」（掃多檔/模組/來源），序列太慢時。
