@@ -118,6 +118,20 @@ export function detectRenderer() {
 const isPdf = (p) => { try { return existsSync(p) && readFileSync(p).subarray(0, 5).toString() === '%PDF-'; } catch { return false; } };
 const isZip = (p) => { try { return existsSync(p) && readFileSync(p).subarray(0, 2).toString() === 'PK'; } catch { return false; } };
 
+// 依副檔名驗證產出文件是否有效（給 docgen 的 verify 徽章用）：
+// pdf→%PDF、docx→ZIP(PK)、html→含標籤、其餘(csv…)→非空。
+export function isValidDoc(path) {
+  try {
+    if (!existsSync(path)) return false;
+    const ext = (path.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+    const buf = readFileSync(path);
+    if (ext === 'pdf') return buf.subarray(0, 5).toString() === '%PDF-';
+    if (ext === 'docx') return buf.subarray(0, 2).toString() === 'PK';
+    if (ext === 'html' || ext === 'htm') return /<html|<!doctype/i.test(buf.toString('utf8').slice(0, 300));
+    return buf.length > 0;
+  } catch { return false; }
+}
+
 // DOCX 轉檔器：pandoc（HTML→docx 最佳）> soffice。回 { kind, bin } 或 null。
 function detectDocx() {
   const p = has('pandoc'); if (p) return { kind: 'pandoc', bin: p };

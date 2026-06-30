@@ -2,12 +2,19 @@
 // gen_doc 工具經 kernel 產出成品。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mdToHtml, mdToBody, generateDoc, mdTableToRows, toCsv } from '../src/packs/shared/doc-gen.js';
+import { AssistantMessageEventStream } from '@earendil-works/pi-ai/compat';
+import { mdToHtml, mdToBody, generateDoc, mdTableToRows, toCsv, isValidDoc } from '../src/packs/shared/doc-gen.js';
 import { createKernel } from '../src/kernel/index.js';
 import { createDocgenPack } from '../src/packs/docgen/index.js';
+
+const FAKE_MODEL = { id: 'fake', provider: 'fake', api: 'openai-completions', baseUrl: '', input: ['text'], output: ['text'], contextWindow: 32000, maxTokens: 4096, cost: {} };
+const textMsg = (t) => ({ role: 'assistant', content: [{ type: 'text', text: t }], stopReason: 'stop', provider: 'fake', model: 'fake', api: 'openai-completions', timestamp: 1 });
+const toolMsg = (name, args) => ({ role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name, arguments: args }], stopReason: 'toolUse', provider: 'fake', model: 'fake', api: 'openai-completions', timestamp: 1 });
+const streamOf = (m) => { const s = new AssistantMessageEventStream(); s.push({ type: 'start', partial: m }); s.push({ type: 'done', reason: m.stopReason, message: m }); return s; };
+const fakeProvider = (turns) => { let i = 0; return () => streamOf(turns[Math.min(i++, turns.length - 1)]); };
 
 const MD = `# 季度報告\n\n這是**重點**與 \`code\`。\n\n- 項目一\n- 項目二\n\n| 名稱 | 數量 |\n| --- | --- |\n| 甲 | 1 |\n\n> 引言一句。`;
 
@@ -108,6 +115,35 @@ test('generateDoc：.csv 無表格 → ok:false + 提示', () => {
     const r = generateDoc('這只是一段文字，沒有表格。', join(cwd, 'x.csv'));
     assert.equal(r.ok, false);
     assert.match(r.note, /表格|GFM/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('isValidDoc：依格式驗證（html 有標籤 / pdf 魔數 / csv 非空 / 缺檔 false）', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-val-'));
+  try {
+    writeFileSync(join(cwd, 'a.html'), '<!doctype html><html></html>');
+    writeFileSync(join(cwd, 'bad.pdf'), 'not a pdf');
+    writeFileSync(join(cwd, 'd.csv'), 'a,b\n1,2');
+    assert.equal(isValidDoc(join(cwd, 'a.html')), true);
+    assert.equal(isValidDoc(join(cwd, 'bad.pdf')), false);   // 非 %PDF
+    assert.equal(isValidDoc(join(cwd, 'd.csv')), true);
+    assert.equal(isValidDoc(join(cwd, 'nope.html')), false); // 缺檔
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('docgen verify 徽章：產出文件後 result.verify.ok（完成定義）', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-badge-'));
+  try {
+    const k = createKernel(createDocgenPack({ cwd }), {
+      cwd, model: FAKE_MODEL, getApiKey: () => 'k',
+      streamFn: fakeProvider([toolMsg('gen_doc', { path: 'r.html', markdown: '# 報告\n\n內容' }), textMsg('完成')]),
+    });
+    const r = await k.runTurn('產一份報告');
+    assert.ok(r.verify, 'result.verify 應存在');
+    assert.equal(r.verify.ran, true);
+    assert.equal(r.verify.ok, true);
+    assert.match(r.verify.output, /有效/);
+    assert.ok(existsSync(join(cwd, 'r.html')));
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
