@@ -269,6 +269,7 @@ xitto-kernel/
 | [04-migration-from-xitto-code.md](docs/04-migration-from-xitto-code.md) | 從 xitto-code 抽離的具體步驟：每個耦合點怎麼搬、風險 |
 | [05-example-packs.md](docs/05-example-packs.md) | 範例 pack 對照（coding / data-query 已內建 + ops 示意）驗證同介面能跑不同領域 |
 | [06-authoring-a-pack.md](docs/06-authoring-a-pack.md) | **怎麼用底座做一個新領域 agent**：最小 pack、工具形狀、三步驟、放工具 vs prompt |
+| [07-agent-types.md](docs/07-agent-types.md) | **自訂 agent 類型（對標 CC subagents）**：檔案格式、spawn_agent/spawn_agents（唯讀）vs delegate（可寫）、per-agent model、可複製範本 |
 
 ## 現況與後續
 
