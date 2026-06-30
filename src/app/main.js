@@ -1,7 +1,7 @@
 // App 進入點：解析參數 → 載入 model（providers.json）→ 選 pack → 啟動 CLI。
 // 子指令：new-agent <name> → 產出依賴 kernel 的獨立 agent 專案。
 import { join, resolve, isAbsolute } from 'node:path';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, readFileSync } from 'node:fs';
 import { loadModel } from './providers.js';
 import { runCli } from './cli.js';
 import { runTui } from './tui-run.js';
@@ -38,6 +38,9 @@ export async function main(argv = process.argv.slice(2)) {
 
   // 子指令：serve —— 啟動 Web 前端（🪄 許願台 + 對話頁 /chat）
   if (argv[0] === 'serve') { await runServe(argv.slice(1)); return; }
+
+  // 子指令：map —— 批次可寫 map-verify（逐項轉換+驗收，未通過自動回滾）
+  if (argv[0] === 'map') { await runMap(argv.slice(1)); return; }
 
   // 子指令：new-agent <name> —— 產出獨立 agent 專案（不碰 kernel）
   if (argv[0] === 'new-agent') {
@@ -194,6 +197,69 @@ function printServeHelp() {
   ].join('\n'));
 }
 
+// map：批次可寫 map-verify。讀 items JSON（[字串 | {task,verify}]），逐項轉換+驗收，未通過自動回滾。
+async function runMap(args) {
+  const o = { pack: 'coding', sandbox: false };
+  let file = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--help' || a === '-h') return printMapHelp();
+    else if (a === '--pack') o.pack = args[++i];
+    else if (a === '--cwd' || a === '--dir' || a === '-C') o.cwd = args[++i];
+    else if (a === '--sandbox') o.sandbox = true;
+    else if (a === '--model') o.model = args[++i];
+    else if (!a.startsWith('-') && !file) file = a;
+  }
+  if (!file) { printMapHelp(); process.exit(1); }
+  let items;
+  try { items = JSON.parse(readFileSync(resolve(file), 'utf8')); }
+  catch (e) { console.error(red('讀取 items 檔失敗：' + e.message)); process.exit(1); }
+  if (!Array.isArray(items) || !items.length) { console.error(red('items 檔需為非空 JSON 陣列（字串，或 {task, verify} 物件）')); process.exit(1); }
+
+  const make = PACKS[o.pack];
+  if (!make) { console.error(red(`未知 pack「${o.pack}」。可用：${Object.keys(PACKS).join(', ')}`)); process.exit(1); }
+  let model, getApiKey;
+  try { ({ model, getApiKey } = loadModel(o.model)); }
+  catch (err) {
+    console.error(red(err.message));
+    if (err.noConfig) { console.error('\n' + cyan('首次使用？') + ' 先跑：' + green('  xitto-kernel init')); }
+    process.exit(1);
+  }
+  let cwd;
+  try { cwd = resolveCwd(o.cwd); }
+  catch (err) { console.error(red(err.message)); process.exit(1); }
+
+  const kernel = createKernel(make({ cwd }), {
+    model, getApiKey,
+    sandbox: { enabled: o.sandbox }, getSandbox: () => o.sandbox,
+    confirm: async () => 'yes', // 批次非互動：自動核准 mutating；安全靠 verify 通過才保留、未通過回滾（+ 可選沙箱）
+  });
+  console.log(cyan(`🗺  map-verify：${items.length} 項`) + gray(`  ·  ${o.pack} pack · ${model.id}${o.sandbox ? ' · 沙箱開' : ''}`));
+  const out = await kernel.mapVerify(items, {
+    onItem: (r) => console.log(`  ${r.ok ? green('✓') : (r.verified ? red('✗ 已回滾') : yellow('· 未驗'))} ${gray(String(r.task).slice(0, 70))}`),
+  });
+  console.log('\n' + (out.failed
+    ? yellow(`完成：${out.passed}/${out.total} 通過，${out.failed} 未通過（已回滾）`)
+    : green(`✅ 全部通過：${out.passed}/${out.total}`)));
+  process.exit(out.failed ? 1 : 0);
+}
+
+function printMapHelp() {
+  console.log([
+    'xitto-kernel map — 批次可寫 map-verify（逐項轉換 + 驗收，未通過自動回滾）',
+    '',
+    '用法:',
+    '  xitto-kernel map <items.json> [--pack <name>] [--cwd <dir>] [--sandbox] [--model <id>]',
+    '',
+    'items.json：非空 JSON 陣列，每項可為',
+    '  "字串任務"                              # 用 pack.verify 當驗收（若 pack 有）',
+    '  { "task": "...", "verify": "shell 指令" }  # 用該指令當驗收（exit 0 = 通過）',
+    '',
+    '行為：逐項跑可寫回合 → 驗收 → 通過保留、未通過 undo 回滾該項所有檔案改動。',
+    '安全：批次自動核准 mutating；安全來自「驗收通過才保留、未通過回滾」(+ 可選 --sandbox)。',
+  ].join('\n'));
+}
+
 function parse(argv) {
   const o = { pack: 'coding', model: undefined, sandbox: false, help: false, resume: null, yes: false, goal: null, cwd: null };
   for (let i = 0; i < argv.length; i++) {
@@ -220,6 +286,7 @@ function printHelp() {
     '  xitto-kernel [--pack <name>] [--cwd <dir>] [--model <id>] [--sandbox] [--resume [id]] [--yes]   互動跑內建 pack',
     '  xitto-kernel --pack general --goal "..." [--yes]         目標驅動自主循環（headless）',
     '  xitto-kernel serve [--port <n>] [--local]                啟動 Web 前端（🪄 許願台 + 對話頁）',
+    '  xitto-kernel map <items.json> [--pack <name>] [--cwd <dir>]  批次可寫 map-verify（逐項轉換+驗收，未過回滾）',
     '  xitto-kernel new-agent <name>                            產出依賴 kernel 的獨立 agent 專案',
     '',
     '  --pack <name>   選擇內建 DomainPack（coding | data-query | notes | general | deep-research | devops | patent | uiux；預設 coding）',
