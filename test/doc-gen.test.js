@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mdToHtml, mdToBody, generateDoc } from '../src/packs/shared/doc-gen.js';
+import { mdToHtml, mdToBody, generateDoc, mdTableToRows, toCsv } from '../src/packs/shared/doc-gen.js';
 import { createKernel } from '../src/kernel/index.js';
 import { createDocgenPack } from '../src/packs/docgen/index.js';
 
@@ -75,6 +75,39 @@ test('generateDoc：.docx → Word（有 pandoc/soffice）或 fallback HTML（�
       assert.ok(existsSync(join(cwd, 'r.html')));
       assert.match(r.note, /docx|DOCX|HTML/i);
     }
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('mdTableToRows / toCsv：表格抽取 + CSV 轉義', () => {
+  const rows = mdTableToRows('前言\n\n| 名稱 | 備註 |\n| --- | --- |\n| 甲, 乙 | 含"引號" |\n| 丙 | 正常 |\n\n後記');
+  assert.deepEqual(rows[0], ['名稱', '備註']);
+  assert.equal(rows.length, 3);
+  const csv = toCsv(rows);
+  assert.match(csv, /"甲, 乙"/);          // 含逗號 → 加引號
+  assert.match(csv, /"含""引號"""/);       // 內部引號 → 雙寫
+  assert.equal(mdTableToRows('沒有表格的純文字'), null);
+});
+
+test('generateDoc：.csv → 零相依寫出（UTF-8 BOM + 中文）', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-csv-'));
+  try {
+    const out = join(cwd, 'data.csv');
+    const r = generateDoc('| 名稱 | 數量 |\n| --- | --- |\n| 甲 | 1 |\n| 乙 | 2 |', out);
+    assert.equal(r.ok, true);
+    assert.equal(r.format, 'csv');
+    assert.equal(r.rows, 3);
+    const buf = readFileSync(out);
+    assert.equal(buf.subarray(0, 3).toString('hex'), 'efbbbf', '應有 UTF-8 BOM（Excel 中文）');
+    assert.match(buf.toString('utf8'), /名稱,數量[\s\S]*甲,1/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('generateDoc：.csv 無表格 → ok:false + 提示', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-csv2-'));
+  try {
+    const r = generateDoc('這只是一段文字，沒有表格。', join(cwd, 'x.csv'));
+    assert.equal(r.ok, false);
+    assert.match(r.note, /表格|GFM/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 

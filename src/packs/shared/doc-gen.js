@@ -80,6 +80,26 @@ ${body}
 </body></html>`;
 }
 
+// 取 markdown 第一個 GFM 表格 → 列陣列（每列為儲存格字串陣列）；無表格回 null。
+export function mdTableToRows(md) {
+  const lines = String(md || '').replace(/\r/g, '').split('\n');
+  const cells = (s) => s.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+  const isSep = (s) => s.includes('-') && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(s);
+  for (let i = 0; i + 1 < lines.length; i++) {
+    if (lines[i].includes('|') && lines[i + 1].includes('|') && isSep(lines[i + 1])) {
+      const rows = [cells(lines[i])]; let j = i + 2;
+      while (j < lines.length && lines[j].includes('|') && lines[j].trim() !== '') { rows.push(cells(lines[j])); j++; }
+      return rows;
+    }
+  }
+  return null;
+}
+// 列陣列 → CSV 字串（RFC4180 轉義：含 , " 換行 的欄位加引號、內部 " 變 ""）。
+export function toCsv(rows) {
+  const e = (v) => { const s = String(v == null ? '' : v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  return rows.map((r) => r.map(e).join(',')).join('\r\n');
+}
+
 // 偵測可用的 HTML→PDF 渲染器，回 { kind, bin } 或 null。
 function has(bin) {
   if (bin.includes('/')) return existsSync(bin) ? bin : null;
@@ -147,8 +167,18 @@ const FORMATS = {
  * @returns {{ ok:boolean, format:'pdf'|'docx'|'html', path:string, bytes:number, tool?:string, note?:string }}
  */
 export function generateDoc(markdown, outPath, { title = '' } = {}) {
-  const html = mdToHtml(markdown, { title });
   const ext = (outPath.match(/\.([a-z0-9]+)$/i)?.[1] || 'html').toLowerCase();
+
+  // CSV（零相依，Excel 可開）：取 markdown 第一個表格 → CSV + UTF-8 BOM（讓 Excel 正確顯示中文）。
+  if (ext === 'csv') {
+    const rows = mdTableToRows(markdown);
+    if (!rows) return { ok: false, format: 'csv', path: outPath, bytes: 0, note: '找不到可轉 CSV 的表格——請提供 GFM 表格（| 欄1 | 欄2 | 後接 | --- | --- |）。' };
+    const csv = '\uFEFF' + toCsv(rows);
+    writeFileSync(outPath, csv);
+    return { ok: true, format: 'csv', path: outPath, bytes: Buffer.byteLength(csv), rows: rows.length };
+  }
+
+  const html = mdToHtml(markdown, { title });
   const writeHtml = (p, note) => { writeFileSync(p, html); return { ok: true, format: 'html', path: p, bytes: html.length, ...(note ? { note } : {}) }; };
 
   if (ext === 'html' || ext === 'htm') return writeHtml(outPath);
