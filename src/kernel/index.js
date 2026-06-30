@@ -539,6 +539,18 @@ export function createKernel(pack, config = {}) {
       const artifacts = diffWorkdir(before, scanWorkdir(cwd));
       const lastAssistant = [...(g.history || [])].reverse().find((m) => m.role === 'assistant');
       const summary = (lastAssistant?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim();
+      // ③ 私有脈絡複利：完成 outcome 後自動記一筆情節（goal+結果+產出），
+      // 下次相似任務由 recallSection 自動召回 → act→record→recall 閉環自動成立，無需 agent 主動記。
+      // 去重靠 episodes.record（Jaccard>0.85 跳過）；中斷不記。可用 config.autoRecordEpisode=false 關閉。
+      if (config.autoRecordEpisode !== false && !g.aborted) {
+        try {
+          const nFiles = (artifacts.created?.length || 0) + (artifacts.modified?.length || 0);
+          const outcome = g.done ? 'success' : (g.stalled ? 'stalled' : 'incomplete');
+          const epSummary = String(goal).replace(/\s+/g, ' ').trim().slice(0, 160) + (nFiles ? `（產出/改動 ${nFiles} 檔）` : '');
+          const rec = episodes.record({ summary: epSummary, tags: [pack?.name].filter(Boolean), outcome });
+          if (rec.recorded) opts.onEvent?.({ type: 'episode_recorded', id: rec.recorded, outcome });
+        } catch { /* 記情節失敗不影響交付 */ }
+      }
       return { goal, done: !!g.done, rounds: g.rounds, aborted: !!g.aborted, stalled: !!g.stalled, summary, artifacts, verify: g.verify || null, history: g.history };
     },
 
