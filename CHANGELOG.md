@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.9
+
+- **新增 `uiux`（UI/UX 設計與前端介面）pack**：可存取、響應式 UI 的設計 agent；`verify` 接真 a11y 工具並行為感知化（抓壞引用/裸佔位符、改既有檔守執行期契約），附 EvalSuite 品質基準。
+- **Web 前端大改版（許願台 + 對話頁）**：
+  - 設計系統重構 + 全幅 app-shell + 白天/夜晚主題；一串版面 bug 修（檔案預覽改浮層 modal、對話輸入框聚焦橢圓、記憶面板與檔案預覽重疊）。
+  - **工作區頁籤化**：任務／記憶固定 + 檔案動態多頁籤（上限 6、可單獨關閉、同檔去重聚焦），三面板由 `setTab` 統一切換、結構上不再重疊。
+  - **對話頁右側軌道**：泡泡視圖＝工作日誌（把工具/過程/diff 移出對話）、TUI 視圖＝工作階段 HUD（pack／回合／工具數／動過的檔案，類 git status）；TUI 轉錄**彩色化**（工具行依類別上色：讀藍/改金/執行綠/網路紫）+ GFM 表格渲染。
+  - **sub-agent 活動可視化**：`spawn_agent` 的子工具呼叫嵌套顯示在父步驟下 + 即時思考串流（kernel 經 `onPartial` 轉發子 agent 事件，server `mapEvent` 新增 `sub_tool`/`sub_think`/`usage`）。
+  - **對話頁接上背景任務**：可丟後台跑（`/v1/tasks`），進度顯示在 HUD、可中斷；前景串流與背景任務共用同一套事件與 `readSSE`。
+  - **共用「專案切換器」**：專案下拉／選資料夾／新專案三控件整合成 popover（`mountProjectSwitcher`），許願台與對話頁共用同一元件與 `/v1/fs` 資料夾選擇。
+- **`read` 支援 Office/PDF 文件萃取（`doc-extract`，零相依）**：把 Word/Excel/PPT/OpenDocument/RTF/PDF 轉純文字（Office/ODF 用內建 zlib 解 ZIP + 剝 XML；PDF 退回系統 `pdftotext`），`read` 自動偵測並直接讀得到；coding/general/deep-research pack 皆接上。
+- **kernel 沙箱保護關鍵目錄**：靜態策略層禁止刪除/覆寫 `.git`／`.xitto-kernel`／`.xitto-server`／`.xitto-code`（對標 Codex 把 `.git` 設唯讀，補強 Linux 上唯一防線）；只擋破壞性操作（rm/重導/tee/dd），`git` 正常 porcelain 與讀取不受影響，且僅沙箱開啟時生效；`protectedDirs` 可設定。
+- **依賴升級**：ink 5→7 + react 18→19（一起乾淨升級——ink 7 peer 需 react ≥19.2，`react-devtools-core` 為 optional 不安裝）；marked 12→15（停在 `marked-terminal` 支援範圍 `<16`，取代 dependabot 的 marked 18 peer 衝突）；GitHub Actions `checkout` 4→7、`setup-node` 4→6。
+- 測試 229/229。
+
 ## 0.9.8
 
 - **新增 `patent`（專利交底書）pack**：協助使用者完成專利交底書——從與使用者的討論、或用 `grep/glob/read` 探勘進行中專案，挖掘具新穎性/進步性的發明點（一次提數個候選題目讓使用者選，不武斷定題）；`web_search/web_fetch` 做現有技術初步檢索；不確定的技術細節用 `ask` 問使用者、不臆造。
