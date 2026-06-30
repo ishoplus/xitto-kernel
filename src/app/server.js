@@ -47,7 +47,8 @@ const ROUTE_GUIDE =
   'notes：管理筆記知識庫——僅當明確提到筆記才選。\n' +
   'devops：伺服器維運／部署／docker／CI／常駐服務。\n' +
   'patent：撰寫專利交底書／找專利題目／挖掘發明點／現有技術初步檢索——提到專利／交底書／發明點時選。\n' +
-  'uiux：設計或實作使用者介面——版面/排版、響應式/RWD、設計稿、CSS 樣式、可及性/a11y、視覺與互動設計時選。';
+  'uiux：設計或實作使用者介面——版面/排版、響應式/RWD、設計稿、CSS 樣式、可及性/a11y、視覺與互動設計時選。\n' +
+  'docgen：把內容產成可交付文件檔——PDF／Word(docx)／CSV／HTML，提到要「一份報告/文件/PDF/Word/簡報式文件/匯出成檔」時選。';
 
 // 關鍵字快速判斷（LLM 不可用/逾時時的備援；命中強訊號才回領域，否則 null→general）。
 export function heuristicPack(goal) {
@@ -58,6 +59,7 @@ export function heuristicPack(goal) {
   if (/(專利|专利|交底書?|交底书?|發明點|发明点|權利要求|权利要求|patent|invention\s*disclosure)/.test(g)) return 'patent';
   if (/(研究報告|深度研究|多來源|文獻|綜述|市場調查|競品分析|deep\s*research)/.test(g)) return 'deep-research';
   if (/(ui\s*\/?\s*ux|\buiux\b|介面設計|使用者介面|用戶界面|版面|排版|響應式|\brwd\b|設計稿|線框|wireframe|figma|無障礙|可及性|\ba11y\b|accessibility|視覺設計|設計系統|design\s*system|配色方案|design\s*token)/.test(g)) return 'uiux';
+  if (/(\bpdf\b|\bdocx?\b|word\s*檔|\bcsv\b|產(出|生).*(報告|文件|檔)|做一?份.*(報告|文件|簡報)|匯出成?\s*(pdf|word|檔|csv)|export\s*(to\s*)?(pdf|docx|csv))/.test(g)) return 'docgen';
   if (/(修\s*bug|debug|重構|refactor|單元測試|unit\s*test|程式碼|codebase|\brepo\b|git\s*commit|pull\s*request|\.(js|ts|jsx|tsx|py|go|rs|java|cpp?|rb|php)\b)/.test(g)) return 'coding';
   return null;
 }
@@ -72,7 +74,7 @@ export async function classifyPack(goal, { model, getApiKey, complete = complete
     const apiKey = await getApiKey(model.provider);
     if (!apiKey) return fallback;
     const ctx = {
-      systemPrompt: '你是任務分流器。把使用者的需求分到最適合的「領域」，只輸出一個領域代號（general/coding/deep-research/data-query/notes/devops/patent/uiux）其中之一，不要解釋、不要標點。\n領域說明：\n' + ROUTE_GUIDE,
+      systemPrompt: '你是任務分流器。把使用者的需求分到最適合的「領域」，只輸出一個領域代號（general/coding/deep-research/data-query/notes/devops/patent/uiux/docgen）其中之一，不要解釋、不要標點。\n領域說明：\n' + ROUTE_GUIDE,
       messages: [{ role: 'user', content: [{ type: 'text', text: `需求：${String(goal).slice(0, 600)}\n\n領域代號是？` }], timestamp: Date.now() }],
     };
     const res = await complete(model, ctx, { maxTokens: 12, apiKey, signal: ac.signal, cacheRetention: cacheRetentionFor(model) });
