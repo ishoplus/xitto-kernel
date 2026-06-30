@@ -1373,6 +1373,15 @@ function logHtml(p) {
     .join("");
 }
 
+// 驗收徽章（完成定義）：通過＝綠勾、未通過＝琥珀。null/未驗收 → 不顯示。
+function verifyBadgeWb(v) {
+  if (!v || !v.ran) return "";
+  const rounds = v.rounds > 1 ? `·${v.rounds}輪` : "";
+  return v.ok
+    ? `<span class="badge vok">✓ 驗收通過${rounds}</span>`
+    : `<span class="badge vfail">⚠ 未通過驗收${rounds}</span>`;
+}
+
 function renderCurrent(t) {
   // 保住 steer 輸入框內容
   const ps = (() => {
@@ -1405,6 +1414,7 @@ function renderCurrent(t) {
         <span class="badge ${statusClass(t.status)}">${STATUS_TEXT[t.status] || t.status}${t.rounds ? ` · ${t.rounds} 輪` : ""}</span>
         ${t.pack ? `<span class="badge">${t.auto ? "🪄" : "🧭"} ${esc(packLabel(t.pack))}</span>` : ""}
         <span class="badge">📁 ${esc(t.workspace || "default")}</span>
+        ${verifyBadgeWb(t.result?.verify)}
       </div>
       <div class="task-actions">
         ${CANCELLABLE.includes(t.status) ? `<button class="danger" onclick="cancelTask('${t.taskId}')">停止</button>` : ""}
@@ -1430,6 +1440,9 @@ function renderCurrent(t) {
     ${t.status === "done" ? `<div class="summary">
       <div class="summary-label">摘要</div>
       <div class="summary-text md">${mdRender(t.result?.text || "")}</div>
+      ${t.result?.verify && t.result.verify.ran && !t.result.verify.ok && t.result.verify.output
+        ? `<details class="vbadge-wrap"><summary class="vfail-link">⚠ 驗收未通過——查看輸出</summary><pre class="vbadge-out">${esc(t.result.verify.output)}</pre></details>`
+        : ""}
     </div>` : ""}
 
     ${t.status === "error" ? `<div class="error-msg">⚠ ${esc(t.error)}</div>` : ""}

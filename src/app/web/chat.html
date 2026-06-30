@@ -532,6 +532,28 @@ body {
 .sub-think::before { content: "◐ "; color: var(--accent); font-style: normal; animation: blink 1.2s steps(2) infinite; }
 .thread.tui .sub-think::before { content: "⎿ ◐ "; }
 
+/* 驗收徽章（完成定義）*/
+.vbadge {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: var(--sp-2);
+  padding: 3px 10px;
+  font-size: 12px; font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}
+.vbadge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.vbadge.fail { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: color-mix(in srgb, var(--warn) 10%, transparent); cursor: pointer; }
+.vbadge-wrap { margin-top: var(--sp-2); }
+.vbadge-wrap summary { list-style: none; display: inline-flex; }
+.vbadge-wrap summary::-webkit-details-marker { display: none; }
+.vbadge-out {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md);
+  font: 12px/1.5 ui-monospace, Menlo, monospace;
+  white-space: pre-wrap; max-height: 240px; overflow: auto; color: var(--dim);
+}
+
 /* 階段提示 */
 .phase {
   color: var(--dim);
@@ -1401,6 +1423,15 @@ function renderHud() {
     ${renderBgTasks()}`;
 }
 
+// 驗收徽章（完成定義）：通過＝綠勾、未通過＝琥珀警示（可展開證據）。null/未驗收 → 不顯示。
+function verifyBadge(v) {
+  if (!v || !v.ran) return "";
+  const rounds = v.rounds > 1 ? `（修正 ${v.rounds} 輪）` : "";
+  if (v.ok) return `<div class="vbadge ok">✓ 驗收通過${rounds}</div>`;
+  const ev = v.output ? `<pre class="vbadge-out">${esc(v.output)}</pre>` : "";
+  return `<details class="vbadge-wrap"><summary class="vbadge fail">⚠ 未通過驗收${rounds}</summary>${ev}</details>`;
+}
+
 function msgHtml(m, idx) {
   const isUser = m.role === "user";
   const bodyHtml = isUser ? esc(m.text) : m.text ? mdRender(m.text) : "";
@@ -1418,6 +1449,7 @@ function msgHtml(m, idx) {
       ${!isUser && !procInRail() ? procHtml(m, idx) : ""}
       ${phase}
       <div class="body ${isUser ? "" : "md"}">${bodyHtml}${cursor}</div>
+      ${!isUser ? verifyBadge(m.verify) : ""}
     </div>
   </div>`;
 }
@@ -1637,9 +1669,11 @@ function handleEvent(ev, asst) {
     case "done":
       if (ev.sessionId) sessionId = ev.sessionId;
       if (!asst.text && ev.text) asst.text = ev.text;
+      if (ev.verify) asst.verify = ev.verify;   // 驗收裁決（DoD 徽章用）
       break;
     case "end": // 背景任務結束：補文字即可，sessionId 由 pumpBgEvents 控管（避免污染前景）
       if (!asst.text && ev.result?.text) asst.text = ev.result.text;
+      if (ev.result?.verify) asst.verify = ev.result.verify;
       break;
     case "error":
       asst.phase = "";
@@ -1659,7 +1693,7 @@ function finalize(asst, firstUserText) {
   if (!sessionId) return; // 沒拿到 sessionId → 不落地
   const title = (allChats().find((c) => c.id === sessionId)?.title) || firstUserText.slice(0, 40);
   upsertChat({ id: sessionId, title, ts: Date.now(), space: curSpace, pack: $("#pack").value });
-  saveTranscript(sessionId, messages.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [] })));
+  saveTranscript(sessionId, messages.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify })));
   renderChats();
 }
 
