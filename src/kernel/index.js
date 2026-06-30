@@ -541,6 +541,47 @@ export function createKernel(pack, config = {}) {
       const summary = (lastAssistant?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim();
       return { goal, done: !!g.done, rounds: g.rounds, aborted: !!g.aborted, stalled: !!g.stalled, summary, artifacts, verify: g.verify || null, history: g.history };
     },
+
+    /**
+     * 可寫 map-verify（序列 + 快照回滾）：對每個項目跑一個可寫回合 → 逐項驗收
+     * → 通過保留／未通過 undo 回滾該項所有檔案改動（保持工作區乾淨）。
+     * 安全的「批次驗證型變更」：序列避開平行寫衝突，失敗自動復原。
+     * 驗收來源優先序：item.verify（shell 指令）> pack.verify（result.verify）> 無（不擋但標記未驗）。
+     * 限制：僅回滾「帶 path 的檔案改動」(undo 快照範圍)；bash 等非檔案副作用不在回滾內。
+     * @param {Array<string|{task:string, verify?:string}>} items
+     * @param {{ onEvent?, onAgent?, onItem? }} [opts]
+     * @returns {Promise<{ total, passed, failed, results: Array<{task,ok,verified,rolledBack,verify,text}> }>}
+     */
+    mapVerify: async (items, opts = {}) => {
+      if (!config.model) throw new Error('mapVerify 需要 config.model。');
+      const norm = (Array.isArray(items) ? items : [])
+        .map((it) => (typeof it === 'string' ? { task: it } : it))
+        .filter((it) => it && String(it.task || '').trim());
+      const results = [];
+      for (const it of norm) {
+        const mark = undoStack.length;                                   // 回滾點
+        const r = await api.runTurn(String(it.task), { history: [], onEvent: opts.onEvent, onAgent: opts.onAgent });
+        let verify;
+        if (it.verify) {
+          const vr = runVerify(String(it.verify));
+          verify = { ran: true, ok: !!vr.ok && !vr.blocked, output: String(vr.output || vr.reason || '').slice(0, 2000), source: 'item' };
+        } else if (r.verify) {
+          verify = { ...r.verify, source: 'pack' };
+        } else {
+          verify = { ran: false, ok: true, source: 'none' };             // 無 verify → 不擋（標記未驗）
+        }
+        let rolledBack = false;
+        if (verify.ran && !verify.ok) {
+          while (undoStack.length > mark) api.undo();                    // 回滾此項所有檔案改動（LIFO）
+          rolledBack = true;
+        }
+        const res = { task: it.task, ok: !!verify.ok, verified: verify.ran, rolledBack, verify, text: r.text };
+        results.push(res);
+        opts.onItem?.(res);
+      }
+      const passed = results.filter((x) => x.ok).length;
+      return { total: results.length, passed, failed: results.length - passed, results };
+    },
   };
   return api;
 }
