@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.16
+
+- **可執行技能：技能可帶腳本 + `skill_run` 確定性重跑**。`skill_save` 新增可選 `script`，存成「## 腳本（可執行）」區塊（frontmatter 標 `executable: true`；verify 仍必過，確保結晶的是已驗證成功）。新增 `skill_run` 工具：抽出技能腳本、經安全檢查與沙箱（危險指令擋、開沙箱則 Seatbelt 包）執行，回 exit code 與輸出。讓 agent 摸出可重複流程後結晶成「能跑多次的能力」，往後免 LLM 重推——交付能力而非一次性成品。
+  - `skill_run` 為 mutating（走 kernel 權限步驟）；找不到/無腳本/危險指令皆友善處理。
+  - 新增 `test/skill-exec.test.js`。
+- 測試 248/248。
+
 ## 0.9.15
 
 - **私有脈絡複利迴路閉環：`runOutcome` 完成後自動記情節**。召回早已自動（相關過往經驗注入 systemPrompt），但記錄原本靠 agent 主動呼叫 `episode_record`——不記就不累積。現在每個 outcome 完成自動記一筆（goal + 結果 success/stalled/incomplete + 產出檔數，tag = pack 名），與自動召回合成 `act → record → recall` 閉環，無需 agent 自律，系統自動「越用越懂你」。
