@@ -231,6 +231,24 @@ const TOOL_ZH = {
   spawn_agents: "派出子助手群",
   delegate: "委派子助手",
   ask_user: "來問你",
+  // 補齊既有未標籤工具（work log 不再顯示生英文名）
+  memory_list: "讀記憶",
+  playbook_remove: "清專案手冊",
+  git_status: "git 狀態",
+  git_diff: "git diff",
+  git_log: "git log",
+  git_commit: "git commit",
+  bash_bg: "後台執行",
+  bash_output: "讀後台輸出",
+  bash_kill: "終止後台",
+  sql_query: "查詢資料",
+  sql_exec: "寫入資料",
+  list_tables: "列資料表",
+  describe_table: "看表結構",
+  list_notes: "列筆記",
+  search_notes: "搜尋筆記",
+  read_note: "讀筆記",
+  add_note: "新增筆記",
 };
 
 const LABELS = {
