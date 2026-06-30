@@ -18,7 +18,7 @@ import { createPlaybook } from './playbook.js';
 import { createEpisodes } from './episodes.js';
 import { extractFacts } from './extract.js';
 import { createTodo } from './todo.js';
-import { createSpawnTool } from './subagent.js';
+import { createSpawnTool, createMapTool } from './subagent.js';
 import { createSkills } from './skills.js';
 import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
 import { maybeCompact, resolveCompactionSettings } from './compaction.js';
@@ -246,14 +246,18 @@ export function createKernel(pack, config = {}) {
     ...skills.tools,
     ...(config.extraTools || []),  // 外部注入（MCP 工具等）：由 app 層先 async 載入再傳入
   ];
-  // spawn_agent：派唯讀子 agent。其可用工具 = 所有唯讀工具（不含 spawn_agent 自己，避免遞迴）。
+  // spawn_agent / spawn_agents：派唯讀子 agent（單一 / 平行 map）。
+  // 子 agent 可用工具 = 所有唯讀工具，但**排除 spawn 自己**（避免遞迴 / 平行爆量）。
   let allTools = baseTools;
-  const spawnTool = createSpawnTool({
+  const subDeps = {
     getModel: () => config.model,
     getApiKey: config.getApiKey,
-    getReadOnlyTools: () => allTools.filter((t) => t.readOnly === true && t.name !== 'spawn_agent'),
-  });
-  const tools = [...baseTools, spawnTool];
+    getStreamFn: () => config.streamFn, // 與 kernel 同一個 provider（測試可注入 fake）；未給則 subagent 內 fallback pi-ai
+    getReadOnlyTools: () => allTools.filter((t) => t.readOnly === true && t.name !== 'spawn_agent' && t.name !== 'spawn_agents'),
+  };
+  const spawnTool = createSpawnTool(subDeps);
+  const mapTool = createMapTool(subDeps);
+  const tools = [...baseTools, spawnTool, mapTool];
   allTools = tools;
   const registry = createToolRegistry(tools);
   const mutatingTools = new Set(deriveMutatingTools(pack, tools));
