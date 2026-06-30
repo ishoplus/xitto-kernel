@@ -212,6 +212,7 @@ const TOOL_ZH = {
   grep: "搜尋內容",
   write: "建立檔案",
   edit: "修改檔案",
+  gen_doc: "產生文件",
   bash: "執行指令",
   web_search: "搜尋網路",
   web_fetch: "讀取網頁",
