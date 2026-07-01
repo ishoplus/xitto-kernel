@@ -73,6 +73,25 @@ test('runGoal：驗收一直判未達成(查不到的目標) → 在幾輪內停
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
+test('runGoal：唯讀任務(不改檔)但回饋逐輪演進 → 不在第 3 輪早停,能精修到達成', async () => {
+  const cwd = tmp();
+  try {
+    // 每回合只回文字、不改檔（模擬研究/問答）；舊邏輯只看 turnModified → 第 3 輪必 STALLED
+    const fakeStream = (_m) => {
+      const msg = { role: 'assistant', content: [{ type: 'text', text: '查到一部分，繼續深入。' }], usage: { input: 1, output: 1 } };
+      return { async *[Symbol.asyncIterator]() { yield { type: 'done', partial: msg }; }, result: async () => msg };
+    };
+    // checkGoal：前 4 輪回「不同」的 remaining（演進＝有進展），第 5 輪達成
+    let round = 0;
+    const checkGoal = async () => { round++; return round >= 5 ? { done: true } : { done: false, remaining: `還缺第 ${round} 項資訊` }; };
+    const k = createKernel(createGeneralPack({ cwd }), { cwd, model, getApiKey: () => 'k', streamFn: fakeStream, checkGoal });
+    const g = await k.runGoal('多步研究問答', { maxRounds: 12 });
+    assert.equal(g.done, true, '回饋在演進 → 應持續精修到達成，而非第 3 輪 STALLED');
+    assert.equal(g.rounds, 5);
+    assert.ok(!g.stalled);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('runOutcome：.xitto-kernel 內部沉澱檔不算交付物', async () => {
   const cwd = tmp();
   try {
