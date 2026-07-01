@@ -58,8 +58,13 @@ async function runTask(task, { model, getApiKey, resolveModel, dataDir, maxRound
   let filedNote = '';
   try {
     if (task.file_name) {
-      const src = isAbsolute(task.file_name) ? task.file_name : join(dataDir, 'files', task.file_name);
-      if (existsSync(src)) { const dst = join(cwd, basename(task.file_name)); copyFileSync(src, dst); filedNote = `\n\n（附檔已放在工作目錄：${basename(task.file_name)}，可用 read 工具讀取）`; }
+      // 附檔解析：絕對路徑 → GAIA 原生（與 metadata.jsonl 同層）→ 本 harness 慣例（files/ 子目錄）
+      const cands = isAbsolute(task.file_name)
+        ? [task.file_name]
+        : [join(dataDir, task.file_name), join(dataDir, 'files', task.file_name)];
+      const src = cands.find((p) => existsSync(p));
+      if (src) { const dst = join(cwd, basename(task.file_name)); copyFileSync(src, dst); filedNote = `\n\n（附檔已放在工作目錄：${basename(task.file_name)}，可用 read 工具讀取）`; }
+      else filedNote = `\n\n（註：本題有附檔 ${task.file_name} 但找不到檔案，將在無附檔情況下作答）`;
     }
     const kernel = createKernel(createGeneralPack({ cwd }), {
       cwd, model, getApiKey, resolveModel,
