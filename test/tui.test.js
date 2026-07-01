@@ -30,6 +30,35 @@ test('store：appendLive → finalizeLive 提交區塊進 transcript', () => {
   assert.match(items.map((i) => i.text).join('\n'), /第一段|第二段/);
 });
 
+test('狀態列 verb：輸出中不因區塊提交瞬間閃回思考中（outputting 旗標）', () => {
+  // appendLive 開始吐字 → outputting 旗標亮；finalizeLive 後熄
+  const s = createStore();
+  s.appendLive('一段內容');
+  assert.equal(s.get().outputting, true, '吐字時 outputting=true');
+  s.finalizeLive();
+  assert.equal(s.get().outputting, false, 'finalize 後 outputting=false');
+
+  // live 已空但 outputting 仍亮（區塊剛提交的瞬間）→ 狀態列仍「輸出中」，不閃回思考中
+  const busy = createStore({ mode: 'busy', busyAt: Date.now() - 3000, live: '', outputting: true });
+  const r1 = render(React.createElement(App, { store: busy, handlers: noopHandlers }));
+  assert.match(r1.lastFrame(), /輸出中/);
+  assert.doesNotMatch(r1.lastFrame(), /思考中/);
+  r1.unmount();
+
+  // 工具執行中 → 優先「執行中」（即使 outputting 殘留）
+  const tooling = createStore({ mode: 'busy', busyAt: Date.now() - 1000, outputting: true });
+  tooling.setTool({ name: 'bash', summary: 'ls' });
+  const r2 = render(React.createElement(App, { store: tooling, handlers: noopHandlers }));
+  assert.match(r2.lastFrame(), /執行中/);
+  r2.unmount();
+
+  // 純思考（無 live 無 outputting 無 tool）→ 思考中
+  const thinking = createStore({ mode: 'busy', busyAt: Date.now() - 2000 });
+  const r3 = render(React.createElement(App, { store: thinking, handlers: noopHandlers }));
+  assert.match(r3.lastFrame(), /思考中/);
+  r3.unmount();
+});
+
 test('store：權限 Select 模式切換', () => {
   const store = createStore();
   store.askSelect('允許 write?', ['允許', '拒絕']);

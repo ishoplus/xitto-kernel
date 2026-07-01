@@ -50,7 +50,7 @@ function waitingVerb(sec) {
 // 外部 store：plain object + listeners。main() 推狀態，元件 subscribe 後 re-render。
 export function createStore(initial = {}) {
   let state = {
-    transcript: [], live: '', liveStarted: false, liveCodeLang: null, thinking: '', tool: null, status: '',
+    transcript: [], live: '', liveStarted: false, liveCodeLang: null, outputting: false, thinking: '', tool: null, status: '',
     tasks: '',               // 任務面板：活動區就地更新（不進 Static，避免每步更新堆重複列表）
     mode: 'idle', planMode: false, permission: null, placeholder: '',
     busyAt: null,            // 本輪開始時間戳（ms）：思考動畫 + 耗時
@@ -88,6 +88,9 @@ export function createStore(initial = {}) {
       emitNow();
     },
     appendLive(s) {
+      // 一旦開始吐字，整段輸出期間維持「輸出中」旗標——即使區塊提交後 live 短暫變空，
+      // 也不會讓狀態列閃回「思考中」（後續 state 均以 {...state} 展開，旗標自動沿用）。
+      if (!state.outputting) state = { ...state, outputting: true };
       // --- 模式 A：正在逐行提交超長未閉合程式碼框（state.live 只存程式碼本體、無 fence）---
       if (codeLang != null) {
         let body = state.live + s;
@@ -142,7 +145,7 @@ export function createStore(initial = {}) {
       const started = liveStarted;
       const cl = codeLang;
       liveStarted = false; codeLang = null;
-      state = { ...state, live: '', liveStarted: false, liveCodeLang: null, thinking: '' };
+      state = { ...state, live: '', liveStarted: false, liveCodeLang: null, outputting: false, thinking: '' };
       if (live.trim()) {
         const rendered = cl != null ? codeChunk(live, cl, false) : md(live);
         state.transcript = [...state.transcript, { id: id++, text: '\n' + gutter(rendered, started ? '' : DOT) }];
@@ -326,7 +329,8 @@ export function App({ store, handlers }) {
   // 會用「換行數」而非「實際終端列數」計算，視窗變窄時會誤算並殘留亂碼。
 
   const elapsed = s.busyAt ? Math.floor((Date.now() - s.busyAt) / 1000) : 0;
-  const verb = s.live ? '輸出中' : (s.tool ? '執行中' : waitingVerb(elapsed)); // 已開始輸出/工具時改措辭
+  // 工具執行中優先「執行中」；否則只要本段在吐字（live 有值或 outputting 旗標）就「輸出中」，不因區塊提交瞬間閃回思考中
+  const verb = s.tool ? '執行中' : (s.live || s.outputting) ? '輸出中' : waitingVerb(elapsed);
   const tokPart = s.turnTok ? ` · ↑ ${fmtTok(s.turnTok)}` : ''; // 即時累計 token（對標 Claude Code）
   const waiting = s.mode === 'busy'
     ? `\x1b[35m${SPINNER[tick % SPINNER.length]} ${verb}… ${elapsed}s${tokPart}\x1b[39m ` +
