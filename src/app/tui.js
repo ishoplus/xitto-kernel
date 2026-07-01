@@ -38,6 +38,7 @@ function codeFlushLines() {
 const INV = '\x1b[7m';
 const INVOFF = '\x1b[27m';
 const GRAY = (s) => `\x1b[90m${s}\x1b[39m`;
+const fmtTok = (n) => (n < 1000 ? String(n) : (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, '') + 'k');
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 function waitingVerb(sec) {
   if (sec < 3) return '思考中';
@@ -326,8 +327,9 @@ export function App({ store, handlers }) {
 
   const elapsed = s.busyAt ? Math.floor((Date.now() - s.busyAt) / 1000) : 0;
   const verb = s.live ? '輸出中' : (s.tool ? '執行中' : waitingVerb(elapsed)); // 已開始輸出/工具時改措辭
+  const tokPart = s.turnTok ? ` · ↑ ${fmtTok(s.turnTok)}` : ''; // 即時累計 token（對標 Claude Code）
   const waiting = s.mode === 'busy'
-    ? `\x1b[35m${SPINNER[tick % SPINNER.length]} ${verb}… ${elapsed}s\x1b[39m ` +
+    ? `\x1b[35m${SPINNER[tick % SPINNER.length]} ${verb}… ${elapsed}s${tokPart}\x1b[39m ` +
       GRAY('· 直接打字=引導，Esc/Ctrl+C 中斷')
     : null;
 

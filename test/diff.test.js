@@ -29,13 +29,25 @@ test('lineDiff：超大檔 → tooBig（不展開內容）', () => {
   assert.equal(d.added, 700);
 });
 
-test('diffBlock：渲染綠 + / 紅 - + 計數', () => {
-  const out = strip(diffBlock(lineDiff('a\nb', 'a\nB')));
-  assert.match(out, /\+1 -1 行/);
+test('diffBlock：渲染綠 + / 紅 - + 計數 + 耗時', () => {
+  const out = strip(diffBlock(lineDiff('a\nb', 'a\nB'), '0.3s'));
+  assert.match(out, /\+1 -1 行 0\.3s/); // 耗時附標頭
   assert.match(out, /\+ B/);
   assert.match(out, /- b/);
   assert.equal(diffBlock(null), '');
   assert.match(strip(diffBlock({ tooBig: true, added: 700, removed: 0 })), /差異過大/);
+});
+
+test('diffBlock：變動行帶前後 2 行上下文，兩 hunk 間大段折疊 ⋮', () => {
+  // 20 行改第 1 與第 16 行 → 各自顯示 ±2 行上下文，中間遠離變動的大段用 ⋮ 折疊（非整檔平鋪）
+  const before = Array.from({ length: 20 }, (_, i) => 'row' + i).join('\n');
+  const after = before.replace('row1', 'AAA').replace('row16', 'BBB');
+  const out = strip(diffBlock(lineDiff(before, after)));
+  assert.match(out, /\+ AAA/, '第一處變動');
+  assert.match(out, /\+ BBB/, '第二處變動');
+  assert.match(out, /row0/, '變動行的上下文（灰）有顯示');
+  assert.match(out, /⋮/, '兩 hunk 間大段折疊為 ⋮');
+  assert.doesNotMatch(out, /row9\b/, '中間遠離變動的行不顯示（非整檔平鋪）');
 });
 
 test('kernel：edit 改檔後 result 自動掛 _diff（集中於 wrapUndo,pack 免改）', async () => {

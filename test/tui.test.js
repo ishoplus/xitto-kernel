@@ -46,17 +46,24 @@ test('summarize：取有意義的參數而非全 JSON（像 Claude Code）', () 
   assert.equal(summarize(null), '');
 });
 
-test('toolBlock：⏺ 標頭(args) + ⎿ 多行 + 摺疊 +N 行', () => {
-  const r = { content: [{ type: 'text', text: Array.from({ length: 9 }, (_, i) => 'L' + i).join('\n') }] };
-  const out = strip(toolBlock('bash', 'npm test', r, false));
-  assert.match(out, /⏺ bash\(npm test\)/);
+test('toolBlock：⏺ 標頭(args) + ⎿ 多行 + 摺疊 +N 行 + 耗時', () => {
+  const r = { content: [{ type: 'text', text: Array.from({ length: 14 }, (_, i) => 'L' + i).join('\n') }] };
+  const out = strip(toolBlock('bash', 'npm test', r, false, '1.2s'));
+  assert.match(out, /⏺ bash\(npm test\) 1\.2s/); // 耗時附標頭
   assert.match(out, /⎿ L0/);
-  assert.match(out, /L5/);            // 顯示前 6 行
-  assert.doesNotMatch(out, /L6/);     // 第 7 行起摺疊
-  assert.match(out, /… \+3 行/);      // 9 - 6 = 3
+  assert.match(out, /L9/);            // 顯示前 10 行
+  assert.doesNotMatch(out, /L10\b/);  // 第 11 行起摺疊
+  assert.match(out, /… \+4 行/);      // 14 - 10 = 4
   // 空結果 → ✓ / ✗ 標記
   assert.match(strip(toolBlock('x', '', { content: [] }, false)), /⎿ ✓/);
   assert.match(strip(toolBlock('x', '', { content: [] }, true)), /⎿ ✗/);
+});
+
+test('fmtTok：token 壓縮顯示', async () => {
+  const { fmtTok } = await import('../src/app/tui-run.js');
+  assert.equal(fmtTok(42), '42');
+  assert.equal(fmtTok(1200), '1.2k');
+  assert.equal(fmtTok(12000), '12k');
 });
 
 test('gutter / backspaceAt 純函數', () => {

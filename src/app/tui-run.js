@@ -17,29 +17,47 @@ export const summarize = (args) => {
 };
 const Y = (s) => `\x1b[33m${s}\x1b[39m`; const G = (s) => `\x1b[90m${s}\x1b[39m`; const R = (s) => `\x1b[31m${s}\x1b[39m`; const C = (s) => `\x1b[36m${s}\x1b[39m`; const Gn = (s) => `\x1b[32m${s}\x1b[39m`;
 
+// token 數壓縮顯示：1234 → 1.2k（對標 Claude Code 進度列）
+export const fmtTok = (n) => (n < 1000 ? String(n) : (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, '') + 'k');
+
 // 工具卡（對標 Claude Code）：⏺ name(args) 標頭 + ⎿ 多行結果,過長摺疊成「… +N 行」。純函數,可測。
-export function toolBlock(name, summary, result, isError) {
-  const head = Y(`⏺ ${name}`) + (summary ? G(`(${summary})`) : '');
+// dur：單一工具耗時（如 '1.2s'），附在標頭尾（灰）。
+export function toolBlock(name, summary, result, isError, dur) {
+  const head = Y(`⏺ ${name}`) + (summary ? G(`(${summary})`) : '') + (dur ? G(` ${dur}`) : '');
   const raw = (result?.content || []).map((c) => c.text || '').join('\n').replace(/\s+$/, '');
   if (!raw.trim()) return head + '\n' + (isError ? R('  ⎿ ✗') : Gn('  ⎿ ✓'));
   const lines = raw.split('\n');
-  const MAX = isError ? 12 : 6;
+  const MAX = isError ? 12 : 10;
   const shown = lines.slice(0, MAX).map((l, i) => '  ' + (i === 0 ? '⎿ ' : '  ') + l.slice(0, 200));
   let out = head + '\n' + (isError ? R : G)(shown.join('\n'));
   if (lines.length > MAX) out += '\n' + G(`     … +${lines.length - MAX} 行`);
   return out;
 }
 
-// 彩色 diff 區塊（綠 + / 紅 -）：渲染 kernel 掛在 result._diff 的行級 diff。
-export function diffBlock(d) {
+// 彩色 diff 區塊：以「hunk」呈現——變動行（綠 + / 紅 -）+ 前後各 2 行上下文（灰），
+// 跨 hunk 折疊為 ⋮，對標 Claude Code / xitto-code 的 unified diff。渲染 kernel 掛在 result._diff 的行級 diff。
+export function diffBlock(d, dur) {
   if (!d) return '';
-  const head = G('  ⎿ ') + Gn(`+${d.added}`) + ' ' + R(`-${d.removed}`) + G(' 行');
+  const head = G('  ⎿ ') + Gn(`+${d.added}`) + ' ' + R(`-${d.removed}`) + G(' 行') + (dur ? G(` ${dur}`) : '');
   if (d.tooBig) return head + G('（差異過大,省略內容）');
-  const changed = (d.lines || []).filter((l) => l.t !== ' ');
+  const lines = d.lines || [];
+  const changed = lines.map((l, i) => (l.t !== ' ' ? i : -1)).filter((i) => i >= 0);
   if (!changed.length) return '';
-  const MAX = 30;
-  const body = changed.slice(0, MAX).map((l) => (l.t === '+' ? Gn('    + ' + l.s.slice(0, 200)) : R('    - ' + l.s.slice(0, 200)))).join('\n');
-  return head + '\n' + body + (changed.length > MAX ? '\n' + G(`     … +${changed.length - MAX} 行變更`) : '');
+  const CTX = 2;
+  const show = new Set();
+  for (const i of changed) for (let j = i - CTX; j <= i + CTX; j++) if (j >= 0 && j < lines.length) show.add(j);
+  const idxs = [...show].sort((a, b) => a - b);
+  const MAX = 40;
+  const out = [];
+  let prev = -1;
+  for (const i of idxs.slice(0, MAX)) {
+    if (prev >= 0 && i > prev + 1) out.push(C('    ⋮')); // 折疊未顯示的區間
+    const l = lines[i];
+    out.push(l.t === '+' ? Gn('    + ' + l.s.slice(0, 200)) : l.t === '-' ? R('    - ' + l.s.slice(0, 200)) : G('      ' + l.s.slice(0, 200)));
+    prev = i;
+  }
+  if (idxs.length > MAX) out.push(G(`     … +${idxs.length - MAX} 行`));
+  return head + '\n' + out.join('\n');
 }
 
 const SLASH = { '/help': '說明', '/goal': '目標循環', '/sandbox': '沙箱', '/auto': '自動核准', '/plan': '計劃模式', '/undo': '撤銷', '/tools': '工具', '/memory': '記憶', '/sessions': '對話', '/resume': '續接', '/cost': '成本', '/clear': '清除', '/exit': '離開' };
@@ -54,6 +72,8 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
   let autoApprove = false;
   let pendingSelect = null;
   const sessionTok = { in: 0, out: 0 };
+  const turnTok = { in: 0, out: 0 };   // 本輪 token（spinner 即時顯示 + 結束小結）
+  let toolStartAt = 0;                  // 單一工具起始時間（算耗時）
 
   const askConfirm = (name, args, danger) => {
     if (autoApprove && !danger) return Promise.resolve('yes');
@@ -89,29 +109,45 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
       }
       case 'message_end': {
         const u = ev.message?.usage;
-        if (u) { sessionTok.in += u.input || 0; sessionTok.out += u.output || 0; const used = (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0); if (used) store.set({ ctx: { used, total: model.contextWindow || 0 } }); }
+        if (u) {
+          sessionTok.in += u.input || 0; sessionTok.out += u.output || 0;
+          turnTok.in += u.input || 0; turnTok.out += u.output || 0;
+          store.set({ turnTok: turnTok.in + turnTok.out });   // spinner 即時 token
+          const used = (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0);
+          if (used) store.set({ ctx: { used, total: model.contextWindow || 0 } });
+        }
+        break;
+      }
+      // 子 agent / 平行 map 的巢狀活動：即時顯示在狀態列（對標 xitto-code 的「⟳ 子agent」；否則 TUI 完全看不到子任務在跑）
+      case 'tool_execution_update': {
+        const p = ev.partialResult;
+        if (p?.kind === 'subagent') store.setStatus(p.phase === 'end' ? '' : C(`⟳ 子agent ${p.name || ''}`) + (p.args ? G(`(${summarize(p.args)})`) : ''));
+        else if (p?.kind === 'mapagent') store.setStatus(p.phase === 'item_done' ? '' : C(`⟳ 平行 ${(p.index ?? 0) + 1}/${p.total}`) + (p.task ? G(`(${String(p.task).slice(0, 40)})`) : ''));
         break;
       }
       case 'tool_execution_start':
         store.finalizeLive();
+        toolStartAt = Date.now();
         if (ev.toolName === 'todo_write' && Array.isArray(ev.args?.todos)) {
-          store.pushBlock(C('☑ 待辦') + '\n' + ev.args.todos.map((t) => '  ' + (t.status === 'completed' ? Gn('☑ ') + G(t.content) : t.status === 'in_progress' ? Y('◐ ') + t.content : G('☐ ' + t.content))).join('\n'));
+          // 原地更新的待辦面板（非堆疊）：每次 update 在原位重畫
+          store.set({ tasks: ev.args.todos.map((t) => '  ' + (t.status === 'completed' ? Gn('☑ ') + G(t.content) : t.status === 'in_progress' ? Y('◐ ') + t.content : G('☐ ' + t.content))).join('\n') });
         } else {
           pendingSummary = summarize(ev.args);
           store.setTool({ name: ev.toolName, summary: pendingSummary });
         }
         break;
       case 'tool_execution_end': {
-        store.setTool(null);
+        store.setTool(null); store.setStatus('');
+        const dur = toolStartAt ? ((Date.now() - toolStartAt) / 1000).toFixed(1) + 's' : '';
         if (ev.toolName !== 'todo_write') {
           const d = ev.result?._diff;
           if (d && !ev.isError && (d.added || d.removed || d.tooBig)) {
-            store.pushBlock(Y(`⏺ ${ev.toolName}`) + (pendingSummary ? G(`(${pendingSummary})`) : '') + '\n' + diffBlock(d));
+            store.pushBlock(Y(`⏺ ${ev.toolName}`) + (pendingSummary ? G(`(${pendingSummary})`) : '') + (dur ? G(` ${dur}`) : '') + '\n' + diffBlock(d));
           } else {
-            store.pushBlock(toolBlock(ev.toolName, pendingSummary, ev.result, ev.isError));
+            store.pushBlock(toolBlock(ev.toolName, pendingSummary, ev.result, ev.isError, dur));
           }
         }
-        pendingSummary = '';
+        pendingSummary = ''; toolStartAt = 0;
         break;
       }
       case 'verify_start': store.finalizeLive(); store.pushBlock(G('  🔎 自動驗收…')); break;
@@ -158,6 +194,17 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
     }
   };
 
+  // 每輪開始：歸零本輪 token、清原地待辦面板、進 busy。回傳起始時間戳。
+  const beginTurn = () => { turnTok.in = 0; turnTok.out = 0; store.setMode('busy'); store.set({ busyAt: Date.now(), turnTok: 0, tasks: '' }); return Date.now(); };
+  // 每輪收尾：凍結待辦面板進歷史 + 印 token/耗時小結（對標 Claude Code 的 ↳ 小結）。
+  const finishTurn = (startAt) => {
+    const tasks = store.get().tasks;
+    if (tasks) { store.pushBlock(C('☑ 待辦') + '\n' + tasks); store.set({ tasks: '' }); }
+    const tot = turnTok.in + turnTok.out;
+    if (tot) store.pushBlock(G(`  ↳ ${Math.round((Date.now() - startAt) / 1000)}s · ${fmtTok(tot)} tokens（↑${fmtTok(turnTok.in)} ↓${fmtTok(turnTok.out)}）`));
+    currentAgent = null; store.setTool(null); store.setStatus(''); store.set({ busyAt: null }); store.setMode('idle'); refreshGit();
+  };
+
   // ── 送出 ──
   async function onSubmit(raw) {
     const input = (raw || '').trim();
@@ -171,7 +218,7 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
     if (input.startsWith('!')) { const r = (() => { try { return execSync(input.slice(1), { cwd, encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { return (e.stdout || '') + (e.stderr || '') || e.message; } })(); store.pushBlock(G('$ ' + input.slice(1)) + '\n' + (r.trim() || '(no output)')); return; }
     if (input.startsWith('#')) { const r = kernel.memory.save(input.slice(1).trim()); store.pushBlock(r.saved ? G('✎ 已記住：' + r.saved) : G('（記憶已存在或空）')); return; }
 
-    store.setMode('busy'); store.set({ busyAt: Date.now() });
+    const startAt = beginTurn();
     try {
       const text = expandMentions(planMode ? `[計劃模式：只規劃、列步驟與會改動的檔案，不要實際寫檔或執行命令]\n\n${input}` : input);
       const r = await kernel.runTurn(text, { history, onEvent, onAgent: (a) => { currentAgent = a; } });
@@ -179,13 +226,13 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
       const note = turnNotice(r.stopReason, !!r.text); // 保底：截斷/空回應也給一句話，不留半截或空白
       if (note) store.pushBlock(Y(note));
     } catch (e) { store.finalizeLive(); store.pushBlock(R('錯誤：' + e.message)); }
-    finally { currentAgent = null; store.setTool(null); store.set({ busyAt: null }); store.setMode('idle'); refreshGit(); }
+    finally { finishTurn(startAt); }
   }
 
   async function runGoal(goal) {
     if (!goal) { store.pushBlock(G('用法 /goal <目標>')); return; }
     store.pushBlock(C('🎯 目標：') + goal);
-    store.setMode('busy'); store.set({ busyAt: Date.now() });
+    const startAt = beginTurn();
     try {
       const r = await kernel.runGoal(goal, {
         history,
@@ -196,7 +243,7 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
       store.finalizeLive(); history = r.history; persist();
       store.pushBlock(r.done ? G(`✅ 目標達成（${r.rounds} 輪）`) : Y(`⚠ 未達成（${r.rounds} 輪）`));
     } catch (e) { store.finalizeLive(); store.pushBlock(R('錯誤：' + e.message)); }
-    finally { currentAgent = null; store.setTool(null); store.set({ busyAt: null }); store.setMode('idle'); refreshGit(); }
+    finally { finishTurn(startAt); }
   }
 
   // ── 補全（斜線 + @檔案）──
