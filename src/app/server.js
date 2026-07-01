@@ -431,7 +431,7 @@ export function createServerApp({ model, getApiKey, resolveModel, token, baseDir
     }
     const r = await kernel.runTurn(spec.input || '', { history: sess.history, onEvent: wrapped, onAgent });
     sess.history = r.messages || r.history || []; sessions.set(sessionId, sess); persistSession(sessionId, sess);
-    return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: r.text ?? lastText(sess.history), usage, rounds: r.rounds, done: r.done, verify: r.verify || null };
+    return { sessionId, workspace, workspaceDir: local ? resolve(workdir) : undefined, text: r.text ?? lastText(sess.history), stopReason: r.stopReason, usage, rounds: r.rounds, done: r.done, verify: r.verify || null };
   }
 
   // 完成通知：POST 結果到 spec.webhook（http/https），單次嘗試、失敗記日誌不重試（PoC）
@@ -507,7 +507,7 @@ export function createServerApp({ model, getApiKey, resolveModel, token, baseDir
       try {
         const r = await runKernel(body, streaming ? (ev) => { const m = mapEvent(ev); if (m) sse(m); } : undefined, undefined, onAgent);
         if (clientGone) return; // 已斷線：history 已在 runKernel 內落地,這裡不再寫回應
-        log({ pack: body.pack || 'general', session: r.sessionId, mode: body.mode || 'turn', tokens: r.usage.input + r.usage.output, rounds: r.rounds, ms: Date.now() - t0 });
+        log({ pack: body.pack || 'general', session: r.sessionId, mode: body.mode || 'turn', stop: r.stopReason, empty: !r.text || undefined, tokens: r.usage.input + r.usage.output, rounds: r.rounds, ms: Date.now() - t0 });
         if (streaming) { sse({ type: 'done', ...r }); res.end(); } else json(res, 200, r);
       } catch (e) {
         if (clientGone) return;

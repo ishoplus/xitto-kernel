@@ -569,6 +569,17 @@ body {
   margin: var(--sp-1) 0;
 }
 
+/* 保底提示：一輪沒有正常回覆時（截斷/中斷/空回應）給使用者的一句話 */
+.turn-note {
+  margin-top: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: 12.5px;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border-radius: 8px;
+}
+
 /* 視圖切換鈕 */
 .view-toggle { font-size: 12px; padding: var(--sp-1) var(--sp-2); white-space: nowrap; }
 
@@ -1451,6 +1462,7 @@ function msgHtml(m, idx) {
       : "";
   const phase =
     !isUser && m.phase ? `<div class="phase ${m.phase === "thinking" || m.phase === "verifying" ? "dots" : ""}">${esc(PHASE_TEXT[m.phase] || m.phase)}</div>` : "";
+  const note = !isUser && m.note ? `<div class="turn-note">⚠ ${esc(m.note)}</div>` : ""; // 保底提示（截斷/中斷/空回應）
 
   return `<div class="msg ${isUser ? "user" : "asst"}" role="article" aria-label="${isUser ? "你的訊息" : "xitto 的回覆"}">
     <div class="avatar" aria-hidden="true">${isUser ? "🙂" : "🤖"}</div>
@@ -1459,6 +1471,7 @@ function msgHtml(m, idx) {
       ${!isUser && !procInRail() ? procHtml(m, idx) : ""}
       ${phase}
       <div class="body ${isUser ? "" : "md"}">${bodyHtml}${cursor}</div>
+      ${note}
       ${!isUser ? verifyBadge(m.verify) : ""}
     </div>
   </div>`;
@@ -1673,6 +1686,7 @@ function handleEvent(ev, asst) {
     case "done":
       if (!asst.text && ev.text) asst.text = ev.text;
       if (ev.verify) asst.verify = ev.verify;   // 驗收裁決（DoD 徽章用）
+      asst.stopReason = ev.stopReason || asst.stopReason || "stop"; // 保底提示用
       break;
     case "end": // 背景任務結束：補文字即可，sessionId 由 pumpBgEvents 控管（避免污染前景）
       if (!asst.text && ev.result?.text) asst.text = ev.result.text;
@@ -1699,6 +1713,7 @@ function onRunEvent(run, ev) {
     return;
   }
   handleEvent(ev, run.asst);
+  if (ev.type === "done" || ev.type === "error") run.gotDone = true; // 收到收尾事件 → 非連線中斷
   if (ev.type === "usage") run.tokens += (ev.input || 0) + (ev.output || 0);
   if (ev.type === "done" && ev.sessionId) {
     run.sessionId = ev.sessionId;
@@ -1721,23 +1736,36 @@ function finalize(asst, firstUserText) {
   renderChats();
 }
 
+/* 保底：每輪結束都要有「可見結果」——正常內容、截斷提示、中斷、空回應、連線中斷，
+   五種結局都給使用者一句話，絕不留半截文字或空白泡泡發呆。 */
+function ensureReply(run) {
+  const a = run.asst;
+  if (a.text && a.text.startsWith("⚠")) return;                 // 已是錯誤訊息（error 事件塞的），不再疊
+  const hasContent = !!a.text || (a.tools && a.tools.length);
+  if (run.userStopped) { a.note = "已中斷"; return; }
+  if (!run.gotDone) { a.note = hasContent ? "連線中斷，回覆可能不完整，請重試" : "這輪沒有取得回覆（連線中斷或空回應），請重試"; return; }
+  if (a.stopReason === "length") { a.note = "回覆已達輸出上限被截斷（可調高 model 的 maxTokens）"; return; }
+  if (!hasContent) { a.note = "模型這輪沒有產生內容，請重試"; return; }
+}
+
 /* 前景 run 結束落地：以 run 自己的 chatMsgs / sessionId 寫入轉錄，不依賴「目前所看對話」。 */
 function finalizeRun(run) {
   run.asst.phase = "";
+  ensureReply(run);                                             // 保證這輪有可見結果
   const sid = run.sessionId;
   if (run.chatMsgs === messages) { render(); loadFiles(); }   // 該對話仍開著才刷新畫面/檔案列表
   refreshStreamingUI();                                        // 同步送出/停止鈕、游標
   if (!sid) { renderChats(); return; }                          // 沒拿到 sessionId → 不落地（僅刷新列表）
   const title = (allChats().find((c) => c.id === sid)?.title) || run.firstUserText.slice(0, 40);
   upsertChat({ id: sid, title, ts: Date.now(), space: run.space, pack: run.pack });
-  saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify })));
+  saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, note: m.note })));
   renderChats();
 }
 
 /* Esc / 停止鈕：只中止「目前所看對話」的 run（其他對話不受影響）。 */
 function stopStream() {
   const run = currentRun();
-  if (run) { try { run.abort.abort(); } catch { /* 略 */ } } // abort → send() 的 catch 收尾（finalizeRun）
+  if (run) { run.userStopped = true; try { run.abort.abort(); } catch { /* 略 */ } } // abort → send() 的 catch 收尾（finalizeRun）
 }
 
 let streamTimer = null;

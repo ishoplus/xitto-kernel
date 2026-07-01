@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
-import { createKernel } from '../kernel/index.js';
+import { createKernel, turnNotice } from '../kernel/index.js';
 import { createStore, mountTui, gutter } from './tui.js';
 import { md } from './md-render.js';
 
@@ -176,6 +176,8 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
       const text = expandMentions(planMode ? `[計劃模式：只規劃、列步驟與會改動的檔案，不要實際寫檔或執行命令]\n\n${input}` : input);
       const r = await kernel.runTurn(text, { history, onEvent, onAgent: (a) => { currentAgent = a; } });
       store.finalizeLive(); history = r.messages; persist();
+      const note = turnNotice(r.stopReason, !!r.text); // 保底：截斷/空回應也給一句話，不留半截或空白
+      if (note) store.pushBlock(Y(note));
     } catch (e) { store.finalizeLive(); store.pushBlock(R('錯誤：' + e.message)); }
     finally { currentAgent = null; store.setTool(null); store.set({ busyAt: null }); store.setMode('idle'); refreshGit(); }
   }

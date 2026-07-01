@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { turnNotice } from '../src/kernel/index.js';
 
 const html = readFileSync(new URL('../src/app/web/chat.html', import.meta.url), 'utf8');
 
@@ -27,6 +28,7 @@ function makeHarness() {
   const factory = new Function(`
     ${extractFn(html, 'handleEvent')}
     ${extractFn(html, 'onRunEvent')}
+    ${extractFn(html, 'ensureReply')}
     let messages = null, sessionId = null, composing = false;
     let renders = 0, statusUpdates = 0, renderChatsCount = 0;
     const upserts = [];
@@ -36,7 +38,7 @@ function makeHarness() {
     function renderChats() { renderChatsCount++; }
     function upsertChat(c) { upserts.push(c); }
     return {
-      onRunEvent, handleEvent,
+      onRunEvent, handleEvent, ensureReply,
       setMessages: (m) => { messages = m; },
       getSessionId: () => sessionId,
       setSessionId: (s) => { sessionId = s; },
@@ -133,4 +135,65 @@ test('全新對話：串流首個 session 事件 → 立刻登進側欄、同步
   h.onRunEvent(runN, { type: 'session', sessionId: '不該覆寫' });
   assert.equal(runN.sessionId, 'sess-1');
   assert.equal(h.upserts().length, 1, '不重複登記');
+});
+
+// ── 保底：每輪都要有可見結果（正常/截斷/中斷/空/連線中斷），絕不靜默 ──
+const mkRun = (over = {}) => ({ asst: { text: '', tools: [] }, gotDone: true, ...over });
+
+test('ensureReply：正常有內容 → 不加提示', () => {
+  const h = makeHarness();
+  const run = mkRun({ asst: { text: '完整回覆', tools: [] }, stopReason: 'stop' });
+  h.ensureReply(run);
+  assert.equal(run.asst.note, undefined);
+});
+
+test('ensureReply：length 截斷 → 提示可調 maxTokens（即使有半截文字）', () => {
+  const h = makeHarness();
+  const run = mkRun({ asst: { text: '講到一半', tools: [], stopReason: 'length' } });
+  run.asst.stopReason = 'length';
+  h.ensureReply(run);
+  assert.match(run.asst.note, /截斷|maxTokens/);
+});
+
+test('ensureReply：使用者按停止 → 提示「已中斷」', () => {
+  const h = makeHarness();
+  const run = mkRun({ userStopped: true, asst: { text: '', tools: [] } });
+  h.ensureReply(run);
+  assert.equal(run.asst.note, '已中斷');
+});
+
+test('ensureReply：連線中斷（沒收到 done）且無內容 → 提示重試', () => {
+  const h = makeHarness();
+  const run = mkRun({ gotDone: false, asst: { text: '', tools: [] } });
+  h.ensureReply(run);
+  assert.match(run.asst.note, /沒有取得回覆|連線/);
+});
+
+test('ensureReply：正常收到 done 但模型空回應 → 提示重試', () => {
+  const h = makeHarness();
+  const run = mkRun({ asst: { text: '', tools: [] }, stopReason: 'stop' });
+  h.ensureReply(run);
+  assert.match(run.asst.note, /沒有產生內容|重試/);
+});
+
+test('ensureReply：已是 ⚠ 錯誤訊息 → 不再疊提示', () => {
+  const h = makeHarness();
+  const run = mkRun({ gotDone: false, asst: { text: '⚠ 連線失敗（500）', tools: [] } });
+  h.ensureReply(run);
+  assert.equal(run.asst.note, undefined, '錯誤訊息本身已可見，不重複');
+});
+
+test('ensureReply：有工具活動但無文字（純執行）→ 視為有內容，不提示空', () => {
+  const h = makeHarness();
+  const run = mkRun({ asst: { text: '', tools: [{ name: 'write_file', done: true }] }, stopReason: 'stop' });
+  h.ensureReply(run);
+  assert.equal(run.asst.note, undefined);
+});
+
+test('kernel turnNotice：五種結局各給一句話（正常→空字串）', () => {
+  assert.equal(turnNotice('stop', true), '', '正常有內容 → 無提示');
+  assert.match(turnNotice('length', true), /截斷|maxTokens/);
+  assert.match(turnNotice('error', true), /錯誤/);
+  assert.match(turnNotice('aborted', true), /中斷/);
+  assert.match(turnNotice('stop', false), /沒有產生|重試/, '空回應也要有話講');
 });

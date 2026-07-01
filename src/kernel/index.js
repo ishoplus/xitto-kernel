@@ -174,6 +174,21 @@ function wrapUndo(tool, { cwd, undoStack }) {
  * @param {Function} [config.streamFn]                         注入串流（測試用 fake provider）；預設用 pi-ai
  * @param {'off'|'low'|'medium'|'high'} [config.thinkingLevel] 推理強度（預設依 model.reasoning）
  */
+/**
+ * 一輪對話結束後的「保底提示」：把非正常結局翻成一句人話，讓使用者永遠知道發生什麼，
+ * 而不是對著半截文字或空白泡泡發呆。回傳空字串＝正常有內容、無須提示。
+ * @param {string} stopReason  runTurn 回傳的 stopReason（'stop'|'length'|'toolUse'|'error'|'aborted'）
+ * @param {boolean} hasText    這輪是否有任何文字內容
+ * @returns {string}
+ */
+export function turnNotice(stopReason, hasText) {
+  if (stopReason === 'length') return '⚠ 回覆已達輸出上限被截斷（可調高 model 的 maxTokens）';
+  if (stopReason === 'error') return '⚠ 產生回覆時發生錯誤，請重試';
+  if (stopReason === 'aborted') return '（已中斷）';
+  if (!hasText) return '（模型這輪沒有產生任何內容，請重試）';
+  return '';
+}
+
 export function createKernel(pack, config = {}) {
   loadPack(pack);
   const cwd = config.cwd || process.cwd();
@@ -502,8 +517,9 @@ export function createKernel(pack, config = {}) {
       lastMessages = messages;
       const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
       const text = (lastAssistant?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
-      const aborted = lastAssistant?.stopReason === 'aborted';
-      const result = { text, messages, agent, aborted, turnModified, verify: verifyResult };
+      const stopReason = lastAssistant?.stopReason || 'stop'; // 'stop'|'length'|'toolUse'|'error'|'aborted'
+      const aborted = stopReason === 'aborted';
+      const result = { text, stopReason, messages, agent, aborted, turnModified, verify: verifyResult };
       // 事實層自動萃取：非阻塞,把 promise 掛在 result 上供需要者 await（測試/headless）。
       if (config.autoExtractMemory && !aborted) {
         result.memoryExtraction = doExtract(messages)
