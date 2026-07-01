@@ -60,6 +60,28 @@ export function diffBlock(d, dur) {
   return head + '\n' + out.join('\n');
 }
 
+// 核准前變更預覽（對標 xitto-code）：write/edit 在權限選單先給你看「要改什麼」，不再盲核准。純函數,可測。
+export function previewChange(name, args) {
+  if (!args || typeof args !== 'object' || !args.path) return '';
+  if (name === 'write') {
+    const lines = String(args.content ?? '').split('\n');
+    const head = C(`寫入 ${args.path}`) + G(` (${lines.length} 行)`);
+    const body = lines.slice(0, 12).map((l) => Gn('  + ' + l.slice(0, 200)));
+    const more = lines.length > 12 ? [G(`  … +${lines.length - 12} 行`)] : [];
+    return [head, ...body, ...more].join('\n') + '\n';
+  }
+  if (name === 'edit') {
+    const oldL = String(args.oldText ?? '').split('\n');
+    const newL = String(args.newText ?? '').split('\n');
+    const head = C(`編輯 ${args.path}`) + (args.replaceAll ? G(' (全部)') : '');
+    const del = oldL.slice(0, 8).map((l) => R('  - ' + l.slice(0, 200)));
+    const add = newL.slice(0, 8).map((l) => Gn('  + ' + l.slice(0, 200)));
+    const more = (oldL.length > 8 || newL.length > 8) ? [G('  …')] : [];
+    return [head, ...del, ...add, ...more].join('\n') + '\n';
+  }
+  return '';
+}
+
 const SLASH = { '/help': '說明', '/goal': '目標循環', '/sandbox': '沙箱', '/auto': '自動核准', '/plan': '計劃模式', '/undo': '撤銷', '/tools': '工具', '/memory': '記憶', '/sessions': '對話', '/resume': '續接', '/cost': '成本', '/clear': '清除', '/exit': '離開' };
 
 export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, resume = null, cwd = process.cwd() }) {
@@ -81,7 +103,7 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
       const opts = danger ? ['允許一次', '拒絕'] : ['允許', '此工具全部允許', '拒絕'];
       const map = danger ? ['yes', 'no'] : ['yes', 'always', 'no'];
       pendingSelect = { resolve, map };
-      store.askSelect((danger ? R(`⛔ 危險：${danger}\n`) : '') + Y(`允許 ${name}`) + G(`(${summarize(args)})`), opts);
+      store.askSelect(previewChange(name, args) + (danger ? R(`⛔ 危險：${danger}\n`) : '') + Y(`允許 ${name}`) + G(`(${summarize(args)})`), opts);
     });
   };
 

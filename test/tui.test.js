@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { createStore, App, gutter, backspaceAt } from '../src/app/tui.js';
-import { summarize, toolBlock } from '../src/app/tui-run.js';
+import { summarize, toolBlock, previewChange } from '../src/app/tui-run.js';
 const strip = (s) => s.replace(/\x1b\[[0-9]+m/g, '');
 
 const noopHandlers = { onSubmit() {}, onCtrlC() {}, onEscape() {}, getHistory: () => [], complete: () => null, onSelectChoice() {}, onSelectCancel() {}, onSelectAbort() {} };
@@ -57,6 +57,25 @@ test('toolBlock：⏺ 標頭(args) + ⎿ 多行 + 摺疊 +N 行 + 耗時', () =>
   // 空結果 → ✓ / ✗ 標記
   assert.match(strip(toolBlock('x', '', { content: [] }, false)), /⎿ ✓/);
   assert.match(strip(toolBlock('x', '', { content: [] }, true)), /⎿ ✗/);
+});
+
+test('previewChange：核准前顯示 write/edit 要改什麼（不再盲核准）', () => {
+  // write：路徑 + 行數 + 綠色新增行
+  const w = strip(previewChange('write', { path: 'a.txt', content: 'x\ny\nz' }));
+  assert.match(w, /寫入 a\.txt \(3 行\)/);
+  assert.match(w, /\+ x/);
+  assert.match(w, /\+ z/);
+  // write：超過 12 行 → 折疊
+  const big = strip(previewChange('write', { path: 'b', content: Array.from({ length: 20 }, (_, i) => 'L' + i).join('\n') }));
+  assert.match(big, /… \+8 行/); // 20 - 12
+  // edit：紅 - 舊 / 綠 + 新
+  const e = strip(previewChange('edit', { path: 'c.js', oldText: 'old', newText: 'new' }));
+  assert.match(e, /編輯 c\.js/);
+  assert.match(e, /- old/);
+  assert.match(e, /\+ new/);
+  // 非 write/edit 或無 path → 空字串（不干擾一般工具的權限提示）
+  assert.equal(previewChange('bash', { command: 'ls' }), '');
+  assert.equal(previewChange('write', {}), '');
 });
 
 test('fmtTok：token 壓縮顯示', async () => {
