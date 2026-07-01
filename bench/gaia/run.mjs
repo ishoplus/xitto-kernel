@@ -21,10 +21,13 @@ import { formatOrFallback } from './formatter.mjs';
 function parseArgs(argv) {
   // formatter 預設關：在 MiniMax L1 上實測淨增益 +0（近似失分多為真內容錯，非格式），且多一次 LLM 呼叫。
   // 保留 --formatter 供實驗（有 formatOrFallback 保底，永不比 raw 抽取更差）。
-  const o = { data: 'bench/gaia/samples.jsonl', model: undefined, level: 'all', limit: Infinity, concurrency: 3, maxRounds: 20, timeoutMs: 300000, pack: 'general', out: null, formatter: false };
+  // mode 預設 goal：實測 GAIA L1，goal（runOutcome 目標迴圈，迭代精修 + checkGoal 回饋）62.3%
+  // 遠勝 turn（單 turn）32.1%——迭代重問/查證讓準確率近乎翻倍。turn 保留供對照。
+  const o = { data: 'bench/gaia/samples.jsonl', model: undefined, level: 'all', limit: Infinity, concurrency: 3, maxRounds: 20, timeoutMs: 300000, pack: 'general', out: null, formatter: false, mode: 'goal' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--formatter') o.formatter = true;
+    if (a === '--mode') o.mode = argv[++i];
+    else if (a === '--formatter') o.formatter = true;
     else if (a === '--no-formatter') o.formatter = false;
     else if (a === '--data') o.data = argv[++i];
     else if (a === '--model') o.model = argv[++i];
@@ -58,7 +61,7 @@ async function pool(items, n, worker) {
   return results;
 }
 
-async function runTask(task, { model, getApiKey, resolveModel, dataDir, maxRounds, timeoutMs, formatter }) {
+async function runTask(task, { model, getApiKey, resolveModel, dataDir, maxRounds, timeoutMs, formatter, mode }) {
   const opts = { formatter };
   const cwd = mkdtempSync(join(tmpdir(), 'gaia-'));
   let filedNote = '';
@@ -78,11 +81,19 @@ async function runTask(task, { model, getApiKey, resolveModel, dataDir, maxRound
       confirm: async () => 'yes',            // headless：自動核准 mutating
       autoRecordEpisode: false,              // 跑分不污染情節庫
     });
+    const prompt = `${GAIA_SYS}\n\n---\n\nQuestion: ${task.Question}${filedNote}`;
+    let agentRef = null;
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    const timer = setTimeout(() => { ac.abort(); try { agentRef?.abort(); } catch { /* 略 */ } }, timeoutMs);
     let out;
     try {
-      out = await kernel.runOutcome(`${GAIA_SYS}\n\n---\n\nQuestion: ${task.Question}${filedNote}`, { maxRounds, signal: ac.signal });
+      if (mode === 'goal') {
+        out = await kernel.runOutcome(prompt, { maxRounds, signal: ac.signal });
+      } else {
+        // turn 模式：單一 turn，agent 內部自跑多步工具（up to maxSteps）；逾時經 onAgent 取 agent 中止
+        const r = await kernel.runTurn(prompt, { onAgent: (a) => { agentRef = a; } });
+        out = { summary: r.text, rounds: 1, done: undefined, stalled: false };
+      }
     } finally { clearTimeout(timer); }
     const answerRaw = extractFinalAnswer(out.summary);
     let answer = answerRaw;
@@ -98,7 +109,7 @@ async function main() {
   const o = parseArgs(process.argv.slice(2));
   if (!existsSync(o.data)) { console.error(`找不到資料檔：${o.data}（見 bench/gaia/README.md 取得 GAIA validation set）`); process.exit(1); }
   const { model, getApiKey, resolveModel } = loadModel(o.model);
-  console.log(`GAIA harness · model=${model.id} · data=${o.data} · level=${o.level} · concurrency=${o.concurrency} · maxRounds=${o.maxRounds} · formatter=${o.formatter ? 'on' : 'off'}`);
+  console.log(`GAIA harness · model=${model.id} · data=${o.data} · level=${o.level} · mode=${o.mode} · concurrency=${o.concurrency} · maxRounds=${o.maxRounds} · formatter=${o.formatter ? 'on' : 'off'}`);
 
   let tasks = loadTasks(o.data);
   if (o.level !== 'all') tasks = tasks.filter((t) => String(t.Level ?? t.level) === String(o.level));
@@ -110,7 +121,7 @@ async function main() {
   const dataDir = dirname(o.data);
   let n = 0;
   await pool(tasks, o.concurrency, async (task) => {
-    const r = await runTask(task, { model, getApiKey, resolveModel, dataDir, maxRounds: o.maxRounds, timeoutMs: o.timeoutMs, formatter: o.formatter });
+    const r = await runTask(task, { model, getApiKey, resolveModel, dataDir, maxRounds: o.maxRounds, timeoutMs: o.timeoutMs, formatter: o.formatter, mode: o.mode });
     appendFileSync(o.out, JSON.stringify(r) + '\n');
     n++;
     const mark = r.correct ? '✅' : (r.error ? '⚠️' : '❌');
