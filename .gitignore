@@ -15,3 +15,6 @@ verified*.jsonl
 *.db
 # server app 的 session 工作目錄
 .xitto-server/
+
+# GAIA 跑分輸出
+bench/**/*.results.jsonl

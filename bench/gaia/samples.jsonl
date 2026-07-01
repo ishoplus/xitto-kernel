@@ -1,0 +1,6 @@
+{"task_id": "sample-1", "Question": "How many studio albums did the band Radiohead release between 1993 and 2007 inclusive? Answer with a number.", "Level": 1, "Final answer": "7"}
+{"task_id": "sample-2", "Question": "What is the capital city of the country whose flag has a single five-pointed white star on a red field and is located in North Africa? Answer with the city name.", "Level": 1, "Final answer": "Tunis"}
+{"task_id": "sample-3", "Question": "In the chemical formula for water, how many hydrogen atoms are there? Answer with a number.", "Level": 1, "Final answer": "2"}
+{"task_id": "sample-4", "Question": "Which two planets in our solar system have no natural moons? Give a comma separated list of the planet names in order from the Sun.", "Level": 1, "Final answer": "Mercury, Venus"}
+{"task_id": "sample-5", "Question": "The first person to walk on the Moon did so as part of which Apollo mission? Answer with the mission name including the number (e.g. Apollo 7).", "Level": 1, "Final answer": "Apollo 11"}
+{"task_id": "sample-6", "Question": "Multiply the number of sides of a hexagon by the number of sides of a pentagon, then subtract 10. What is the result? Answer with a number.", "Level": 2, "Final answer": "20"}
