@@ -15,13 +15,18 @@ import { loadModel } from '../../src/app/providers.js';
 import { createKernel } from '../../src/kernel/index.js';
 import { createGeneralPack } from '../../src/packs/general/index.js';
 import { questionScorer, extractFinalAnswer } from './scorer.mjs';
+import { formatOrFallback } from './formatter.mjs';
 
 // ── 參數 ──
 function parseArgs(argv) {
-  const o = { data: 'bench/gaia/samples.jsonl', model: undefined, level: 'all', limit: Infinity, concurrency: 3, maxRounds: 20, timeoutMs: 300000, pack: 'general', out: null };
+  // formatter 預設關：在 MiniMax L1 上實測淨增益 +0（近似失分多為真內容錯，非格式），且多一次 LLM 呼叫。
+  // 保留 --formatter 供實驗（有 formatOrFallback 保底，永不比 raw 抽取更差）。
+  const o = { data: 'bench/gaia/samples.jsonl', model: undefined, level: 'all', limit: Infinity, concurrency: 3, maxRounds: 20, timeoutMs: 300000, pack: 'general', out: null, formatter: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--data') o.data = argv[++i];
+    if (a === '--formatter') o.formatter = true;
+    else if (a === '--no-formatter') o.formatter = false;
+    else if (a === '--data') o.data = argv[++i];
     else if (a === '--model') o.model = argv[++i];
     else if (a === '--level') o.level = argv[++i];
     else if (a === '--limit') o.limit = Number(argv[++i]);
@@ -53,7 +58,8 @@ async function pool(items, n, worker) {
   return results;
 }
 
-async function runTask(task, { model, getApiKey, resolveModel, dataDir, maxRounds, timeoutMs }) {
+async function runTask(task, { model, getApiKey, resolveModel, dataDir, maxRounds, timeoutMs, formatter }) {
+  const opts = { formatter };
   const cwd = mkdtempSync(join(tmpdir(), 'gaia-'));
   let filedNote = '';
   try {
@@ -78,9 +84,11 @@ async function runTask(task, { model, getApiKey, resolveModel, dataDir, maxRound
     try {
       out = await kernel.runOutcome(`${GAIA_SYS}\n\n---\n\nQuestion: ${task.Question}${filedNote}`, { maxRounds, signal: ac.signal });
     } finally { clearTimeout(timer); }
-    const answer = extractFinalAnswer(out.summary);
+    const answerRaw = extractFinalAnswer(out.summary);
+    let answer = answerRaw;
+    if (opts.formatter) answer = await formatOrFallback({ model, getApiKey, resolveModel, question: task.Question, response: out.summary }, answerRaw);
     const correct = questionScorer(answer, task['Final answer'] ?? task.final_answer ?? '');
-    return { task_id: task.task_id, level: task.Level ?? task.level ?? '?', correct, answer, expected: task['Final answer'] ?? task.final_answer, rounds: out.rounds, done: out.done, stalled: out.stalled, raw: String(out.summary || '').slice(-600) };
+    return { task_id: task.task_id, level: task.Level ?? task.level ?? '?', correct, answer, answerRaw, expected: task['Final answer'] ?? task.final_answer, rounds: out.rounds, done: out.done, stalled: out.stalled, raw: String(out.summary || '').slice(-2500) };
   } catch (e) {
     return { task_id: task.task_id, level: task.Level ?? task.level ?? '?', correct: false, answer: '', expected: task['Final answer'], error: e.message };
   } finally { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* 略 */ } }
@@ -90,7 +98,7 @@ async function main() {
   const o = parseArgs(process.argv.slice(2));
   if (!existsSync(o.data)) { console.error(`找不到資料檔：${o.data}（見 bench/gaia/README.md 取得 GAIA validation set）`); process.exit(1); }
   const { model, getApiKey, resolveModel } = loadModel(o.model);
-  console.log(`GAIA harness · model=${model.id} · data=${o.data} · level=${o.level} · concurrency=${o.concurrency} · maxRounds=${o.maxRounds}`);
+  console.log(`GAIA harness · model=${model.id} · data=${o.data} · level=${o.level} · concurrency=${o.concurrency} · maxRounds=${o.maxRounds} · formatter=${o.formatter ? 'on' : 'off'}`);
 
   let tasks = loadTasks(o.data);
   if (o.level !== 'all') tasks = tasks.filter((t) => String(t.Level ?? t.level) === String(o.level));
@@ -102,7 +110,7 @@ async function main() {
   const dataDir = dirname(o.data);
   let n = 0;
   await pool(tasks, o.concurrency, async (task) => {
-    const r = await runTask(task, { model, getApiKey, resolveModel, dataDir, maxRounds: o.maxRounds, timeoutMs: o.timeoutMs });
+    const r = await runTask(task, { model, getApiKey, resolveModel, dataDir, maxRounds: o.maxRounds, timeoutMs: o.timeoutMs, formatter: o.formatter });
     appendFileSync(o.out, JSON.stringify(r) + '\n');
     n++;
     const mark = r.correct ? '✅' : (r.error ? '⚠️' : '❌');
