@@ -32,6 +32,13 @@ test('extractFinalAnswer：取最後一次 FINAL ANSWER 的該行內容', () => 
   assert.equal(extractFinalAnswer('沒有標記，整段回'), '沒有標記，整段回');
 });
 
+test('extractFinalAnswer：容忍模型的 markdown 粗體（**FINAL ANSWER:** / **7**）', () => {
+  assert.equal(extractFinalAnswer('**FINAL ANSWER:** 7'), '7');
+  assert.equal(extractFinalAnswer('FINAL ANSWER: **7**'), '7');
+  assert.equal(extractFinalAnswer('**FINAL ANSWER:** Mercury, Venus'), 'Mercury, Venus');
+  assert.equal(extractFinalAnswer('推理…\n**FINAL ANSWER:** `Apollo 11`'), 'Apollo 11');
+});
+
 test('normalize 輔助函數', () => {
   assert.equal(normalizeStr('New York!'), 'newyork');
   assert.equal(normalizeStr('New York!', false), 'newyork!');

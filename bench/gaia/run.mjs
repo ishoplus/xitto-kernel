@@ -75,7 +75,7 @@ async function runTask(task, { model, getApiKey, resolveModel, dataDir, maxRound
     } finally { clearTimeout(timer); }
     const answer = extractFinalAnswer(out.summary);
     const correct = questionScorer(answer, task['Final answer'] ?? task.final_answer ?? '');
-    return { task_id: task.task_id, level: task.Level ?? task.level ?? '?', correct, answer, expected: task['Final answer'] ?? task.final_answer, rounds: out.rounds, done: out.done, stalled: out.stalled };
+    return { task_id: task.task_id, level: task.Level ?? task.level ?? '?', correct, answer, expected: task['Final answer'] ?? task.final_answer, rounds: out.rounds, done: out.done, stalled: out.stalled, raw: String(out.summary || '').slice(-600) };
   } catch (e) {
     return { task_id: task.task_id, level: task.Level ?? task.level ?? '?', correct: false, answer: '', expected: task['Final answer'], error: e.message };
   } finally { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* 略 */ } }

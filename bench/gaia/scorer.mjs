@@ -57,11 +57,16 @@ export function questionScorer(modelAnswer, groundTruth) {
 }
 
 // 從 agent 的最終文字抽出「FINAL ANSWER: ...」（取最後一次出現、該行內容）。抽不到就回整段 trim。
+// 需容忍模型把標籤/答案加上 markdown 強調，如「**FINAL ANSWER:** 7」或「FINAL ANSWER: **7**」。
 export function extractFinalAnswer(text) {
   const s = String(text || '');
-  const re = /FINAL ANSWER:\s*(.*)/gi;
+  const re = /FINAL ANSWER:?\s*(.*)/gi;
   let m, last = null;
   while ((m = re.exec(s)) !== null) last = m[1];
   if (last == null) return s.trim();
-  return last.split('\n')[0].trim().replace(/[.]+$/, '').trim();
+  let a = last.split('\n')[0].trim();
+  a = a.replace(/\*\*/g, '');           // 去粗體 **
+  a = a.replace(/^[*_`\s]+/, '').replace(/[*_`\s]+$/, ''); // 去前後殘留強調/空白
+  a = a.replace(/[.]+$/, '').trim();    // 去句尾句點
+  return a;
 }
