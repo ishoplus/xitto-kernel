@@ -227,6 +227,9 @@ body {
   padding: 0;
 }
 
+/* 側欄「進行中」指示（切走仍在跑的對話會顯示旋轉點）*/
+.chat-run { color: var(--accent); animation: blink 1.2s steps(2) infinite; }
+
 .chat-item .meta {
   display: flex;
   align-items: center;
@@ -1148,18 +1151,22 @@ function saveTranscript(id, msgs) {
 /* ── 目前對話狀態 ──────────────────────────────────────── */
 let sessionId = null; // null = 尚未建立
 let messages = []; // [{role, text, tools:[], _procOpen, phase}]
-let streaming = false;
-let abortCtl = null;
+let streaming = false; // 「目前所看對話」是否有進行中的回覆（供打字游標/Esc）；由 refreshStreamingUI 同步
+
+// 前景串流改為「每對話一個 run」：切換對話不再中斷，各 run 綁自己的訊息陣列與 sessionId，可多對話並行。
+// run = { chatMsgs, sessionId, asst, abort, startedAt, tokens, firstUserText, space, pack }
+const activeRuns = new Set();
+function currentRun() { for (const r of activeRuns) if (r.chatMsgs === messages) return r; return null; }
 
 /* ── 對話列表 ──────────────────────────────────────────── */
 function newChat() {
-  stopStream();
   sessionId = null;
-  messages = [];
+  messages = [];        // 全新陣列：不影響其他仍在進行的 run
   render();
   $("#input").focus();
   renderChats();
   loadFiles();
+  refreshStreamingUI();
 }
 
 $("#new-chat-btn").onclick = newChat;
@@ -1247,15 +1254,6 @@ async function wbView(encPath, name) {
   v.onclick = (e) => { if (e.target === v) closeFilePreview(); }; // 點背景關閉
 }
 
-function openChat(id) {
-  stopStream();
-  sessionId = id;
-  messages = loadTranscript(id);
-  render();
-  renderChats();
-  scrollDown();
-}
-
 function deleteChat(id, ev) {
   ev.stopPropagation();
   if (!confirm("刪除這段對話？")) return;
@@ -1268,12 +1266,13 @@ function deleteChat(id, ev) {
 function renderChats() {
   const list = allChats().filter((c) => (c.space || "default") === curSpace);
   const activeClass = (id) => (id === sessionId ? " active" : "");
+  const isRunning = (id) => { for (const r of activeRuns) if (r.sessionId === id) return true; return false; };
 
   $("#chats").innerHTML = list.length
     ? list
         .map(
           (c) => `<button class="chat-item${activeClass(c.id)}" onclick="openChat('${c.id}')" aria-current="${c.id === sessionId ? "page" : "false"}">
-      <span class="title">${esc(c.title || "新對話")}</span>
+      <span class="title">${isRunning(c.id) ? '<span class="chat-run" aria-label="進行中">◐</span> ' : ""}${esc(c.title || "新對話")}</span>
       <span class="meta">
         <span>${packLabel(c.pack || "general")}</span>
         <span>${fmtTime(c.ts)}</span>
@@ -1509,7 +1508,7 @@ function scrollDown() {
 /* ── 送出訊息 ──────────────────────────────────────────── */
 async function send() {
   const text = $("#input").value.trim();
-  if (!text || streaming) return;
+  if (!text || currentRun()) return; // 同一對話一次一輪；其他對話可並行進行
   $("#input").value = "";
   autosize();
 
@@ -1521,31 +1520,29 @@ async function send() {
 
   if (bgMode) { sendBackground(text, asst); return; } // 背景：不鎖輸入框，可連續派多個
 
-  // 前景串流
-  setStreaming(true);
-  abortCtl = new AbortController();
-  const pack = $("#pack").value;
-  const body = JSON.stringify({ pack, mode: "turn", input: text, sessionId: sessionId || undefined, workspace: curSpace });
+  // 前景串流：建一個綁定「此對話」的 run（切走不中斷）
+  const run = { chatMsgs: messages, sessionId, asst, abort: new AbortController(), startedAt: Date.now(), tokens: 0, firstUserText: text, space: curSpace, pack: $("#pack").value };
+  activeRuns.add(run);
+  refreshStreamingUI();
+  ensureTicker();
+  if (run.sessionId) renderChats(); // 續接既有對話：側欄即時顯示進行中指示
+  const body = JSON.stringify({ pack: run.pack, mode: "turn", input: text, sessionId: run.sessionId || undefined, workspace: run.space });
   try {
-    const resp = await api("/v1/stream", { method: "POST", body, signal: abortCtl.signal });
+    const resp = await api("/v1/stream", { method: "POST", body, signal: run.abort.signal });
     if (!resp.ok || !resp.body) {
-      asst.phase = "";
-      asst.text = "⚠ 連線失敗（" + resp.status + "）";
-      render();
-      setStreaming(false);
-      return;
+      run.asst.phase = "";
+      run.asst.text = "⚠ 連線失敗（" + resp.status + "）";
+    } else {
+      await readSSE(resp, (ev) => onRunEvent(run, ev));
     }
-    await readSSE(resp, (ev) => handleEvent(ev, asst));
   } catch (e) {
     if (e.name !== "AbortError") {
-      asst.phase = "";
-      asst.text = (asst.text || "") + "\n⚠ " + esc(e.message);
-      render();
+      run.asst.phase = "";
+      run.asst.text = (run.asst.text || "") + "\n⚠ " + esc(e.message);
     }
   }
-  setStreaming(false);
-  asst.phase = "";
-  finalize(asst, text);
+  activeRuns.delete(run);
+  finalizeRun(run);
 }
 
 /* ── 背景任務：派到 /v1/tasks，訂閱事件流，進度進 HUD ───────── */
@@ -1572,7 +1569,7 @@ async function pumpBgEvents(task) {
   try {
     const resp = await api("/v1/tasks/" + task.id + "/events");
     if (!resp.ok || !resp.body) { task.status = "error"; updateHud(); return; }
-    await readSSE(resp, (ev) => { updateBgProgress(task, ev); handleEvent(ev, task.asst); });
+    await readSSE(resp, (ev) => { updateBgProgress(task, ev); handleEvent(ev, task.asst); if (messages.includes(task.asst) && !composing) { render(); scrollDown(); } });
   } catch (e) {
     task.status = "error"; task.error = e?.message || String(e);
   }
@@ -1666,10 +1663,6 @@ function handleEvent(ev, asst) {
       if (s) { s.done = true; s.isError = ev.isError; }
       break;
     }
-    case "usage":
-      // 累計 token（前景串流即時顯示在狀態列；背景任務 streaming=false，updateStreamStatus 會自動略過）
-      streamTokens += (ev.input || 0) + (ev.output || 0);
-      break;
     case "round":
       asst.phase = "thinking";
       break;
@@ -1678,7 +1671,6 @@ function handleEvent(ev, asst) {
         { verifying: "verifying", verified: "verified", fixing: "fixing" }[ev.phase] || ev.phase;
       break;
     case "done":
-      if (ev.sessionId) sessionId = ev.sessionId;
       if (!asst.text && ev.text) asst.text = ev.text;
       if (ev.verify) asst.verify = ev.verify;   // 驗收裁決（DoD 徽章用）
       break;
@@ -1691,11 +1683,31 @@ function handleEvent(ev, asst) {
       asst.text = (asst.text || "") + "\n⚠ " + (ev.error || "發生錯誤");
       break;
   }
-  if (!composing) {
-    render();
-    scrollDown();
+  // 注意：render/狀態更新由呼叫端負責（前景 onRunEvent 依所看對話而定；背景 pumpBgEvents 自行 gate）
+}
+
+/* 前景 run 的事件處理：mutate run.asst + 累計 token + 更新 sessionId；只有該對話仍開著才重繪/更新狀態列 */
+function onRunEvent(run, ev) {
+  // 串流首事件：拿到 sessionId → 全新對話立刻登進側欄（含進行中指示），切走後仍能切回看它續播
+  if (ev.type === "session" && ev.sessionId) {
+    if (!run.sessionId) {
+      run.sessionId = ev.sessionId;
+      if (run.chatMsgs === messages) sessionId = ev.sessionId;
+      upsertChat({ id: ev.sessionId, title: run.firstUserText.slice(0, 40), ts: Date.now(), space: run.space, pack: run.pack });
+      renderChats();
+    }
+    return;
   }
-  if (streaming) updateStreamStatus(); // 階段一變即時更新狀態列（不必等下一秒 tick）
+  handleEvent(ev, run.asst);
+  if (ev.type === "usage") run.tokens += (ev.input || 0) + (ev.output || 0);
+  if (ev.type === "done" && ev.sessionId) {
+    run.sessionId = ev.sessionId;
+    if (run.chatMsgs === messages) sessionId = ev.sessionId; // 該對話仍開著才同步全局
+  }
+  if (run.chatMsgs === messages) {
+    if (!composing) { render(); scrollDown(); }
+    updateStreamStatus(run);
+  }
 }
 
 /* 串流結束：落地 */
@@ -1709,34 +1721,45 @@ function finalize(asst, firstUserText) {
   renderChats();
 }
 
-function stopStream() {
-  if (abortCtl) {
-    try {
-      abortCtl.abort();
-    } catch {}
-    abortCtl = null;
-  }
-  setStreaming(false);
+/* 前景 run 結束落地：以 run 自己的 chatMsgs / sessionId 寫入轉錄，不依賴「目前所看對話」。 */
+function finalizeRun(run) {
+  run.asst.phase = "";
+  const sid = run.sessionId;
+  if (run.chatMsgs === messages) { render(); loadFiles(); }   // 該對話仍開著才刷新畫面/檔案列表
+  refreshStreamingUI();                                        // 同步送出/停止鈕、游標
+  if (!sid) { renderChats(); return; }                          // 沒拿到 sessionId → 不落地（僅刷新列表）
+  const title = (allChats().find((c) => c.id === sid)?.title) || run.firstUserText.slice(0, 40);
+  upsertChat({ id: sid, title, ts: Date.now(), space: run.space, pack: run.pack });
+  saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify })));
+  renderChats();
 }
 
-let streamStartedAt = null;
-let streamTimer = null;
-let streamTokens = 0; // 本輪累計 token（input+output，由 usage 事件累加）
+/* Esc / 停止鈕：只中止「目前所看對話」的 run（其他對話不受影響）。 */
+function stopStream() {
+  const run = currentRun();
+  if (run) { try { run.abort.abort(); } catch { /* 略 */ } } // abort → send() 的 catch 收尾（finalizeRun）
+}
 
-function setStreaming(on) {
-  streaming = on;
-  $("#send-btn").style.display = on ? "none" : "";
-  $("#stop-btn").style.display = on ? "" : "none";
-  if (on) {
-    streamStartedAt = Date.now();
-    streamTokens = 0;
-    updateStreamStatus();
-    if (!streamTimer) streamTimer = setInterval(updateStreamStatus, 1000);
-  } else {
-    if (streamTimer) { clearInterval(streamTimer); streamTimer = null; }
-    streamStartedAt = null;
-    $("#status-hint").innerHTML = "";
-  }
+let streamTimer = null;
+
+/* 依「目前所看對話」是否有進行中的 run，同步輸入區狀態（送出/停止鈕、打字游標旗標、狀態列）。 */
+function refreshStreamingUI() {
+  const run = currentRun();
+  streaming = !!run;
+  $("#send-btn").style.display = run ? "none" : "";
+  $("#stop-btn").style.display = run ? "" : "none";
+  if (run) { updateStreamStatus(run); ensureTicker(); }
+  else $("#status-hint").innerHTML = "";
+}
+
+/* 每秒刷新狀態列經過時間；只要還有任一 run 就持續（切到哪個對話就顯示哪個的計時）。 */
+function ensureTicker() {
+  if (streamTimer) return;
+  streamTimer = setInterval(() => {
+    if (!activeRuns.size) { clearInterval(streamTimer); streamTimer = null; return; }
+    const run = currentRun();
+    if (run) updateStreamStatus(run);
+  }, 1000);
 }
 
 /* token 數壓縮顯示：1234 → 1.2k */
@@ -1745,13 +1768,14 @@ function fmtTokens(n) {
   return (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, "") + "k";
 }
 
-/* 前景串流狀態列：跳動點 + 當前階段 + 經過時間 + 累計 token + Esc 中斷提示（每秒刷新）*/
-function updateStreamStatus() {
-  if (!streaming || !streamStartedAt) return;
-  const last = messages[messages.length - 1];
+/* 狀態列（針對給定 run）：跳動點 + 當前階段 + 經過時間 + 累計 token + Esc 中斷提示。 */
+function updateStreamStatus(run) {
+  run = run || currentRun();
+  if (!run) return;
+  const last = run.chatMsgs[run.chatMsgs.length - 1];
   const ph = last && last.phase ? (PHASE_TEXT[last.phase] || last.phase) : "回覆中";
-  const el = fmtElapsed(Date.now() - streamStartedAt);
-  const tok = streamTokens ? ` · ↑ ${fmtTokens(streamTokens)} tokens` : "";
+  const el = fmtElapsed(Date.now() - run.startedAt);
+  const tok = run.tokens ? ` · ↑ ${fmtTokens(run.tokens)} tokens` : "";
   $("#status-hint").innerHTML =
     `<span class="live-dot" aria-hidden="true"></span>${esc(ph.replace(/…$/, ""))} · ${el}${tok}` +
     ` · <span class="esc-hint">Esc 中斷</span>`;
@@ -1795,13 +1819,14 @@ function showSide() {
 
 /* 點擊對話後在手機上隱藏側邊欄 */
 function openChat(id) {
-  stopStream();
   sessionId = id;
-  messages = loadTranscript(id);
+  const live = [...activeRuns].find((r) => r.sessionId === id);
+  messages = live ? live.chatMsgs : loadTranscript(id); // 有進行中的 run → 接回它的即時陣列
   render();
   renderChats();
   scrollDown();
-  
+  refreshStreamingUI();
+
   const side = $(".side");
   if (side && window.innerWidth < 768) {
     side.style.display = "none";

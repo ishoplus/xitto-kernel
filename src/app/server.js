@@ -192,6 +192,8 @@ const chatHtml = () => (_chatHtml ??= readFileSync(join(dirname(fileURLToPath(im
 
 // 把原始 kernel 事件壓成精簡的對外事件（串流端與背景任務共用，避免重複映射）
 export const mapEvent = (ev) => {
+  // 串流一開始就送 sessionId → 前端可即時把「全新對話」登進側欄，切走後仍能切回看它續播
+  if (ev.type === 'session_start') return { type: 'session', sessionId: ev.sessionId };
   if (ev.type === 'tool_execution_start') return { type: 'tool', name: ev.toolName, args: ev.args };
   if (ev.type === 'tool_execution_end') return { type: 'tool_end', name: ev.toolName, isError: !!ev.isError, diff: ev.result?._diff || undefined };
   // 子 agent（spawn_agent）內部工具活動：嵌套顯示在父步驟底下
@@ -417,6 +419,7 @@ export function createServerApp({ model, getApiKey, resolveModel, token, baseDir
     const sess = sessions.get(sessionId) || { history: [] };
     const kernel = createKernel(make({ cwd: workdir }), { cwd: workdir, model, getApiKey, resolveModel, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes', autoExtractMemory: true, ...(ask ? { askUser: ask } : {}) });
     const usage = { input: 0, output: 0 };
+    onEvent?.({ type: 'session_start', sessionId }); // 串流首事件：讓前端立刻知道此輪的 sessionId
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
     if (spec.mode === 'goal') {
       // 結果導向：回傳交付物（做了什麼 + 產出的檔案 + 是否達成），對話只是過程
