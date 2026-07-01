@@ -6,6 +6,10 @@ import { createTaskStore, mapEvent } from '../src/app/server.js';
 const tick = () => new Promise((r) => setImmediate(r));
 const defer = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 
+test('mapEvent：session_start → session 事件（串流首事件送 sessionId，讓新對話即時進側欄）', () => {
+  assert.deepEqual(mapEvent({ type: 'session_start', sessionId: 'abc123' }), { type: 'session', sessionId: 'abc123' });
+});
+
 test('mapEvent：round / verify 事件 → 進度事件', () => {
   assert.deepEqual(mapEvent({ type: 'round', round: 2, maxRounds: 12 }), { type: 'round', round: 2, maxRounds: 12 });
   assert.deepEqual(mapEvent({ type: 'verify_start' }), { type: 'phase', phase: 'verifying' });
