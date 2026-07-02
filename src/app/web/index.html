@@ -640,6 +640,17 @@
   margin-top: var(--sp-2);
 }
 
+/* 匯出成品成另一格式 */
+.export-zone {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.export-label { font-size: 13px; color: var(--dim); }
+.export-btn { padding: 4px 12px; font-size: 13px; }
+
 /* 繼續/調整 */
 .continue-zone {
   margin-top: var(--sp-4);
@@ -1460,6 +1471,13 @@ function renderCurrent(t) {
       📂 位置：<button class="loc-code" title="點擊複製" onclick="navigator.clipboard?.writeText('${esc(t.result.workspaceDir)}')" type="button">${esc(t.result.workspaceDir)}</button>
     </div>` : ""}
 
+    ${(t.status === "done" && files.length) ? `<div class="export-zone">
+      <span class="export-label">📤 匯出成：</span>
+      <button class="ghost export-btn" onclick="exportAs('pdf','${esc(t.sessionId || "")}','${esc(t.workspace || "default")}')">PDF</button>
+      <button class="ghost export-btn" onclick="exportAs('docx','${esc(t.sessionId || "")}','${esc(t.workspace || "default")}')">Word</button>
+      <button class="ghost export-btn" onclick="exportAs('pptx','${esc(t.sessionId || "")}','${esc(t.workspace || "default")}')">簡報</button>
+    </div>` : ""}
+
     ${t.status === "done" ? `<div class="continue-zone">
       <button class="ghost continue-btn" onclick="toggleFollowup()">↳ 繼續／調整這個成果</button>
       <div id="fubox" style="display:none" class="continue-box">
@@ -1540,6 +1558,25 @@ function toggleFollowup() {
     b.style.display = b.style.display === "none" ? "" : "none";
     if (b.style.display !== "none") $("#fugoal").focus();
   }
+}
+
+// 一鍵匯出成品成另一格式：接同一 session（agent 知道剛產出的成品）+ 強制 docgen pack（拿到 gen_doc）。
+// PDF/Word 原樣轉檔；簡報要求改寫成投影片（每頁一重點）。當作一個新 goal 任務跑，成品照常出現在成品區。
+async function exportAs(fmt, sessionId, workspace) {
+  const GOALS = {
+    pdf: "把這個專案先前『已產出的主要文件成品』原樣轉成 PDF（內容不要改動、排版整齊），用 gen_doc 產出 export.pdf。",
+    docx: "把這個專案先前『已產出的主要文件成品』原樣轉成 Word 檔（.docx，內容不要改動），用 gen_doc 產出 export.docx。",
+    pptx: "把這個專案先前『已產出的主要文件成品』改寫成簡報：每頁一個重點，用 # 標題分頁、每頁 3~5 條要點，用 gen_doc 產出 slides.pptx。",
+  };
+  const goal = GOALS[fmt]; if (!goal) return;
+  const r = await api("/v1/tasks", {
+    method: "POST",
+    body: JSON.stringify({ pack: "docgen", mode: "goal", goal, workspace, sessionId }),
+  }).then((r) => r.json());
+  if (r.error) { alert(r.error); return; }
+  expandedLog = false;
+  streamTask(r.taskId, { taskId: r.taskId, pack: "docgen", workspace, goal, status: r.status || "queued", mode: "goal", auto: false, startedAt: null, sessionId, continued: true });
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function submitFollowup(sessionId, pack, workspace) {

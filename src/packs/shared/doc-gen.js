@@ -126,7 +126,7 @@ export function isValidDoc(path) {
     const ext = (path.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
     const buf = readFileSync(path);
     if (ext === 'pdf') return buf.subarray(0, 5).toString() === '%PDF-';
-    if (ext === 'docx') return buf.subarray(0, 2).toString() === 'PK';
+    if (ext === 'docx' || ext === 'pptx') return buf.subarray(0, 2).toString() === 'PK';
     if (ext === 'html' || ext === 'htm') return /<html|<!doctype/i.test(buf.toString('utf8').slice(0, 300));
     return buf.length > 0;
   } catch { return false; }
@@ -152,6 +152,21 @@ function renderHtmlToDocx(htmlPath, outPath, r) {
   } catch (e) { return { ok: false, reason: e?.message || String(e) }; }
 }
 
+// PPTX 轉檔器：soffice / libreoffice（Impress 由 HTML 匯入，標題自動分頁）。回 { kind, bin } 或 null。
+function detectPptx() {
+  for (const b of ['soffice', 'libreoffice']) { const p = has(b); if (p) return { kind: 'soffice', bin: p }; }
+  return null;
+}
+function renderHtmlToPptx(htmlPath, outPath, r) {
+  try {
+    const od = dirname(outPath);
+    spawnSync(r.bin, ['--headless', '--convert-to', 'pptx', '--outdir', od, htmlPath], { encoding: 'utf8', timeout: 60000 });
+    const produced = join(od, basename(htmlPath).replace(/\.html?$/i, '') + '.pptx');
+    if (produced !== outPath && isZip(produced)) { try { writeFileSync(outPath, readFileSync(produced)); rmSync(produced); } catch { /* 略 */ } }
+    return isZip(outPath) ? { ok: true, tool: r.kind } : { ok: false, reason: `${r.kind} 未產生有效 pptx` };
+  } catch (e) { return { ok: false, reason: e?.message || String(e) }; }
+}
+
 // html 檔 → pdf（用偵測到的渲染器）。回 { ok, tool } 或 { ok:false, reason }。
 function renderHtmlToPdf(htmlPath, outPath, r) {
   try {
@@ -174,6 +189,7 @@ function renderHtmlToPdf(htmlPath, outPath, r) {
 const FORMATS = {
   pdf: { detect: detectRenderer, render: renderHtmlToPdf, tools: 'chrome / wkhtmltopdf / soffice' },
   docx: { detect: detectDocx, render: renderHtmlToDocx, tools: 'pandoc / soffice' },
+  pptx: { detect: detectPptx, render: renderHtmlToPptx, tools: 'soffice / libreoffice' },
 };
 
 /**

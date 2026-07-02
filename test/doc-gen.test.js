@@ -85,6 +85,25 @@ test('generateDoc：.docx → Word（有 pandoc/soffice）或 fallback HTML（�
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
+test('generateDoc：.pptx → 簡報（有 soffice）或 fallback HTML（無）；兩者皆 ok', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-pptx-'));
+  try {
+    const out = join(cwd, 'slides.pptx');
+    const r = generateDoc('# 第一頁\n重點一\n\n# 第二頁\n重點二', out, { title: '簡報' });
+    assert.equal(r.ok, true);
+    if (r.format === 'pptx') {
+      assert.ok(existsSync(out));
+      assert.equal(readFileSync(out).subarray(0, 2).toString(), 'PK', 'pptx 應為 ZIP(PK) 容器');
+      assert.ok(isValidDoc(out), 'isValidDoc 認得 pptx');
+      assert.ok(r.tool);
+    } else {
+      assert.equal(r.format, 'html');           // 無 soffice → 退回 HTML
+      assert.ok(existsSync(join(cwd, 'slides.html')));
+      assert.match(r.note, /pptx|PPTX|HTML/i);
+    }
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('mdTableToRows / toCsv：表格抽取 + CSV 轉義', () => {
   const rows = mdTableToRows('前言\n\n| 名稱 | 備註 |\n| --- | --- |\n| 甲, 乙 | 含"引號" |\n| 丙 | 正常 |\n\n後記');
   assert.deepEqual(rows[0], ['名稱', '備註']);
