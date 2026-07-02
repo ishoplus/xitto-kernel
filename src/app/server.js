@@ -639,6 +639,13 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   // roleStore 掛給 adapter，讓注入的 SSO adapter 共用同一份名冊。
   const authAdapter = auth || defaultAuth({ token });
   if (authAdapter && !authAdapter.roleStore) authAdapter.roleStore = roleStore;
+  // SSO 模式旗標（有 /auth/* handle 即為 SSO）：據此決定頁面是否導向登入、以及是否注入 master token。
+  const ssoActive = !!authAdapter.handle;
+  // SSO 開啟且未登入 → 導向 IdP 登入（帶 returnTo 回原頁）。defaultAuth 無 handle → 永遠 false，現況不變。
+  const needsLogin = (req) => ssoActive && !authAdapter.principal?.(req);
+  const loginRedirect = (res, returnTo) => { res.writeHead(302, { location: '/auth/login?returnTo=' + encodeURIComponent(returnTo) }); res.end(); return true; };
+  // 頁面注入的 token：SSO 開啟時清空（改靠 cookie session，避免把 master token 發給每個登入者 → 提權）。
+  const pageToken = (t) => (ssoActive ? '' : (t || ''));
   const authed = (req) => authAdapter.authed(req);
   const roomAuth = (req, room, need) => authAdapter.roomAuth(req, room, need);
   const log = (o) => console.log(JSON.stringify({ ts: new Date().toISOString(), ...o }));
@@ -778,28 +785,32 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
 
     // 「許願台」網頁（公開可載入；token 注入頁面供同源 API 呼叫——PoC/本地自用,正式部署請前置真實認證）
     if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
+      if (needsLogin(req)) return loginRedirect(res, path);
       let html; try { html = webHtml(); } catch { return json(res, 500, { error: 'web UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(html.replace(/__SERVER_TOKEN__/g, token || '').replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false'));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false'));
     }
 
     // 「對話」網頁：同一 kernel 的另一個前端——對話式（mode:turn + 固定 sessionId 多輪、SSE 串流），
     // 與許願台（mode:goal、交付物導向）做出區別。共用同一組工作區（五層沉澱跨頁累積）。
     if (req.method === 'GET' && (path === '/chat' || path === '/chat.html')) {
+      if (needsLogin(req)) return loginRedirect(res, path);
       let html; try { html = chatHtml(); } catch { return json(res, 500, { error: 'chat UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(html.replace(/__SERVER_TOKEN__/g, token || '').replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false'));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false'));
     }
 
     // 「會議室」網頁：主控台 vs 訪客兩種載入。
     // 主控台（無 ?room=）：注入 master token，可建房（operator 專用 URL，請自行前置保護/勿外流）。
     // 訪客（帶 ?room=，即邀請連結）：不注入 master token，只憑 URL 上的邀請碼加入 → 換得成員 token。
     if (req.method === 'GET' && (path === '/room' || path === '/room.html')) {
-      let html; try { html = roomHtml(); } catch { return json(res, 500, { error: 'room UI 未找到' }); }
       const guest = url.searchParams.has('room');
+      // SSO 開啟：主控台（無 ?room=）未登入 → 導向登入；訪客（帶 ?room= 邀請連結）仍走邀請碼，不強制登入。
+      if (!guest && needsLogin(req)) return loginRedirect(res, path);
+      let html; try { html = roomHtml(); } catch { return json(res, 500, { error: 'room UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       // __PUBLIC_ORIGIN__：伺服器建議的對外網址（區網 IP / 域名）→ host 在 localhost 開頁時，邀請連結改用它。
-      return res.end(html.replace(/__SERVER_TOKEN__/g, guest ? '' : (token || '')).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__PUBLIC_ORIGIN__/g, () => publicOrigin || ''));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, guest ? '' : pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__PUBLIC_ORIGIN__/g, () => publicOrigin || ''));
     }
 
     // ── 專案會議室（房間層授權：建房/列房需 master；房內動作憑邀請碼/成員 token）──
@@ -919,7 +930,9 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const room = rooms.get(mJoin[1]); if (!room) return json(res, 404, { error: 'room not found' });
       if (!roomAuth(req, room, 'join').ok) return json(res, 401, { error: '邀請碼無效' });
       const body = await readBody(req);
-      const r = rooms.join(mJoin[1], body.name);
+      // SSO 登入者：用已驗證身份當顯示名（真實身份，不信任前端傳入）→ 多人 @ai 認得誰是誰（room-multiuser-ai L2）。
+      const who = authAdapter.principal?.(req);
+      const r = rooms.join(mJoin[1], (who && (who.name || who.email)) || body.name);
       log({ room: mJoin[1], action: 'join', name: r.name });
       return json(res, 200, { ...r, ...rooms.view(mJoin[1]) });
     }
