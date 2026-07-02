@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRoomStore, mentionsAi, createServerApp, lanIPs, joinUploadRel } from '../src/app/server.js';
+import { createRoomStore, mentionsAi, createServerApp, defaultAuth, lanIPs, joinUploadRel } from '../src/app/server.js';
 
 const tick = () => new Promise((r) => setImmediate(r));
 const defer = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
@@ -246,6 +246,54 @@ test('lanIPs：回傳 IPv4 字串陣列（不含 loopback / link-local）', () =
     assert.match(ip, /^\d+\.\d+\.\d+\.\d+$/);
     assert.ok(!ip.startsWith('127.') && !ip.startsWith('169.254.'));
   }
+});
+
+// ── SSO auth seam（S1 骨架）：defaultAuth 忠實封裝現有邏輯 + 可注入 adapter，未注入即零行為變化 ──
+test('defaultAuth：master token / 邀請碼 / 成員 token 判定與過去逐位元組一致', () => {
+  const a = defaultAuth({ token: 't' });
+  const reqH = (tok) => ({ headers: tok ? { authorization: 'Bearer ' + tok } : {}, url: '/x' });
+  const reqQ = (tok) => ({ headers: {}, url: '/x?token=' + tok });
+  // authed：header bearer 或 ?token=；未設 token → 全開
+  assert.equal(a.authed(reqH('t')), true);
+  assert.equal(a.authed(reqH('nope')), false);
+  assert.equal(a.authed(reqQ('t')), true);
+  assert.equal(defaultAuth({}).authed(reqH()), true);
+  // roomAuth：master 過；成員 token；邀請碼（僅 join/read）；其他拒
+  const room = { members: new Map([['m1', { token: 'mtok', name: '小明' }]]), inviteToken: 'inv' };
+  assert.deepEqual(a.roomAuth(reqH('t'), room, 'read'), { ok: true, master: true });
+  assert.equal(a.roomAuth(reqH('mtok'), room, 'member').memberId, 'm1');
+  assert.equal(a.roomAuth(reqH('inv'), room, 'join').invite, true);
+  assert.equal(a.roomAuth(reqH('inv'), room, 'member').ok, false); // 邀請碼不能當成員 token
+  assert.equal(a.roomAuth(reqH('bad'), room, 'read').ok, false);
+  // 預設無 SSO 身份 / 無 /auth 路由
+  assert.equal(a.principal(reqH('t')), null);
+  assert.equal(a.handle, null);
+});
+
+test('createServerApp：注入 auth adapter → handle 攔截 /auth/*，authed 由 adapter 決定', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'xk-auth-'));
+  let handled = 0;
+  const auth = {
+    authed: (req) => req.headers['x-admin'] === 'yes',
+    roomAuth: () => ({ ok: false }),
+    principal: () => null,
+    handle: async (req, res) => {
+      if (req.url.startsWith('/auth/login')) { handled++; res.writeHead(302, { location: '/idp' }); res.end(); return true; }
+      return false;
+    },
+  };
+  const srv = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', auth, baseDir: join(base, '.srv') });
+  await new Promise((r) => srv.listen(0, r));
+  const port = srv.address().port;
+  try {
+    const r1 = await fetch(`http://localhost:${port}/auth/login`, { redirect: 'manual' });
+    assert.equal(r1.status, 302, 'handle 攔截 /auth/login → 302');
+    assert.equal(handled, 1);
+    const r2 = await fetch(`http://localhost:${port}/v1/models`);
+    assert.equal(r2.status, 401, '無 x-admin → adapter.authed 擋下');
+    const r3 = await fetch(`http://localhost:${port}/v1/models`, { headers: { 'x-admin': 'yes' } });
+    assert.equal(r3.status, 200, '帶 x-admin → adapter.authed 放行');
+  } finally { srv.close(); rmSync(base, { recursive: true, force: true }); }
 });
 
 test('HTTP：/room 主控台注入 master token；訪客頁（帶 ?room=）不注入', async () => {

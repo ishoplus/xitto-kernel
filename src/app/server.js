@@ -551,22 +551,11 @@ export function createRoomStore({ runAiTurn, persistDir, maxMessages = 300, maxP
  * @param {number} [o.concurrency]  背景任務同時數（預設 2）
  * @returns {import('node:http').Server}
  */
-export function createServerApp({ model, getApiKey, resolveModel, models = [], token, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
-  // 可選 model 清單（跨 provider）：給 /v1/models 與「未知 model」錯誤訊息用；始終含當前預設 model。
-  const modelList = (models && models.length) ? models : [{ id: model.id, name: model.name || model.id, provider: model.provider }];
-  const knownModel = (id) => !id || id === model.id || modelList.some((m) => m.id === id);
-  const sessions = new Map(); // sessionId -> { history }
-  mkdirSync(baseDir, { recursive: true });
 
-  // 對話 session 持久化（讓「繼續/調整」跨重啟可用）：啟動載回 + 每次更新落地。
-  const sessDir = join(baseDir, 'sessions');
-  try { if (existsSync(sessDir)) for (const f of readdirSync(sessDir).filter((x) => x.endsWith('.json'))) { try { sessions.set(f.replace(/\.json$/, ''), JSON.parse(readFileSync(join(sessDir, f), 'utf8'))); } catch { /* 略 */ } } } catch { /* 略 */ }
-  const persistSession = (id, sess) => { try { mkdirSync(sessDir, { recursive: true }); writeFileSync(join(sessDir, id + '.json'), JSON.stringify({ history: sess.history })); } catch { /* 略 */ } };
-  // 刪除 session（內存 + 落地）：關房時聯刪其對話 history，避免孤兒 session 檔累積。
-  const dropSession = (id) => { if (!id) return; sessions.delete(id); try { rmSync(join(sessDir, id + '.json'), { force: true }); } catch { /* 略 */ } };
-
-  const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-  // header bearer 為主；img/iframe/下載這類瀏覽器發起的 GET 無法帶 header,允許 ?token=（同源、PoC）
+// 認證 adapter（auth seam）：把「怎麼認人 / 授權」抽成可注入物件，讓部署者接自家 SSO 而不改原始碼（見 docs/10-sso-design.md）。
+// adapter = { authed(req)->bool, roomAuth(req,room,need)->{ok,...}, principal?(req)->Principal|null, handle?(req,res)->Promise<bool> }
+// defaultAuth：把現有 master-token / 邀請碼 / 成員 token 邏輯原樣封裝成預設 adapter → 未注入 adapter 時行為與過去逐位元組一致。
+export function defaultAuth({ token } = {}) {
   // 取出請求帶的 bearer（header 為主；瀏覽器發起的 GET/SSE 無法帶 header → 允許 ?token=）。
   const bearerOf = (req) => {
     const h = req.headers.authorization;
@@ -583,6 +572,29 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     if ((need === 'join' || need === 'read') && t === room.inviteToken) return { ok: true, invite: true };
     return { ok: false };
   };
+  // 預設無 SSO 身份（房間 join 走匿名 name）、無 /auth/* 路由。
+  return { bearerOf, authed, roomAuth, principal: () => null, handle: null };
+}
+
+export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
+  // 可選 model 清單（跨 provider）：給 /v1/models 與「未知 model」錯誤訊息用；始終含當前預設 model。
+  const modelList = (models && models.length) ? models : [{ id: model.id, name: model.name || model.id, provider: model.provider }];
+  const knownModel = (id) => !id || id === model.id || modelList.some((m) => m.id === id);
+  const sessions = new Map(); // sessionId -> { history }
+  mkdirSync(baseDir, { recursive: true });
+
+  // 對話 session 持久化（讓「繼續/調整」跨重啟可用）：啟動載回 + 每次更新落地。
+  const sessDir = join(baseDir, 'sessions');
+  try { if (existsSync(sessDir)) for (const f of readdirSync(sessDir).filter((x) => x.endsWith('.json'))) { try { sessions.set(f.replace(/\.json$/, ''), JSON.parse(readFileSync(join(sessDir, f), 'utf8'))); } catch { /* 略 */ } } } catch { /* 略 */ }
+  const persistSession = (id, sess) => { try { mkdirSync(sessDir, { recursive: true }); writeFileSync(join(sessDir, id + '.json'), JSON.stringify({ history: sess.history })); } catch { /* 略 */ } };
+  // 刪除 session（內存 + 落地）：關房時聯刪其對話 history，避免孤兒 session 檔累積。
+  const dropSession = (id) => { if (!id) return; sessions.delete(id); try { rmSync(join(sessDir, id + '.json'), { force: true }); } catch { /* 略 */ } };
+
+  const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
+  // 認證 adapter：注入的優先（SSO），否則用 defaultAuth 封裝的現有 token 邏輯 → 未注入即與過去完全一致。
+  const authAdapter = auth || defaultAuth({ token });
+  const authed = (req) => authAdapter.authed(req);
+  const roomAuth = (req, room, need) => authAdapter.roomAuth(req, room, need);
   const log = (o) => console.log(JSON.stringify({ ts: new Date().toISOString(), ...o }));
   const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 1e6) req.destroy(); }); req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch { resolve({}); } }); });
   // 上傳原始 bytes（不解析 JSON）：超過上限即停止緩衝並斷流 → 回 { over:true }，否則 { buffer }。
@@ -696,6 +708,8 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   return createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
+    // SSO adapter 先攔（擁有 /auth/login|callback|logout 等）；defaultAuth 無 handle → 直接略過，零影響。
+    if (authAdapter.handle && await authAdapter.handle(req, res)) return;
     if (req.method === 'GET' && path === '/health') return json(res, 200, { ok: true, packs: Object.keys(PACKS), model: model.id, tasks: tasks.stats() });
 
     // favicon（公開，免 auth）：瀏覽器會自動抓 /favicon.ico，沒這條會被 auth 擋成 401。回一個內嵌 SVG 標誌。
