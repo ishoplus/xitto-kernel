@@ -471,14 +471,14 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       const res = await runAiTurn({ room: r, input, emit, onAgent });
       if (res?.sessionId) r.sessionId = res.sessionId; // 首輪建立 → 之後續接同一對話
       const text = (res?.text ?? finalText) || '';
-      push(r, { kind: 'ai', name: 'AI', text });
+      if (!r._stopped) push(r, { kind: 'ai', name: 'AI', text }); // 被中止 → ⏹ 訊息已由 stop() 廣播，不再推（可能半截）回覆
     } catch (e) {
-      push(r, { kind: 'system', name: 'system', text: 'AI 回覆失敗：' + (e?.message || String(e)) });
+      if (!r._stopped) push(r, { kind: 'system', name: 'system', text: 'AI 回覆失敗：' + (e?.message || String(e)) });
     } finally {
-      r.agentRef = null;
+      r.agentRef = null; const stopped = r._stopped; r._stopped = false;
       r.status = 'idle'; fanout(r, { type: 'status', status: 'idle' }); persist(r);
-      // 回合中若又有人 @ai（新累積的 pending 含召喚）→ 立刻續跑，確保每次召喚終會被回覆。
-      if (r.pending.some((m) => m.mention)) runNow(r);
+      // 回合中若又有人 @ai（新累積的 pending 含召喚）→ 立刻續跑；但被使用者中止時不自動續跑（pending 已清）。
+      if (!stopped && r.pending.some((m) => m.mention)) runNow(r);
     }
   }
 
@@ -501,6 +501,15 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
   }
 
   return {
+    // 中止進行中的 AI 回合（任何成員可觸發）：abort agent + 清 pending（避免 finally 又續跑）+ 廣播中止訊息。
+    stop(id) {
+      const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
+      if (r.status !== 'thinking' || !r.agentRef) return { error: '目前沒有進行中的 AI 回合', code: 409 };
+      r._stopped = true; r.pending = [];
+      try { r.agentRef.abort(); } catch { /* 略 */ }
+      push(r, { kind: 'system', name: 'system', text: '⏹ AI 回合已被中止' });
+      return { ok: true };
+    },
     // 生成會議紀要（成員可觸發）：同步校驗後 fire-and-forget，進度/結果經 SSE 廣播；回 { ok } 或 { error, code }。
     minutes(id) {
       const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
@@ -1009,6 +1018,17 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (r.error) return json(res, r.code || 400, { error: r.error });
       log({ room: mSay[1], action: 'say', triggered: r.triggered });
       return json(res, 200, r);
+    }
+
+    // 中止進行中的 AI 回合（憑成員 token）：任何成員可打斷共享 AI。
+    const mStop = path.match(/^\/v1\/rooms\/([^/]+)\/stop$/);
+    if (req.method === 'POST' && mStop) {
+      const room = rooms.get(mStop[1]); if (!room) return json(res, 404, { error: 'room not found' });
+      if (!roomAuth(req, room, 'member').ok) return json(res, 401, { error: '需要成員 token' });
+      const r = rooms.stop(mStop[1]);
+      if (r && r.error) return json(res, r.code || 400, { error: r.error });
+      log({ room: mStop[1], action: 'stop' });
+      return json(res, 200, { ok: true });
     }
 
     // 生成會議紀要（憑成員 token）：非同步跑（成品/狀態經 SSE 廣播），立即回 202。

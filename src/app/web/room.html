@@ -178,6 +178,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
       <div class="mention-pop" id="mpop" hidden></div>
       <div class="composer-inner">
         <textarea id="input" rows="1" placeholder="輸入訊息…　打 @ 可召喚 AI、提及成員或引用檔案"></textarea>
+        <button id="stopBtn" class="ghost" type="button" title="中止進行中的 AI 回合" hidden>⏹ 停止</button>
         <button id="send" type="button">送出</button>
       </div>
       <div class="hint">打 <kbd>@</kbd>：<b>@ai</b> 讓 AI 回覆整段討論、<b>@成員</b> 提及、<b>@檔案</b> 引用（同句 @ai 時 AI 會讀該檔）。<kbd>Enter</kbd> 送出、<kbd>Shift+Enter</kbd> 換行。</div>
@@ -484,7 +485,14 @@ function setStatus(s) {
   if (s === "thinking") { p.textContent = "🤔 AI 回覆中…"; p.className = "pill live"; }
   else if (s === "idle") { p.textContent = "● 已連線"; p.className = "pill live"; }
   else { p.textContent = s; p.className = "pill"; }
+  const sb = $("#stopBtn"); if (sb) sb.hidden = (s !== "thinking"); // AI 回覆中才顯示「停止」
 }
+// 中止進行中的 AI 回合：任何成員可打斷共享 AI（結果經 SSE：⏹ 系統訊息 + status idle）。
+$("#stopBtn").onclick = async () => {
+  const b = $("#stopBtn"); b.disabled = true;
+  try { await api(`/v1/rooms/${roomId}/stop`, { method: "POST" }).catch(() => {}); }
+  finally { setTimeout(() => { b.disabled = false; }, 800); }
+};
 function handle(ev) {
   switch (ev.type) {
     case "hello": renderMembers(ev.room.members); return;

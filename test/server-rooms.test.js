@@ -264,6 +264,43 @@ test('HTTP：/v1/rooms/:id/minutes 需成員 token → 202；無 → 401', async
   });
 });
 
+// ── 打斷 AI（中止進行中的回合）──
+test('房間：stop 中止進行中的 AI 回合 → abort agent + ⏹ 訊息 + 回 idle，不推失敗/半截泡泡', async () => {
+  let aborted = false;
+  const store = createRoomStore({
+    // 掛住不自行結束的回合；被 abort 時 reject('Aborted')（模擬 kernel abort 行為）
+    runAiTurn: ({ onAgent }) => new Promise((_resolve, reject) => {
+      onAgent({ abort: () => { aborted = true; reject(new Error('Aborted')); } });
+    }),
+  });
+  const r = store.create({});
+  const u = store.join(r.roomId, '小明');
+  const evs = []; store.subscribe(r.roomId, (ev) => evs.push(ev));
+  store.say(r.roomId, { memberId: u.memberId, text: '@ai 跑個大任務' }); // 觸發 runNow
+  await tick();
+  assert.equal(store.get(r.roomId).status, 'thinking');
+  assert.equal(store.stop(r.roomId).ok, true);
+  await tick(); await tick();
+  assert.ok(aborted, 'agent 被 abort');
+  assert.equal(store.get(r.roomId).status, 'idle', '中止後回 idle');
+  assert.ok(evs.some((e) => e.type === 'say' && e.message.kind === 'system' && /中止/.test(e.message.text)), '廣播 ⏹ 中止訊息');
+  assert.ok(!evs.some((e) => e.type === 'say' && e.message.kind === 'ai'), '不推半截 AI 泡泡');
+  assert.ok(!evs.some((e) => e.type === 'say' && e.message.kind === 'system' && /失敗/.test(e.message.text)), '不推 AI 失敗訊息');
+  // 中止後 idle，再 stop → 409
+  assert.equal(store.stop(r.roomId).code, 409, '無進行中回合 → 409');
+  assert.equal(store.stop('nope').code, 404);
+});
+
+test('HTTP：/v1/rooms/:id/stop 需成員 token；idle 時 409', async () => {
+  await withServer(async ({ url, H }) => {
+    const room = await fetch(url('/v1/rooms'), { method: 'POST', headers: H, body: '{}' }).then((r) => r.json());
+    const u = await fetch(url(`/v1/rooms/${room.roomId}/join`), { method: 'POST', headers: H, body: JSON.stringify({ name: 'a' }) }).then((r) => r.json());
+    const MH = { 'content-type': 'application/json', authorization: 'Bearer ' + u.memberToken };
+    assert.equal((await fetch(url(`/v1/rooms/${room.roomId}/stop`), { method: 'POST' })).status, 401, '無 token → 401');
+    assert.equal((await fetch(url(`/v1/rooms/${room.roomId}/stop`), { method: 'POST', headers: MH })).status, 409, '無進行中回合 → 409');
+  });
+});
+
 async function withServer(fn) {
   const base = mkdtempSync(join(tmpdir(), 'xk-rsrv-'));
   const srv = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', baseDir: join(base, '.srv') });
