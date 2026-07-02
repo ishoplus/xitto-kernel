@@ -576,7 +576,48 @@ export function defaultAuth({ token } = {}) {
   return { bearerOf, authed, roomAuth, principal: () => null, handle: null };
 }
 
-export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
+// SSO 授權：xitto 自管的角色名冊（IdP 不在管理範圍 → 授權由此決定）。見 docs/10-sso-design.md §4。
+// 持久化於 <dir>/roles.json（email→role）；adminEmails 為 env 釘死的 admin（不落地、不可刪，防自鎖）。
+export function createRoleStore({ dir, adminEmails = [], allowedDomain = '' } = {}) {
+  const norm = (e) => String(e || '').trim().toLowerCase();
+  const pinned = new Set(adminEmails.map(norm).filter(Boolean));
+  const domain = norm(allowedDomain).replace(/^@/, '');
+  const ROLES = new Set(['admin', 'member', 'readonly']);
+  const file = dir ? join(dir, 'roles.json') : null;
+  const roles = new Map(); // email -> role（不含釘死 admin）
+  if (file && existsSync(file)) {
+    try { const o = JSON.parse(readFileSync(file, 'utf8')); for (const [e, r] of Object.entries(o || {})) if (ROLES.has(r)) roles.set(norm(e), r); } catch { /* 壞檔略過 */ }
+  }
+  const persist = () => { if (!file) return; try { mkdirSync(dir, { recursive: true }); writeFileSync(file, JSON.stringify(Object.fromEntries(roles))); } catch { /* 略 */ } };
+  // 判角色（不含 master-token break-glass，那在 adapter 層）：釘死 admin → 名冊 → 網域放行(member) → 皆無回 null（封閉名冊拒絕）。
+  const roleOf = (principal) => {
+    const email = norm(principal?.email);
+    if (!email || principal?.email_verified === false) return null; // 需 email 且未被標記為未驗證
+    if (pinned.has(email)) return 'admin';
+    if (roles.has(email)) return roles.get(email);
+    if (domain && email.endsWith('@' + domain)) return 'member';
+    return null;
+  };
+  return {
+    roleOf,
+    list: () => [
+      ...[...pinned].map((email) => ({ email, role: 'admin', pinned: true })),
+      ...[...roles].filter(([e]) => !pinned.has(e)).map(([email, role]) => ({ email, role, pinned: false })),
+    ],
+    set(email, role) {
+      const e = norm(email); if (!e || !ROLES.has(role)) return { ok: false, error: 'email 或 role 無效（role ∈ admin|member|readonly）' };
+      if (pinned.has(e)) return { ok: false, error: 'env 釘死的 admin 不可經 API 變更' };
+      roles.set(e, role); persist(); return { ok: true, email: e, role };
+    },
+    remove(email) {
+      const e = norm(email);
+      if (pinned.has(e)) return { ok: false, error: 'env 釘死的 admin 不可刪除' };
+      const had = roles.delete(e); if (had) persist(); return { ok: had, email: e, error: had ? undefined : 'not found' };
+    },
+  };
+}
+
+export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
   // 可選 model 清單（跨 provider）：給 /v1/models 與「未知 model」錯誤訊息用；始終含當前預設 model。
   const modelList = (models && models.length) ? models : [{ id: model.id, name: model.name || model.id, provider: model.provider }];
   const knownModel = (id) => !id || id === model.id || modelList.some((m) => m.id === id);
@@ -591,8 +632,12 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   const dropSession = (id) => { if (!id) return; sessions.delete(id); try { rmSync(join(sessDir, id + '.json'), { force: true }); } catch { /* 略 */ } };
 
   const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
+  // SSO 授權名冊（xitto 自管）：SSO 開時查它決定 admin/member/readonly；SSO 關時仍可用 master token 經 /v1/admins 預先配置。
+  const roleStore = createRoleStore({ dir: join(baseDir, 'auth'), adminEmails, allowedDomain: allowedEmailDomain });
   // 認證 adapter：注入的優先（SSO），否則用 defaultAuth 封裝的現有 token 邏輯 → 未注入即與過去完全一致。
+  // roleStore 掛給 adapter，讓注入的 SSO adapter 共用同一份名冊。
   const authAdapter = auth || defaultAuth({ token });
+  if (authAdapter && !authAdapter.roleStore) authAdapter.roleStore = roleStore;
   const authed = (req) => authAdapter.authed(req);
   const roomAuth = (req, room, need) => authAdapter.roomAuth(req, room, need);
   const log = (o) => console.log(JSON.stringify({ ts: new Date().toISOString(), ...o }));
@@ -775,6 +820,24 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     if (req.method === 'GET' && path === '/v1/rooms') { if (!authed(req)) return json(res, 401, { error: 'unauthorized' }); return json(res, 200, { rooms: rooms.list(), ...rooms.stats() }); }
     // 可選 model 清單（給前端建房/切換選單）：需 master（模型配置屬 operator 範疇）。default 標記當前預設。
     if (req.method === 'GET' && path === '/v1/models') { if (!authed(req)) return json(res, 401, { error: 'unauthorized' }); return json(res, 200, { models: modelList, default: model.id }); }
+
+    // ── SSO 角色名冊（operator only）：xitto 自管 admin/member/readonly，供 SSO 授權查詢（見 docs/10-sso-design.md §4/§5）──
+    // SSO 未開時也能用（master token），供上線前預先配置名冊。env 釘死的 admin 標 pinned、不可改/刪。
+    if (path === '/v1/admins' && req.method === 'GET') {
+      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      return json(res, 200, { roles: roleStore.list() });
+    }
+    if (path === '/v1/admins' && req.method === 'POST') {
+      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      const b = await readBody(req); const r = roleStore.set(b.email, b.role);
+      return json(res, r.ok ? 200 : 400, r.ok ? { ok: true, email: r.email, role: r.role } : { error: r.error });
+    }
+    const mAdminDel = path.match(/^\/v1\/admins\/(.+)$/);
+    if (mAdminDel && req.method === 'DELETE') {
+      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      const r = roleStore.remove(decodeURIComponent(mAdminDel[1]));
+      return json(res, r.ok ? 200 : 400, r.ok ? { ok: true, email: r.email } : { error: r.error });
+    }
 
     // 設定入口（master only）：復用引導頁，改成「新增/更新一個 provider」語境。POST /v1/setup 合併進既有 providers.json 後熱重載。
     if (req.method === 'GET' && path === '/settings') {
@@ -1290,6 +1353,9 @@ export function startServer(opts = {}) {
   const local = opts.local ?? (process.env.XITTO_SERVER_LOCAL === '1' || process.env.XITTO_SERVER_LOCAL === 'true');
   // 所有落地狀態（rooms/sessions/tasks/ws）皆掛在 baseDir 下 → 容器部署時指到掛載卷（PVC）才不會重啟即丟。
   const baseDir = opts.baseDir ?? process.env.XITTO_SERVER_DIR ?? '.xitto-server';
+  // SSO 授權（見 docs/10-sso-design.md）：釘死的首任 admin email + 選填的網域放行；不設即封閉名冊。
+  const adminEmails = opts.adminEmails ?? String(process.env.XITTO_ADMIN_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const allowedEmailDomain = opts.allowedEmailDomain ?? process.env.XITTO_ALLOWED_EMAIL_DOMAIN ?? '';
   let model, getApiKey, resolveModel, models;
   try { ({ model, getApiKey, resolveModel, models } = (opts.model && opts.getApiKey) ? opts : loadModel(opts.modelId ?? process.env.XITTO_MODEL)); }
   catch (e) {
@@ -1303,7 +1369,7 @@ export function startServer(opts = {}) {
   let server;
   // 熱重載：/v1/setup 存檔後關掉現有 server、用同 opts 重起（載入新設定），同 port 不需重進容器。
   const onReconfigure = () => { try { server.close(); } catch { /* 略 */ } startServer(opts); };
-  server = createServerApp({ model, getApiKey, resolveModel, models, token, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
+  server = createServerApp({ model, getApiKey, resolveModel, models, token, adminEmails, allowedEmailDomain, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
   server.listen(port, () => {
     console.log(`🪄 許願台：http://localhost:${port}/  （本機瀏覽器打開即用）`);
     console.log(`👥 會議室：http://localhost:${port}/room  （多人 + AI 針對專案對談；點名 @ai 才回覆）`);

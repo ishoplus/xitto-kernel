@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRoomStore, mentionsAi, createServerApp, defaultAuth, lanIPs, joinUploadRel } from '../src/app/server.js';
+import { createRoomStore, mentionsAi, createServerApp, defaultAuth, createRoleStore, lanIPs, joinUploadRel } from '../src/app/server.js';
 
 const tick = () => new Promise((r) => setImmediate(r));
 const defer = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
@@ -293,6 +293,59 @@ test('createServerApp：注入 auth adapter → handle 攔截 /auth/*，authed �
     assert.equal(r2.status, 401, '無 x-admin → adapter.authed 擋下');
     const r3 = await fetch(`http://localhost:${port}/v1/models`, { headers: { 'x-admin': 'yes' } });
     assert.equal(r3.status, 200, '帶 x-admin → adapter.authed 放行');
+  } finally { srv.close(); rmSync(base, { recursive: true, force: true }); }
+});
+
+// ── SSO 角色名冊（S2）：roleOf 五級判定、釘死 admin 保護、持久化、/v1/admins CRUD ──
+test('createRoleStore：roleOf 五級判定（釘死 admin / 名冊 / 網域 / 封閉拒絕 / 未驗證）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xk-roles-'));
+  try {
+    const s = createRoleStore({ dir, adminEmails: ['boss@corp.com'], allowedDomain: 'corp.com' });
+    const p = (email, extra = {}) => ({ email, ...extra });
+    assert.equal(s.roleOf(p('boss@corp.com')), 'admin');                        // 釘死
+    assert.equal(s.roleOf(p('BOSS@Corp.com')), 'admin');                        // 大小寫不敏感
+    assert.equal(s.roleOf(p('someone@corp.com')), 'member');                    // 網域放行
+    assert.equal(s.roleOf(p('x@other.com')), null);                             // 封閉名冊拒絕
+    assert.equal(s.roleOf(p('x@corp.com', { email_verified: false })), null);   // 未驗證拒絕
+    assert.equal(s.roleOf({}), null);                                           // 無 email
+    s.set('guest@corp.com', 'readonly');
+    assert.equal(s.roleOf(p('guest@corp.com')), 'readonly');                    // 名冊優先於網域
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('createRoleStore：釘死 admin 不可改/刪；一般項增刪並持久化', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xk-roles-'));
+  try {
+    const s = createRoleStore({ dir, adminEmails: ['boss@corp.com'] });
+    assert.equal(s.set('boss@corp.com', 'member').ok, false);   // 釘死不可改
+    assert.equal(s.remove('boss@corp.com').ok, false);          // 釘死不可刪
+    assert.equal(s.set('a@x.com', 'admin').ok, true);
+    assert.equal(s.set('a@x.com', 'bogus').ok, false);          // 非法 role
+    const s2 = createRoleStore({ dir, adminEmails: ['boss@corp.com'] }); // 重載 → 持久化保留
+    assert.equal(s2.roleOf({ email: 'a@x.com' }), 'admin');
+    assert.ok(s2.list().some((x) => x.email === 'boss@corp.com' && x.pinned));
+    assert.equal(s2.remove('a@x.com').ok, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('HTTP：/v1/admins CRUD 需 operator；釘死 admin 受保護', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'xk-admins-'));
+  const srv = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', adminEmails: ['boss@corp.com'], baseDir: join(base, '.srv') });
+  await new Promise((r) => srv.listen(0, r));
+  const port = srv.address().port;
+  const U = (p) => `http://localhost:${port}${p}`;
+  const H = { 'content-type': 'application/json', authorization: 'Bearer t' };
+  try {
+    assert.equal((await fetch(U('/v1/admins'))).status, 401);                    // 無 token → 401
+    const list0 = await fetch(U('/v1/admins'), { headers: H }).then((r) => r.json());
+    assert.ok(list0.roles.some((x) => x.email === 'boss@corp.com' && x.pinned)); // 釘死 admin 列出
+    const add = await fetch(U('/v1/admins'), { method: 'POST', headers: H, body: JSON.stringify({ email: 'Alice@corp.com', role: 'member' }) });
+    assert.equal(add.status, 200);
+    const list1 = await fetch(U('/v1/admins'), { headers: H }).then((r) => r.json());
+    assert.ok(list1.roles.some((x) => x.email === 'alice@corp.com' && x.role === 'member')); // 正規化小寫
+    assert.equal((await fetch(U('/v1/admins/alice@corp.com'), { method: 'DELETE', headers: H })).status, 200);
+    assert.equal((await fetch(U('/v1/admins/boss@corp.com'), { method: 'DELETE', headers: H })).status, 400); // 釘死不可刪
+    assert.equal((await fetch(U('/v1/admins'), { method: 'POST', headers: H, body: JSON.stringify({ email: 'x@x.com', role: 'root' }) })).status, 400); // 非法 role
   } finally { srv.close(); rmSync(base, { recursive: true, force: true }); }
 });
 
