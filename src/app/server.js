@@ -874,10 +874,16 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const room = rooms.get(mRoomEv[1]); if (!room) return json(res, 404, { error: 'room not found' });
       if (!roomAuth(req, room, 'read').ok) return json(res, 401, { error: '需要邀請碼或成員 token' });
       sseHead(res);
-      const sse = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+      // 事件帶 SSE id（用訊息 id）→ 斷線重連時瀏覽器自動回傳 Last-Event-ID，服務端只補發其後的訊息（省頻寬）。
+      const sse = (o, id) => res.write((id ? `id: ${id}\n` : '') + `data: ${JSON.stringify(o)}\n\n`);
       sse({ type: 'hello', room: rooms.view(mRoomEv[1]) });
-      for (const m of rooms.snapshot(mRoomEv[1]).messages) sse({ type: 'say', message: m, replay: true });
-      const unsub = rooms.subscribe(mRoomEv[1], (ev) => sse(ev));
+      // 只補發 Last-Event-ID 之後的訊息；找不到（已滾出緩衝）→ 全補發，客戶端再按 id 去重兜底。
+      const lastId = req.headers['last-event-id'];
+      const msgs = rooms.snapshot(mRoomEv[1]).messages;
+      let from = 0;
+      if (lastId) { const i = msgs.findIndex((m) => m.id === lastId); if (i >= 0) from = i + 1; }
+      for (let k = from; k < msgs.length; k++) sse({ type: 'say', message: msgs[k], replay: true }, msgs[k].id);
+      const unsub = rooms.subscribe(mRoomEv[1], (ev) => sse(ev, ev.type === 'say' ? ev.message?.id : undefined));
       req.on('close', () => { try { unsub(); } catch { /* 略 */ } });
       return;
     }

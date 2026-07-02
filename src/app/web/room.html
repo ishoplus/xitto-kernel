@@ -496,7 +496,9 @@ function renderText(text) {
   out += esc(text.slice(last));
   return out;
 }
+const renderedIds = new Set();   // 已渲染的訊息 id → SSE 斷線重連時服務端會重放全部歷史，按 id 去重避免重複渲染
 function renderMessage(m) {
+  if (m.id) { if (renderedIds.has(m.id)) return; renderedIds.add(m.id); } // 先記 id（含 AI 落定分支）→ 重連重放同 id 一律略過
   if (m.kind === "ai" && aiMsgEl) { aiText = m.text || aiText; finishAi(); return; } // 串流泡泡落定，避免重複
   const cls = m.kind === "ai" ? "ai" : m.kind === "system" ? "system" : (m.name === myName ? "me" : "");
   const el = document.createElement("div");

@@ -446,6 +446,44 @@ test('HTTP：上傳超過上限 → 413', async () => {
   }
 });
 
+// 讀 SSE 一小段（收集 say 事件的 message.id），到齊 want 個或逾時就中止。
+async function readSaySSE(url, headers, want, ms = 400) {
+  const ac = new AbortController();
+  const to = setTimeout(() => ac.abort(), ms);
+  const ids = [];
+  try {
+    const res = await fetch(url, { headers, signal: ac.signal });
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    while (true) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        const data = block.split('\n').find((l) => l.startsWith('data: '));
+        if (data) { try { const ev = JSON.parse(data.slice(6)); if (ev.type === 'say') ids.push(ev.message.id); } catch { /* 略 */ } }
+      }
+      if (ids.length >= want) { ac.abort(); break; }
+    }
+  } catch { /* abort 正常 */ } finally { clearTimeout(to); }
+  return ids;
+}
+
+test('HTTP：SSE 重連帶 Last-Event-ID → 只補發其後訊息（不重放已收到的）', async () => {
+  await withServer(async ({ url, H }) => {
+    const room = await fetch(url('/v1/rooms'), { method: 'POST', headers: H, body: '{}' }).then((r) => r.json());
+    const u = await fetch(url(`/v1/rooms/${room.roomId}/join`), { method: 'POST', headers: H, body: JSON.stringify({ name: '小明' }) }).then((r) => r.json());
+    const MH = { 'content-type': 'application/json', authorization: 'Bearer ' + u.memberToken };
+    await fetch(url(`/v1/rooms/${room.roomId}/say`), { method: 'POST', headers: MH, body: JSON.stringify({ text: '第一則' }) });
+    await fetch(url(`/v1/rooms/${room.roomId}/say`), { method: 'POST', headers: MH, body: JSON.stringify({ text: '第二則' }) });
+    const evUrl = url(`/v1/rooms/${room.roomId}/events?token=t`);
+    const first = await readSaySSE(evUrl, {}, 2);
+    assert.equal(first.length, 2, '首次連線補發全部 2 則');
+    // 帶 Last-Event-ID = 第一則 id → 應只補發第二則
+    const again = await readSaySSE(evUrl, { 'last-event-id': first[0] }, 1);
+    assert.deepEqual(again, [first[1]], '只補發其後的第二則，不重放第一則');
+  });
+});
+
 test('HTTP：未知 room → 404；建房未知 pack → 400；需認證', async () => {
   await withServer(async ({ url, H }) => {
     assert.equal((await fetch(url('/v1/rooms/nope'), { headers: H })).status, 404);
