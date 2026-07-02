@@ -5,6 +5,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_PATH = () => process.env.XITTO_CODE_CONFIG || join(homedir(), '.xitto-code', 'providers.json');
+// 對外公開設定檔路徑（設定引導頁存檔用）。
+export const providersConfigPath = (path) => path || DEFAULT_PATH();
 
 export function loadProvidersConfig(path = DEFAULT_PATH()) {
   if (!existsSync(path)) { const err = new Error(`找不到 providers.json：${path}`); err.noConfig = true; throw err; }
@@ -35,13 +37,23 @@ export function buildResolver(cfg) {
   return { resolveModel, getApiKey };
 }
 
+// 列出所有可選 model（跨 provider 攤平）：[{ id, name, provider }]。給前端模型選單 / 執行期切換用。
+export function listModels(cfg) {
+  const providers = cfg.providers || {};
+  const out = [];
+  for (const [provider, pcfg] of Object.entries(providers)) {
+    for (const m of (pcfg.models || [])) out.push({ id: m.id, name: m.name || m.id, provider });
+  }
+  return out;
+}
+
 export function buildModel(cfg, modelId) {
   const { resolveModel, getApiKey } = buildResolver(cfg);
   const targetId = modelId || cfg.defaultModel;
   const model = resolveModel(targetId);
   if (!model) throw new Error(`providers.json 找不到 model「${targetId}」`);
   // getApiKey 預設用主 model 的 provider；但接受 provider 參數（per-agent 跨 provider model 用）。
-  return { model, resolveModel, getApiKey: (provider) => getApiKey(provider || model.provider) };
+  return { model, resolveModel, models: listModels(cfg), getApiKey: (provider) => getApiKey(provider || model.provider) };
 }
 
 // 一步到位：載入設定 + 組裝指定（或預設）model（回傳含 resolveModel，供 per-agent model）

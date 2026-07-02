@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xitto · 會議室</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<!-- 設計系統（與許願台／對話頁共用同一套 token、字體、明暗主題）-->
+<link rel="stylesheet" href="shared/style.css">
+<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, origin: "__PUBLIC_ORIGIN__" };</script>
+<style>
+/* ── 會議室頁面樣式（沿用 shared/style.css 的設計 token）────────── */
+:root { --sidebar-w: 300px; }
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; }
+
+.app { flex: 1; display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: 100vh; overflow: hidden; }
+
+/* 左側邊欄 */
+.side { border-right: 1px solid var(--line); display: flex; flex-direction: column; background: var(--inset); overflow: hidden; }
+.side-head { padding: var(--sp-4) var(--sp-3) var(--sp-3); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.side-brand { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.side-brand svg { width: 24px; height: 24px; flex: none; }
+.side-brand h1 { font-size: 16px; font-weight: 700; margin: 0; }
+.side-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--dim); }
+.pill.live { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.side-actions { padding: var(--sp-3); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.side-actions button { width: 100%; }
+.invite-box { width: 100%; margin-top: var(--sp-2); font-size: 12px; }
+.invite-box[hidden] { display: none; }
+
+/* 成員區 */
+.members { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); flex-shrink: 0; max-height: 30vh; overflow-y: auto; }
+.members h3, .file-section h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 var(--sp-2); display: flex; align-items: center; gap: var(--sp-2); }
+.member { display: flex; align-items: center; gap: var(--sp-2); padding: 3px 0; font-size: 14px; }
+.member .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+
+/* 檔案目录（与 chat 一致的视觉）*/
+.file-section { flex: 1; display: flex; flex-direction: column; min-height: 0; padding-top: var(--sp-2); }
+.file-section h3 { padding: 0 var(--sp-3); }
+.file-breadcrumb { padding: 2px var(--sp-3); font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.file-actions { display: flex; gap: var(--sp-2); padding: 2px var(--sp-3) var(--sp-2); flex-shrink: 0; }
+.file-actions button { flex: 1; font-size: 12px; padding: 4px 6px; }
+.file-list { flex: 1; overflow-y: auto; padding: var(--sp-1) var(--sp-2); }
+.file-list.drop { outline: 2px dashed var(--accent); outline-offset: -4px; border-radius: var(--r-md); }
+.file-row, .file-up { display: flex; align-items: center; gap: var(--sp-2); padding: 5px var(--sp-2); border-radius: var(--r-sm, 7px); cursor: pointer; font-size: 13px; background: none; border: none; width: 100%; text-align: left; color: var(--fg); transition: background .12s; }
+.file-row:hover, .file-up:hover { background: var(--accent-soft); }
+.file-up { color: var(--dim); }
+.file-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-row .size { color: var(--dim); font-size: 11px; flex: none; }
+.empty { color: var(--dim); font-size: 13px; padding: var(--sp-2); }
+
+/* 主區：訊息串 + 輸入 */
+.thread { display: flex; flex-direction: column; min-width: 0; height: 100vh; }
+.thread-scroll { flex: 1; overflow-y: auto; padding: var(--sp-5) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+.thread-inner { width: 100%; max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-3); }
+.msg { max-width: 88%; }
+.msg .who { font-size: 12px; color: var(--dim); margin-bottom: 3px; }
+.msg .bubble { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 9px 13px; white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+.msg.me { align-self: flex-end; }
+.msg.me .who { text-align: right; }
+.msg.me .bubble { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--btnfg); }
+.msg.ai .who { color: var(--ok); font-weight: 600; }
+.msg.ai .bubble { background: color-mix(in srgb, var(--ok) 9%, var(--card)); border-color: color-mix(in srgb, var(--ok) 30%, var(--line)); }
+.msg.system { align-self: center; max-width: 92%; }
+.msg.system .bubble { background: transparent; border: 0; color: var(--warn); font-size: 13px; text-align: center; padding: 2px; }
+.msg .bubble .tool { color: var(--dim); font-size: 12px; font-family: var(--mono, ui-monospace,SFMono-Regular,Menlo,monospace); margin-bottom: 4px; }
+.typing { color: var(--dim); font-size: 13px; padding: 0 var(--sp-4) 4px; height: 18px; text-align: center; }
+
+.composer { border-top: 1px solid var(--line); background: var(--inset); padding: var(--sp-3) var(--sp-4); position: relative; }
+
+/* @ 提及 / 檔案引用 的內文樣式 */
+.mention { color: var(--accent); font-weight: 600; }
+.mention.ai { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); padding: 0 4px; border-radius: 5px; }
+.mention.me { background: color-mix(in srgb, var(--accent) 24%, transparent); padding: 0 4px; border-radius: 5px; }
+.msg.mentions-me .bubble { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.ref { background: var(--inset); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; font: inherit; font-size: .92em; cursor: pointer; color: var(--fg); }
+.ref:hover { background: var(--accent-soft); }
+.msg.me .ref { color: var(--btnfg); border-color: color-mix(in srgb, var(--btnfg) 40%, transparent); background: color-mix(in srgb, var(--btnfg) 12%, transparent); }
+
+/* @ 自動完成面板（浮在輸入框上方）*/
+.mention-pop { position: absolute; left: var(--sp-4); bottom: calc(100% - var(--sp-2)); z-index: 60; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: 0 8px 30px rgba(0,0,0,.28); max-height: 260px; overflow-y: auto; min-width: 240px; max-width: min(420px, 80vw); }
+.mention-pop[hidden] { display: none; }
+.mention-item { display: flex; align-items: center; gap: var(--sp-2); padding: 7px 11px; cursor: pointer; font-size: 14px; }
+.mention-item.active, .mention-item:hover { background: var(--accent-soft); }
+.mention-item .mi-sub { color: var(--dim); font-size: 12px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.composer-inner { max-width: 820px; margin: 0 auto; display: flex; gap: var(--sp-2); align-items: flex-end; }
+.composer textarea { flex: 1; resize: none; max-height: 140px; }
+.composer .hint { max-width: 820px; margin: 6px auto 0; color: var(--dim); font-size: 12px; }
+kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; font-size: .85em; }
+
+/* 檔案預覽浮層 */
+#file-preview:empty { display: none; }
+#file-preview { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 90; padding: var(--sp-4); }
+.preview-panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); width: min(860px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+.preview-bar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3); border-bottom: 1px solid var(--line); }
+.preview-name { font-weight: 600; }
+.preview-bar .spacer { flex: 1; }
+.preview-body { overflow: auto; padding: var(--sp-4); }
+.preview-pre { white-space: pre-wrap; word-break: break-word; font-family: var(--mono, ui-monospace,Menlo,monospace); font-size: 13px; margin: 0; }
+.preview-img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+
+/* 進場 Modal */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.66); display: flex; align-items: center; justify-content: center; z-index: 100; padding: var(--sp-4); }
+.modal[hidden] { display: none; }
+.modal-box { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); width: min(440px, 94vw); padding: var(--sp-5); }
+.modal-box h2 { margin: 0 0 4px; font-size: 20px; }
+.modal-box .sub { color: var(--dim); font-size: 14px; margin: 0 0 var(--sp-4); }
+.modal-box label { display: block; font-size: 13px; color: var(--dim); margin: var(--sp-3) 0 5px; }
+.modal-box .row { margin-top: var(--sp-4); }
+.modal-box .row button { width: 100%; }
+.picked { font-size: 12px; color: var(--dim); word-break: break-all; padding: var(--sp-2); background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); }
+.fs-list { max-height: 44vh; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-1); margin-top: var(--sp-2); }
+#fsCur { word-break: break-all; font-family: var(--mono, ui-monospace,Menlo,monospace); }
+
+/* 大廳（operator 專屬：列房 / 新建 / 進入 / 關閉）*/
+.lobby-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 4px; }
+.lobby-head h2 { flex: 1; margin: 0; }
+.room-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-3); margin: var(--sp-2) var(--sp-1); background: var(--inset); }
+.room-card .rc-top { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 6px; }
+.room-card .rc-title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-card .rc-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--sp-2); }
+.room-card .rc-actions { display: flex; gap: var(--sp-2); }
+.room-card .rc-actions button { flex: 1; font-size: 13px; padding: 5px 8px; }
+.room-card .danger { color: var(--danger, #e5484d); border-color: color-mix(in srgb, var(--danger, #e5484d) 40%, var(--line)); }
+
+@media (max-width: 720px) {
+  .app { grid-template-columns: 1fr; }
+  .side { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 側邊欄：品牌 + 狀態 + 成員 + 檔案目录 -->
+  <aside class="side">
+    <div class="side-head">
+      <div class="side-brand">
+        <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/><circle cx="12" cy="11" r="1"/><circle cx="23" cy="19" r="1"/></g></svg>
+        <h1 id="roomTitle">專案會議室</h1>
+      </div>
+      <div class="side-meta">
+        <span class="pill" id="wsPill">—</span>
+        <span class="pill" id="packPill">—</span>
+        <span class="pill" id="modelPill" title="此會議的 AI 模型；主持人可點擊切換" hidden style="cursor:pointer" onclick="switchModel()">🧠 —</span>
+        <span class="pill" id="statusPill">連線中…</span>
+        <span class="pill" id="roPill" title="唯讀會議：僅主持人可上傳/改檔" hidden>🔒 唯讀</span>
+      </div>
+    </div>
+    <div class="side-actions">
+      <button class="ghost" id="copyBtn" type="button" title="複製邀請連結">🔗 複製邀請連結</button>
+      <input id="inviteBox" class="invite-box" readonly hidden onclick="this.select()" title="邀請連結（點一下全選）">
+    </div>
+    <div class="members">
+      <h3>成員 <span id="mcount">(0)</span></h3>
+      <div id="members"></div>
+    </div>
+    <div class="file-section">
+      <h3>📂 檔案 <button class="refresh-btn" id="files-refresh" type="button" onclick="refreshFiles()" title="刷新檔案列表" aria-label="刷新">↻</button></h3>
+      <div class="file-breadcrumb" id="file-breadcrumb"></div>
+      <div class="file-actions">
+        <button class="ghost" type="button" onclick="mkdirHere()" title="在目前資料夾新建子資料夾">📁＋ 新資料夾</button>
+        <button class="ghost" type="button" onclick="document.getElementById('fileUpload').click()" title="上傳到目前資料夾">⬆ 上傳到此</button>
+        <input id="fileUpload" type="file" multiple hidden>
+      </div>
+      <div class="file-list" id="wbfiles" role="tree" aria-label="工作區檔案"></div>
+    </div>
+  </aside>
+
+  <!-- 主區：訊息串 + 輸入 -->
+  <main class="thread">
+    <div class="thread-scroll" id="logWrap"><div class="thread-inner" id="log"></div></div>
+    <div class="typing" id="typing"></div>
+    <div class="composer">
+      <div class="mention-pop" id="mpop" hidden></div>
+      <div class="composer-inner">
+        <textarea id="input" rows="1" placeholder="輸入訊息…　打 @ 可召喚 AI、提及成員或引用檔案"></textarea>
+        <button id="send" type="button">送出</button>
+      </div>
+      <div class="hint">打 <kbd>@</kbd>：<b>@ai</b> 讓 AI 回覆整段討論、<b>@成員</b> 提及、<b>@檔案</b> 引用（同句 @ai 時 AI 會讀該檔）。<kbd>Enter</kbd> 送出、<kbd>Shift+Enter</kbd> 換行。</div>
+    </div>
+  </main>
+</div>
+
+<div id="file-preview"></div>
+
+<!-- 大廳（operator 專屬）：列出所有會議 + 新建 + 進入/複製邀請/關閉。訪客（帶 ?room=）不顯示此頁 -->
+<div class="modal" id="lobby" hidden>
+  <div class="modal-box" style="width:min(560px,94vw)">
+    <div class="lobby-head">
+      <h2>會議室大廳</h2>
+      <div style="display:flex;gap:var(--sp-2)">
+        <button class="ghost" id="settingsBtn" type="button" title="新增/切換模型服務（provider / model）">⚙️ 模型設置</button>
+        <button id="newRoomBtn" type="button">＋ 新建會議</button>
+      </div>
+    </div>
+    <p class="sub">選一間進入，或新建一場專案會議。此頁僅操作者可見。</p>
+    <div class="fs-list" id="roomList" style="max-height:56vh"></div>
+  </div>
+</div>
+
+<!-- 進場：建房 or 加入既有房 + 取暱稱 -->
+<div class="modal" id="gate">
+  <div class="modal-box">
+    <h2>加入會議室</h2>
+    <p class="sub" id="gateDesc">建立一間新的專案會議室，或用邀請連結加入既有房間。</p>
+    <label>你的暱稱</label>
+    <input id="nameInput" placeholder="例如：小明" maxlength="40" autocomplete="off">
+    <div id="newRoomFields">
+      <label>會議名稱</label>
+      <input id="roomNameInput" placeholder="例如：首頁改版討論" maxlength="60" autocomplete="off">
+      <div id="wsNameField">
+        <label>工作區（共享的專案空間，名稱相同即同一份上下文與檔案）</label>
+        <input id="wsInput" placeholder="default" autocomplete="off">
+      </div>
+      <div id="wsFolderField" hidden>
+        <label>專案資料夾（會議的工作區；AI 與大家共用這個真實資料夾）</label>
+        <div class="picked"><span id="pickedPath">（未選 → 用預設空間 default）</span></div>
+        <button class="ghost" id="browseBtn" type="button" style="width:100%;margin-top:6px">📁 瀏覽並選擇資料夾…</button>
+      </div>
+      <label>領域 Pack</label>
+      <select id="packSelect"></select>
+      <div id="modelField" hidden>
+        <label>模型（決定「誰來做」，與 Pack 正交；可在會議中隨時切換）</label>
+        <select id="modelSelect"></select>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:var(--sp-3);cursor:pointer;color:var(--fg)">
+        <input type="checkbox" id="readonlyChk" style="width:auto;margin:0"> 訪客唯讀（只能看檔案與聊天、可 @ai；不能上傳/改檔）
+      </label>
+    </div>
+    <div class="row" style="display:flex;gap:var(--sp-2)">
+      <button class="ghost" id="backBtn" type="button" style="flex:1" hidden>← 返回大廳</button>
+      <button id="enterBtn" type="button" style="flex:2">進入</button>
+    </div>
+  </div>
+</div>
+
+<!-- 資料夾選擇器（本地模式；複用 /v1/fs 逐層瀏覽）-->
+<div class="modal" id="fsModal" hidden style="z-index:110">
+  <div class="modal-box">
+    <h2>選擇專案資料夾</h2>
+    <p class="sub" id="fsCur"></p>
+    <div class="fs-list" id="fsList"></div>
+    <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-3)">
+      <button class="ghost" id="fsUpBtn" type="button">⬆ 上一層</button>
+      <span style="flex:1"></span>
+      <button class="ghost" id="fsCancel" type="button">取消</button>
+      <button id="fsChoose" type="button">選這個資料夾</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const { token, packs, origin: PUBLIC_ORIGIN, local: LOCAL } = window.__XITTO__;   // token：主控台載入才有（master）；訪客頁為空
+const $ = (s) => document.querySelector(s);
+// 邀請連結的對外網址：本機從 localhost 開頁時改用伺服器建議的區網 IP，讓別台機器能連入；
+// 若經域名/反代連入（location 已是可分享網址）則尊重當前 origin。
+const isLoopback = (o) => /^https?:\/\/(localhost|127\.|\[?::1\]?|0\.0\.0\.0)/i.test(o || "");
+const shareOrigin = () => (isLoopback(location.origin) && PUBLIC_ORIGIN) ? PUBLIC_ORIGIN : location.origin;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const jsAttr = (s) => String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+const fmtSize = (n) => (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB");
+const fmtTime = (iso) => { try { return new Date(iso).toLocaleString(); } catch { return iso || ""; } };
+
+// 主題：跟隨系統，記憶偏好（與 shared/style.css 的 [data-theme] 對齊）
+(() => { const t = localStorage.getItem("xk_theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); document.documentElement.setAttribute("data-theme", t); })();
+
+let roomId = null, memberId = null, myName = "", workspace = "default", es = null;
+let inviteLink = "", pickedFolder = "";   // pickedFolder：本地模式選中的專案資料夾絕對路徑
+let enterRoomId = null, enterInvite = ""; // 大廳選中的既有房（進入模式）：房 id 與其邀請碼
+let canWrite = true;                       // 是否能上傳/建夾（唯讀會議且非主持人 → false）
+let currentMembers = [], lastFiles = [];   // @ 自動完成的候選來源：成員名、目前資料夾的檔案
+let aiMsgEl = null, aiText = "", aiTools = [];
+let MODELS = [], DEFAULT_MODEL = "";   // 可選模型清單（master 拉到）；空=不顯示選單（訪客或單一模型）
+
+// 拉可選模型清單（需 master）；成功則填建房選單並顯示。訪客/單模型 → 靜默略過。
+async function loadModels() {
+  try {
+    const r = await api("/v1/models"); if (!r.ok) return;
+    const j = await r.json(); MODELS = j.models || []; DEFAULT_MODEL = j.default || "";
+    if (MODELS.length <= 1) return;   // 只有一個模型 → 無需選
+    $("#modelSelect").innerHTML = MODELS.map((m) => `<option value="${esc(m.id)}"${m.id === DEFAULT_MODEL ? " selected" : ""}>${esc(m.name)} · ${esc(m.provider)}${m.id === DEFAULT_MODEL ? "（預設）" : ""}</option>`).join("");
+    $("#modelField").hidden = false;
+  } catch { /* 靜默：拿不到清單就用房間既定模型 */ }
+}
+// id → 顯示名（清單裡查得到用名字，否則回退 id）；room.model 為 null → 用伺服器預設。
+function modelLabel(id) { const eff = id || DEFAULT_MODEL; if (!eff) return "預設"; const m = MODELS.find((x) => x.id === eff); return m ? m.name : eff; }
+function setModelPill(id) {
+  const pill = $("#modelPill"); if (!pill) return;
+  pill.textContent = "🧠 " + modelLabel(id) + (isOperator ? " ▾" : "");
+  pill.hidden = false;   // 一律顯示當前模型（資訊性）；只有主持人點擊能切換
+}
+// 主持人切換此會議模型：從清單挑一個 → POST /model → 下一輪生效（後端會廣播 room_model + 系統訊息）。
+async function switchModel() {
+  if (!isOperator) return;   // 訪客：純資訊，不可切
+  if (!MODELS.length) { try { const r = await api("/v1/models"); if (r.ok) { const j = await r.json(); MODELS = j.models || []; DEFAULT_MODEL = j.default || ""; } } catch { /* 略 */ } }
+  if (MODELS.length <= 1) { alert("目前只有一個可用模型。要新增請到 /settings。"); return; }
+  const ids = MODELS.map((m) => m.id);
+  const pick = prompt("切換此會議的 AI 模型（下一輪生效）：\n\n" + MODELS.map((m, i) => `${i + 1}. ${m.name} · ${m.provider}${m.id === DEFAULT_MODEL ? "（預設）" : ""}`).join("\n") + "\n\n輸入編號：");
+  if (!pick) return;
+  const idx = parseInt(pick, 10) - 1; if (!(idx >= 0 && idx < ids.length)) return;
+  const r = await api(`/v1/rooms/${roomId}/model`, { method: "POST", body: JSON.stringify({ model: ids[idx] }) }).then((r) => r.json()).catch(() => ({}));
+  if (r.error) alert(r.error); else setModelPill(r.model);
+}
+
+const params = new URLSearchParams(location.search);
+const joinRoomId = params.get("room");
+const isOperator = !joinRoomId;   // 無 ?room= 即主持人（大廳進來，持 master token）；帶 ?room= 為訪客
+const inviteToken = params.get("invite");
+let authTok = token || inviteToken || "";        // 加入前：master 或邀請碼；加入後：成員 token
+const api = (p, opt = {}, tok = authTok) => fetch(p, { ...opt, headers: { "content-type": "application/json", ...(tok ? { authorization: "Bearer " + tok } : {}), ...(opt.headers || {}) } });
+
+/* ── 進場 ─────────────────────────────────────────────── */
+// 訪客（帶 ?room=）：直接進「加入既有房」的取暱稱閘門；
+// 操作者（無 ?room=）：先進大廳（列房 / 新建 / 進入 / 關閉），選定後才開閘門。
+(function initGate() {
+  $("#packSelect").innerHTML = packs.map((p) => `<option value="${p}"${p === "general" ? " selected" : ""}>${p}</option>`).join("");
+  loadModels();   // master 才拿得到清單（訪客 401 → 靜默隱藏選單，用房間既定模型）
+  const saved = localStorage.getItem("xitto_room_name"); if (saved) $("#nameInput").value = saved;
+  if (joinRoomId) {
+    $("#gateDesc").textContent = "加入既有會議室，共享同一份專案上下文與檔案。";
+    $("#newRoomFields").style.display = "none";
+    $("#nameInput").focus();
+  } else {
+    $("#gate").hidden = true; $("#lobby").hidden = false; loadLobby();
+  }
+})();
+
+/* ── 大廳（operator 專屬：列房 / 新建 / 進入 / 複製邀請 / 關閉）──── */
+async function loadLobby() {
+  const r = await api("/v1/rooms").then((r) => r.json()).catch(() => ({ rooms: [] }));
+  const list = r.rooms || [];
+  if (!list.length) { $("#roomList").innerHTML = `<div class="empty">還沒有會議，點右上「新建會議」開一場。</div>`; return; }
+  $("#roomList").innerHTML = list.map((rm) => {
+    const id = jsAttr(rm.roomId), inv = jsAttr(rm.inviteToken || "");
+    return `<div class="room-card">
+      <div class="rc-top"><span class="rc-title">${esc(rm.name || rm.workspace)}</span><span class="pill">🧩 ${esc(rm.pack)}</span></div>
+      <div class="rc-meta"><span class="pill">🗂 ${esc(rm.workspace)}</span><span class="pill">👥 ${rm.memberCount} 人</span><span class="pill">💬 ${rm.messageCount}</span><span class="pill">${esc(fmtTime(rm.createdAt))}</span></div>
+      <div class="rc-actions">
+        <button type="button" onclick="lobbyEnter('${id}','${inv}')">進入</button>
+        <button class="ghost" type="button" onclick="lobbyCopy('${id}','${inv}',this)">🔗 邀請連結</button>
+        <button class="ghost danger" type="button" onclick="lobbyClose('${id}',this)">關閉</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+// 開閘門（取暱稱）；mode='new' 顯示建房欄位、mode='enter' 只取暱稱加入既有房。
+function openGate(mode) {
+  $("#lobby").hidden = true; $("#gate").hidden = false; $("#backBtn").hidden = false;
+  $("#enterBtn").disabled = false;
+  if (mode === "new") {
+    enterRoomId = null; enterInvite = "";
+    $("#gateDesc").textContent = "建立一間新的專案會議室。";
+    $("#newRoomFields").style.display = "";
+    if (LOCAL) { $("#wsNameField").hidden = true; $("#wsFolderField").hidden = false; } // 本地模式：挑真實資料夾
+  } else {
+    $("#gateDesc").textContent = "加入既有會議室，共享同一份專案上下文與檔案。";
+    $("#newRoomFields").style.display = "none";
+  }
+  $("#nameInput").focus();
+}
+$("#newRoomBtn").onclick = () => openGate("new");
+// ⚙️ 模型設置：帶 master token 跳 /settings（瀏覽器 GET 無法帶 header，故用 ?token=）。
+$("#settingsBtn").onclick = () => { location.href = "/settings" + (token ? "?token=" + encodeURIComponent(token) : ""); };
+$("#backBtn").onclick = () => { $("#gate").hidden = true; $("#lobby").hidden = false; loadLobby(); };
+function lobbyEnter(id, inv) { enterRoomId = id; enterInvite = inv; openGate("enter"); }
+async function lobbyCopy(id, inv, btn) {
+  const link = shareOrigin() + "/room?room=" + id + "&invite=" + encodeURIComponent(inv);
+  const ok = await copyText(link); const old = btn.textContent;
+  btn.textContent = ok ? "✓ 已複製" : "複製失敗"; setTimeout(() => (btn.textContent = old), 1600);
+}
+async function lobbyClose(id, btn) {
+  if (!confirm("關閉這間會議室？對話與成員連線會結束（工作區檔案保留）。")) return;
+  btn.disabled = true;
+  const r = await api(`/v1/rooms/${id}`, { method: "DELETE" }).then((r) => r.json()).catch(() => ({}));
+  if (r.ok) loadLobby(); else { btn.disabled = false; alert(r.error || "關閉失敗"); }
+}
+
+/* ── 資料夾選擇器（本地模式；複用 /v1/fs 逐層瀏覽真實資料夾）──── */
+let fsCur = "";
+async function fsGo(opts) {
+  const q = new URLSearchParams();
+  if (opts?.path) q.set("path", opts.path);
+  if (opts?.name) q.set("name", opts.name);
+  if (opts?.up) q.set("up", "1");
+  const r = await api("/v1/fs" + (q.toString() ? "?" + q.toString() : "")).then((r) => r.json()).catch(() => null);
+  if (!r || r.error) { $("#fsList").innerHTML = `<div class="empty">${esc(r?.error || "無法讀取資料夾")}</div>`; return; }
+  fsCur = r.path; $("#fsCur").textContent = r.path;
+  const drives = (r.drives || []).map((d) => `<button class="file-row" type="button" onclick="fsGo({path:'${jsAttr(d)}'})">💽 ${esc(d)}</button>`).join("");
+  const dirs = (r.dirs || []).map((d) => `<button class="file-row" type="button" onclick="fsEnter('${jsAttr(d)}')">📁 <span class="name">${esc(d)}</span></button>`).join("");
+  $("#fsList").innerHTML = drives + dirs || `<div class="empty">（沒有子資料夾，可直接選這個）</div>`;
+}
+function fsEnter(name) { fsGo({ path: fsCur, name }); }
+$("#browseBtn").onclick = () => { $("#fsModal").hidden = false; fsGo(null); };
+$("#fsUpBtn").onclick = () => fsGo({ path: fsCur, up: 1 });
+$("#fsCancel").onclick = () => { $("#fsModal").hidden = true; };
+$("#fsChoose").onclick = () => { pickedFolder = fsCur; $("#pickedPath").textContent = fsCur; $("#fsModal").hidden = true; };
+
+$("#enterBtn").onclick = async () => {
+  const name = $("#nameInput").value.trim(); if (!name) return $("#nameInput").focus();
+  myName = name; localStorage.setItem("xitto_room_name", name);
+  $("#enterBtn").disabled = true;
+  try {
+    if (joinRoomId) {                       // 訪客：憑 URL 邀請碼加入
+      roomId = joinRoomId; inviteLink = location.href;
+    } else if (enterRoomId) {               // 操作者：從大廳進入既有房（邀請碼已知）
+      roomId = enterRoomId;
+      inviteLink = shareOrigin() + "/room?room=" + roomId + "&invite=" + encodeURIComponent(enterInvite || "");
+    } else {                                // 操作者：新建房
+      const wsVal = LOCAL ? (pickedFolder || "default") : ($("#wsInput").value.trim() || "default");
+      const chosenModel = (!$("#modelField").hidden && $("#modelSelect").value !== DEFAULT_MODEL) ? $("#modelSelect").value : undefined;
+      const r = await api("/v1/rooms", { method: "POST", body: JSON.stringify({ name: $("#roomNameInput").value.trim(), workspace: wsVal, pack: $("#packSelect").value, model: chosenModel, readonly: $("#readonlyChk").checked }) }).then((r) => r.json());
+      if (!r.roomId) throw new Error(r.error || "建房失敗");
+      roomId = r.roomId;
+      inviteLink = shareOrigin() + "/room?room=" + roomId + "&invite=" + encodeURIComponent(r.inviteToken || "");
+      history.replaceState(null, "", "?room=" + roomId);   // 主控台網址不含邀請碼
+    }
+    const j = await api(`/v1/rooms/${roomId}/join`, { method: "POST", body: JSON.stringify({ name }) }).then((r) => r.json());
+    if (!j.memberId) throw new Error(j.error || "加入失敗（邀請碼可能已失效）");
+    memberId = j.memberId; authTok = j.memberToken || authTok;
+    workspace = j.workspace || "default";
+    if (j.name) { $("#roomTitle").textContent = j.name; document.title = j.name + " · 會議室"; }
+    $("#wsPill").textContent = "🗂 " + workspace;
+    $("#packPill").textContent = "🧩 " + (j.pack || "general");
+    setModelPill(j.model);
+    // 唯讀會議：非主持人（訪客）隱藏寫入操作並禁拖放；後端也會擋，這裡只是不誤導。
+    canWrite = isOperator || !j.readonly;
+    if (!canWrite) { const fa = document.querySelector(".file-actions"); if (fa) fa.style.display = "none"; $("#roPill").hidden = false; }
+    $("#gate").hidden = true;
+    // 一律把邀請連結顯示出來（即使剪貼簿不可用也能手動選取複製）
+    const box = $("#inviteBox"); box.value = inviteLink; box.hidden = false;
+    connect(); loadFiles();
+  } catch (e) { alert(e.message); $("#enterBtn").disabled = false; }
+};
+
+// 健壯複製：安全上下文（HTTPS/localhost）走 Clipboard API；區網 HTTP 走 execCommand 兜底。
+async function copyText(text) {
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch { /* 落到兜底 */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.top = "-1000px"; ta.setAttribute("readonly", "");
+    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy"); document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
+
+$("#copyBtn").onclick = async () => {
+  const url = inviteLink || location.href;
+  const box = $("#inviteBox"); box.value = url; box.hidden = false; // 一律顯示，供手動複製
+  const b = $("#copyBtn");
+  const ok = await copyText(url);
+  if (ok) { b.textContent = "✓ 已複製，發給要邀請的人"; setTimeout(() => (b.textContent = "🔗 複製邀請連結"), 1800); }
+  else { b.textContent = "請手動選取下方連結複製"; box.focus(); box.select(); setTimeout(() => (b.textContent = "🔗 複製邀請連結"), 2600); }
+};
+
+/* ── 事件流 ───────────────────────────────────────────── */
+function connect() {
+  es = new EventSource(`/v1/rooms/${roomId}/events` + (authTok ? "?token=" + encodeURIComponent(authTok) : ""));
+  es.onopen = () => setStatus("idle");
+  es.onerror = () => setStatus("斷線，重連中…");
+  es.onmessage = (e) => { let ev; try { ev = JSON.parse(e.data); } catch { return; } handle(ev); };
+}
+function setStatus(s) {
+  const p = $("#statusPill");
+  if (s === "thinking") { p.textContent = "🤔 AI 回覆中…"; p.className = "pill live"; }
+  else if (s === "idle") { p.textContent = "● 已連線"; p.className = "pill live"; }
+  else { p.textContent = s; p.className = "pill"; }
+}
+function handle(ev) {
+  switch (ev.type) {
+    case "hello": renderMembers(ev.room.members); return;
+    case "member_join": addSystem(`${ev.name} 加入了`); renderMembers(ev.members); return;
+    case "member_leave": addSystem(`${ev.name} 離開了`); renderMembers(ev.members); return;
+    case "status": setStatus(ev.status); if (ev.status === "idle") { finishAi(); loadFiles(); } return;
+    case "say": renderMessage(ev.message); return;
+    case "room_model": setModelPill(ev.model); return;
+    case "ai": handleAi(ev.ev); return;
+    case "room_closed": addSystem("此會議室已被關閉，連線結束。"); if (es) { es.close(); es = null; } $("#input").disabled = true; $("#send").disabled = true; setStatus("已關閉"); return;
+  }
+}
+
+/* ── 訊息渲染 ─────────────────────────────────────────── */
+// 把發言逐段轉義，@ai / @file(路徑) / @成員 轉成對應的樣式/可點元素（其餘純文字照常轉義防 XSS）。
+function renderText(text) {
+  const re = /@ai\b|@file\(([^)]+)\)|@([^\s@()（）,，。、!！?？:：]+)/g;
+  let out = "", last = 0, m;
+  while ((m = re.exec(text))) {
+    out += esc(text.slice(last, m.index));
+    if (m[0] === "@ai") out += `<span class="mention ai">@ai</span>`;
+    else if (m[1] != null) { const p = m[1].trim(); out += `<button class="ref" type="button" onclick="wbView('${encodeURIComponent(p)}','${jsAttr(p.split('/').pop())}')" title="${esc(p)}">📎 ${esc(p.split('/').pop())}</button>`; }
+    else { const nm = m[2]; out += `<span class="mention${nm === myName ? " me" : ""}">@${esc(nm)}</span>`; }
+    last = m.index + m[0].length;
+  }
+  out += esc(text.slice(last));
+  return out;
+}
+function renderMessage(m) {
+  if (m.kind === "ai" && aiMsgEl) { aiText = m.text || aiText; finishAi(); return; } // 串流泡泡落定，避免重複
+  const cls = m.kind === "ai" ? "ai" : m.kind === "system" ? "system" : (m.name === myName ? "me" : "");
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  // 被 @ 到自己 → 整條氣泡描邊（提及提醒）
+  if (m.kind !== "system" && myName && String(m.text || "").includes("@" + myName)) el.className += " mentions-me";
+  el.innerHTML = m.kind === "system"
+    ? `<div class="bubble">${esc(m.text)}</div>`
+    : `<div class="who">${esc(m.name)}</div><div class="bubble">${renderText(m.text)}</div>`;
+  appendLog(el);
+}
+const addSystem = (text) => renderMessage({ kind: "system", text });
+
+function handleAi(ev) {
+  if (!ev) return;
+  if (!aiMsgEl) {
+    aiMsgEl = document.createElement("div"); aiMsgEl.className = "msg ai";
+    aiMsgEl.innerHTML = `<div class="who">AI</div><div class="bubble"></div>`;
+    appendLog(aiMsgEl); aiText = ""; aiTools = [];
+  }
+  const bubble = aiMsgEl.querySelector(".bubble");
+  if (ev.type === "text") aiText += ev.delta || "";
+  else if (ev.type === "tool") aiTools.push(`⏺ ${esc(ev.name)}${ev.args ? " " + esc(argSum(ev.args)) : ""}`);
+  else if (ev.type === "phase") aiTools.push(`… ${esc(ev.phase)}`);
+  bubble.innerHTML = (aiTools.length ? `<div class="tool">${aiTools.slice(-6).join("<br>")}</div>` : "") + esc(aiText) + (aiText ? "" : (aiTools.length ? "" : "…"));
+  scrollDown();
+}
+function finishAi() {
+  if (!aiMsgEl) return;
+  if (aiText) aiMsgEl.querySelector(".bubble").innerHTML = esc(aiText); // 收掉步驟雜訊，只留最終文字
+  aiMsgEl = null; aiText = ""; aiTools = [];
+}
+const argSum = (a) => { const v = a.command ?? a.path ?? a.pattern ?? a.query ?? a.url ?? a.name ?? a.topic; return v ? String(v).slice(0, 60) : ""; };
+const appendLog = (el) => { $("#log").appendChild(el); scrollDown(); };
+const scrollDown = () => { const l = $("#logWrap"); l.scrollTop = l.scrollHeight; };
+
+/* ── 成員 ─────────────────────────────────────────────── */
+function renderMembers(list) { const arr = list || []; currentMembers = arr; $("#members").innerHTML = arr.map((n) => `<div class="member"><span class="dot"></span>${esc(n)}${n === myName ? " （你）" : ""}</div>`).join("") || `<div class="empty">還沒有人</div>`; $("#mcount").textContent = `(${arr.length})`; }
+
+/* ── 發言 ─────────────────────────────────────────────── */
+async function send() {
+  const ta = $("#input"); const text = ta.value.trim(); if (!text) return;
+  ta.value = ""; ta.style.height = "auto"; hideMention();
+  const r = await api(`/v1/rooms/${roomId}/say`, { method: "POST", body: JSON.stringify({ text }) }).then((r) => r.json()).catch(() => ({}));
+  if (r.error) addSystem("送出失敗：" + r.error);
+}
+$("#send").onclick = send;
+
+/* ── @ 自動完成（ai / 成員 / 檔案）───────────────────── */
+let mpItems = [], mpIdx = 0, mpStart = -1;   // 候選清單、目前選中索引、@token 在輸入框的起始位置
+const mpop = () => $("#mpop");
+function mentionCandidates(q) {
+  const ql = q.toLowerCase();
+  const list = [{ kind: "ai", label: "ai", desc: "讓 AI 回覆整段討論", insert: "@ai " }];
+  for (const n of currentMembers) if (n !== myName) list.push({ kind: "user", label: n, desc: "提及成員", insert: "@" + n + " " });
+  for (const f of lastFiles) list.push({ kind: "file", label: f.name, desc: f.path, insert: "@file(" + f.path + ") " });
+  return list.filter((x) => !ql || x.label.toLowerCase().includes(ql)).slice(0, 8);
+}
+function updateMention() {
+  const ta = $("#input"), pos = ta.selectionStart;
+  const m = ta.value.slice(0, pos).match(/@([^\s@()（）]*)$/);   // 游標前最近的 @token（遇空白/另一個 @ 即中止）
+  if (!m) return hideMention();
+  mpStart = pos - m[0].length; mpItems = mentionCandidates(m[1]); mpIdx = 0;
+  if (!mpItems.length) return hideMention();
+  const icon = (k) => (k === "ai" ? "🤖" : k === "file" ? "📎" : "👤");
+  mpop().innerHTML = mpItems.map((it, i) => `<div class="mention-item${i === 0 ? " active" : ""}" onmousedown="event.preventDefault();pickMention(${i})"><span>${icon(it.kind)} ${esc(it.label)}</span><span class="mi-sub">${esc(it.desc)}</span></div>`).join("");
+  mpop().hidden = false;
+}
+function hideMention() { mpStart = -1; mpItems = []; mpop().hidden = true; }
+function moveMention(d) { if (mpop().hidden) return; mpIdx = (mpIdx + d + mpItems.length) % mpItems.length; [...mpop().children].forEach((c, i) => c.classList.toggle("active", i === mpIdx)); }
+function pickMention(i) {
+  const it = mpItems[i]; if (!it) return;
+  const ta = $("#input"), pos = ta.selectionStart;
+  ta.value = ta.value.slice(0, mpStart) + it.insert + ta.value.slice(pos);
+  const caret = mpStart + it.insert.length; ta.setSelectionRange(caret, caret);
+  hideMention(); ta.focus(); ta.dispatchEvent(new Event("input"));
+}
+$("#input").addEventListener("keydown", (e) => {
+  if (!mpop().hidden) {
+    if (e.key === "ArrowDown") { e.preventDefault(); return moveMention(1); }
+    if (e.key === "ArrowUp") { e.preventDefault(); return moveMention(-1); }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); return pickMention(mpIdx); }
+    if (e.key === "Escape") { e.preventDefault(); return hideMention(); }
+  }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+$("#input").addEventListener("input", (e) => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px"; updateMention(); });
+$("#input").addEventListener("blur", () => setTimeout(hideMention, 120));   // 延遲關閉，讓 mousedown 選取先發生
+
+/* ── 檔案目录（共享工作區）───────────────────────────── */
+let wbSub = "";
+const wbNav = (s) => { wbSub = decodeURIComponent(s); loadFiles(); };
+const wbUp = () => { wbSub = wbSub.includes("/") ? wbSub.slice(0, wbSub.lastIndexOf("/")) : ""; loadFiles(); };
+function refreshFiles() { const b = $("#files-refresh"); if (b) { b.classList.remove("spin"); void b.offsetWidth; b.classList.add("spin"); } loadFiles(); }
+async function loadFiles() {
+  if (!roomId) return;
+  const r = await api(`/v1/rooms/${roomId}/files?sub=` + encodeURIComponent(wbSub)).then((r) => r.json()).catch(() => ({ dirs: [], files: [] }));
+  $("#file-breadcrumb").textContent = wbSub ? "📂 " + wbSub : "";
+  let html = wbSub ? `<button class="file-up" onclick="wbUp()" type="button">⬆ 上一層</button>` : "";
+  html += (r.dirs || []).map((d) => `<button class="file-row" onclick="wbNav('${encodeURIComponent((wbSub ? wbSub + "/" : "") + d)}')" type="button">📁 <span class="name">${esc(d)}</span>/</button>`).join("");
+  html += (r.files || []).map((f) => { const full = (wbSub ? wbSub + "/" : "") + f.name; return `<button class="file-row" onclick="wbView('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button"><span class="name">📄 ${esc(f.name)}</span><span class="size">${fmtSize(f.size)}</span></button>`; }).join("");
+  if (!(r.dirs || []).length && !(r.files || []).length) html += `<div class="empty">（${wbSub ? "空資料夾" : "還沒有檔案"}）</div>`;
+  $("#wbfiles").innerHTML = html;
+  // 供 @檔案 自動完成的候選（目前資料夾的檔案）
+  lastFiles = (r.files || []).map((f) => ({ name: f.name, path: (wbSub ? wbSub + "/" : "") + f.name }));
+}
+// 在目前瀏覽的資料夾（wbSub）下新建子資料夾
+async function mkdirHere() {
+  if (!roomId || !canWrite) return;
+  const name = (prompt("新資料夾名稱？", "") || "").trim(); if (!name) return;
+  const r = await api(`/v1/rooms/${roomId}/mkdir`, { method: "POST", body: JSON.stringify({ sub: wbSub, name }) }).then((r) => r.json()).catch(() => ({}));
+  if (r.ok) loadFiles(); else alert(r.error || "建立失敗");
+}
+// 上傳一批檔到「目前資料夾」（wbSub）：使用者先導覽到目標資料夾再上傳，即落在該處。逐檔送原始 bytes。
+async function uploadFiles(files) {
+  if (!roomId || !canWrite || !files.length) return;
+  let okN = 0;
+  for (const f of files) {
+    const q = new URLSearchParams({ sub: wbSub, name: f.name });
+    const r = await api(`/v1/rooms/${roomId}/upload?` + q.toString(), { method: "POST", headers: { "content-type": f.type || "application/octet-stream" }, body: f })
+      .then((r) => r.json()).catch(() => ({ error: "網路錯誤" }));
+    if (r.ok) okN++; else addSystem(`上傳「${f.name}」失敗：${r.error || "未知錯誤"}`);
+  }
+  if (okN) addSystem(`已上傳 ${okN} 個檔到 ${wbSub || "根目錄"}`);
+  loadFiles();
+}
+$("#fileUpload").addEventListener("change", (e) => { const fs = [...e.target.files]; e.target.value = ""; uploadFiles(fs); });
+// 拖放上傳（同樣落在目前資料夾）
+(() => {
+  const zone = $("#wbfiles");
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  ["dragenter", "dragover"].forEach((t) => zone.addEventListener(t, (e) => { stop(e); zone.classList.add("drop"); }));
+  ["dragleave", "drop"].forEach((t) => zone.addEventListener(t, (e) => { stop(e); zone.classList.remove("drop"); }));
+  zone.addEventListener("drop", (e) => { const fs = [...(e.dataTransfer?.files || [])]; if (fs.length) uploadFiles(fs); });
+})();
+
+const closeFilePreview = () => ($("#file-preview").innerHTML = "");
+async function wbView(encPath, name) {
+  const v = $("#file-preview"); if (!v) return;
+  const url = `/v1/rooms/${roomId}/file?path=` + encPath + (authTok ? "&token=" + encodeURIComponent(authTok) : "");
+  const IMG = /\.(png|jpe?g|gif|webp|svg)$/i, HTMLF = /\.html?$/i, JSONF = /\.json$/i;
+  const DOC = /\.(docx|pptx|xlsx|odt|odp|ods|rtf|pdf)$/i;
+  let body = "";
+  if (IMG.test(name)) body = `<img class="preview-img" src="${url}" alt="${esc(name)}">`;
+  else if (HTMLF.test(name)) body = `<div class="empty">（HTML 檔案，請用「開新分頁」檢視）</div>`;
+  else if (DOC.test(name)) { const r = await fetch(url + "&as=text").catch(() => null); body = (!r || !r.ok) ? `<div class="empty">（無法預覽，可下載原檔）</div>` : `<pre class="preview-pre">${esc(await r.text())}</pre>`; }
+  else { const txt = await fetch(url).then((r) => (r.ok ? r.text() : null)).catch(() => null); if (txt == null) body = `<div class="empty">（無法預覽）</div>`; else if (JSONF.test(name)) { try { body = `<pre class="preview-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`; } catch { body = `<pre class="preview-pre">${esc(txt)}</pre>`; } } else body = `<pre class="preview-pre">${esc(txt)}</pre>`; }
+  v.innerHTML = `<div class="preview-panel" role="dialog" aria-modal="true" aria-label="檔案預覽：${esc(name)}">
+    <div class="preview-bar"><span class="preview-name">📄 ${esc(name)}</span><a href="${url}" target="_blank">開新分頁</a><a href="${url}&download=1">下載</a><span class="spacer"></span><button class="ghost" onclick="closeFilePreview()" type="button">✕ 關閉</button></div>
+    <div class="preview-body">${body}</div></div>`;
+  v.onclick = (e) => { if (e.target === v) closeFilePreview(); };
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeFilePreview(); if (!$("#fsModal").hidden) $("#fsModal").hidden = true; } });
+window.addEventListener("beforeunload", () => { if (roomId && memberId) navigator.sendBeacon?.(`/v1/rooms/${roomId}/leave` + (authTok ? "?token=" + encodeURIComponent(authTok) : ""), new Blob([JSON.stringify({ memberId })], { type: "application/json" })); });
+</script>
+</body>
+</html>
