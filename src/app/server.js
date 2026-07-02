@@ -16,6 +16,7 @@ import { createSkills } from '../kernel/skills.js';
 import { createPlaybook } from '../kernel/playbook.js';
 import { fileAllowStore } from '../kernel/security/allow-store.js';
 import { loadModel, buildModel, providersConfigPath, loadProvidersConfig } from './providers.js';
+import { oauth2Auth, parseTtl } from './auth-oauth2.js';
 import { createCodingPack } from '../packs/coding/index.js';
 import { createDataQueryPack } from '../packs/data-query/index.js';
 import { createNotesPack } from '../packs/notes/index.js';
@@ -1356,6 +1357,28 @@ export function startServer(opts = {}) {
   // SSO 授權（見 docs/10-sso-design.md）：釘死的首任 admin email + 選填的網域放行；不設即封閉名冊。
   const adminEmails = opts.adminEmails ?? String(process.env.XITTO_ADMIN_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const allowedEmailDomain = opts.allowedEmailDomain ?? process.env.XITTO_ALLOWED_EMAIL_DOMAIN ?? '';
+  // SSO 認證（純 opt-in）：設了 issuer 或顯式授權端點才啟用 OAuth2/OIDC；否則 auth=undefined → createServerApp 走 defaultAuth（現況）。
+  let auth = opts.auth;
+  const oidcIssuer = process.env.XITTO_OAUTH_ISSUER;
+  const oidcAuthz = process.env.XITTO_OAUTH_AUTHZ_ENDPOINT;
+  if (!auth && (oidcIssuer || oidcAuthz)) {
+    try {
+      auth = oauth2Auth({
+        issuer: oidcIssuer,
+        authorizationEndpoint: oidcAuthz,
+        tokenEndpoint: process.env.XITTO_OAUTH_TOKEN_ENDPOINT,
+        jwksUri: process.env.XITTO_OAUTH_JWKS_URI,
+        clientId: process.env.XITTO_OAUTH_CLIENT_ID,
+        clientSecret: process.env.XITTO_OAUTH_CLIENT_SECRET,
+        redirectUri: process.env.XITTO_OAUTH_REDIRECT_URI,
+        scopes: String(process.env.XITTO_OAUTH_SCOPES || 'openid email profile').split(/\s+/).filter(Boolean),
+        cookieSecret: process.env.XITTO_COOKIE_SECRET,
+        sessionTtl: parseTtl(process.env.XITTO_SESSION_TTL) || 8 * 3600,
+        masterToken: token, // 保留為 break-glass / M2M（可設 XITTO_SERVER_TOKEN="" 關閉）
+        secureCookie: process.env.XITTO_OAUTH_INSECURE_COOKIE !== '1',
+      });
+    } catch (e) { console.error(`❌ OAuth2 SSO 設定錯誤：${e.message}`); throw e; }
+  }
   let model, getApiKey, resolveModel, models;
   try { ({ model, getApiKey, resolveModel, models } = (opts.model && opts.getApiKey) ? opts : loadModel(opts.modelId ?? process.env.XITTO_MODEL)); }
   catch (e) {
@@ -1369,7 +1392,7 @@ export function startServer(opts = {}) {
   let server;
   // 熱重載：/v1/setup 存檔後關掉現有 server、用同 opts 重起（載入新設定），同 port 不需重進容器。
   const onReconfigure = () => { try { server.close(); } catch { /* 略 */ } startServer(opts); };
-  server = createServerApp({ model, getApiKey, resolveModel, models, token, adminEmails, allowedEmailDomain, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
+  server = createServerApp({ model, getApiKey, resolveModel, models, token, auth, adminEmails, allowedEmailDomain, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
   server.listen(port, () => {
     console.log(`🪄 許願台：http://localhost:${port}/  （本機瀏覽器打開即用）`);
     console.log(`👥 會議室：http://localhost:${port}/room  （多人 + AI 針對專案對談；點名 @ai 才回覆）`);
