@@ -5,6 +5,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRoomStore, mentionsAi, createServerApp, defaultAuth, createRoleStore, minutesGoal, lanIPs, joinUploadRel } from '../src/app/server.js';
+import { isMutating } from '../src/kernel/tool-registry.js';
+import { createGeneralPack } from '../src/packs/general/index.js';
 
 const tick = () => new Promise((r) => setImmediate(r));
 const defer = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
@@ -262,6 +264,30 @@ test('HTTP：/v1/rooms/:id/minutes 需成員 token → 202；無 → 401', async
     assert.equal((await fetch(url(`/v1/rooms/${room.roomId}/minutes`), { method: 'POST' })).status, 401, '無 token → 401');
     assert.equal((await fetch(url(`/v1/rooms/${room.roomId}/minutes`), { method: 'POST', headers: MH })).status, 202, '成員 token → 202');
   });
+});
+
+// ── L2：破壞性操作依角色把關 ──
+test('房間 L2：唯讀成員 @ai → 該回合 readOnly；可寫成員 @ai → 完整工具', async () => {
+  let lastReadOnly = null;
+  const store = createRoomStore({ runAiTurn: async ({ readOnly }) => { lastReadOnly = readOnly; return { text: 'ok' }; } });
+  const r = store.create({});
+  const guest = store.join(r.roomId, '訪客');
+  store.say(r.roomId, { memberId: guest.memberId, text: '@ai 刪掉所有檔案', writeAllowed: false });
+  await tick(); await tick(); await tick();
+  assert.equal(lastReadOnly, true, '唯讀成員召喚 → 唯讀回合（剝除 mutating 工具）');
+  const host = store.join(r.roomId, '主持');
+  store.say(r.roomId, { memberId: host.memberId, text: '@ai 幫我寫檔', writeAllowed: true });
+  await tick(); await tick(); await tick();
+  assert.equal(lastReadOnly, false, '可寫成員召喚 → 完整工具');
+});
+
+test('L2 唯讀過濾：剝除 pack 的 mutating 工具（write/edit/bash），保留唯讀工具', () => {
+  const pack = createGeneralPack({ cwd: '/tmp' });
+  const all = pack.tools().map((t) => t.name);
+  const ro = pack.tools().filter((t) => !isMutating(t)).map((t) => t.name);
+  assert.ok(all.includes('write') && all.includes('bash'), '完整工具含 write/bash');
+  assert.ok(!ro.includes('write') && !ro.includes('edit') && !ro.includes('bash'), '唯讀剝除 write/edit/bash');
+  assert.ok(ro.includes('read'), '保留 read 等唯讀工具');
 });
 
 // ── 打斷 AI（中止進行中的回合）──

@@ -17,6 +17,7 @@ import { createPlaybook } from '../kernel/playbook.js';
 import { fileAllowStore } from '../kernel/security/allow-store.js';
 import { loadModel, buildModel, providersConfigPath, loadProvidersConfig } from './providers.js';
 import { oauth2Auth, parseTtl } from './auth-oauth2.js';
+import { isMutating } from '../kernel/tool-registry.js';
 import { createCodingPack } from '../packs/coding/index.js';
 import { createDataQueryPack } from '../packs/data-query/index.js';
 import { createNotesPack } from '../packs/notes/index.js';
@@ -464,11 +465,15 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     r.status = 'thinking'; fanout(r, { type: 'status', status: 'thinking' }); persist(r);
     const batch = r.pending.splice(0, r.pending.length);
     const input = roomContext(r) + fmtPending(batch);
+    // L2 破壞性操作把關：若召喚 @ai 的人裡有「不可寫」者（唯讀房的非主持人）→ 此回合唯讀（剝除 mutating 工具），
+    // 避免訪客用 @ai 繞過 readonly 改/刪共享檔。全員可寫才給完整工具。
+    const summoners = batch.filter((m) => m.mention);
+    const readOnly = summoners.some((m) => m.writeAllowed === false);
     let finalText = '';
     const emit = (ev) => { if (ev?.type === 'text') finalText += ev.delta || ''; fanout(r, { type: 'ai', ev }); };
     const onAgent = (a) => { r.agentRef = a; };
     try {
-      const res = await runAiTurn({ room: r, input, emit, onAgent });
+      const res = await runAiTurn({ room: r, input, emit, onAgent, readOnly });
       if (res?.sessionId) r.sessionId = res.sessionId; // 首輪建立 → 之後續接同一對話
       const text = (res?.text ?? finalText) || '';
       if (!r._stopped) push(r, { kind: 'ai', name: 'AI', text }); // 被中止 → ⏹ 訊息已由 stop() 廣播，不再推（可能半截）回覆
@@ -574,13 +579,14 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       return true;
     },
     // 發言：立刻廣播給全員 + 進 AI 上下文佇列；點名 @ai 才觸發（或合併進進行中的回合，回合末續跑）。
-    say(id, { memberId, text }) {
+    // writeAllowed：此發言者能否觸發寫入/破壞性操作（唯讀房的非主持人 = false）；帶進 pending 供 runNow 決定該回合是否唯讀（L2）。
+    say(id, { memberId, text, writeAllowed = true }) {
       const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
       const m = r.members.get(memberId); if (!m) return { error: '請先加入房間', code: 403 };
       const msg = String(text ?? '').trim(); if (!msg) return { error: '發言不可為空', code: 400 };
       const mention = mentionsAi(msg);
       push(r, { kind: 'user', name: m.name, text: msg });
-      r.pending.push({ name: m.name, text: msg, mention });
+      r.pending.push({ name: m.name, text: msg, mention, writeAllowed: writeAllowed !== false });
       while (r.pending.length > maxPending) r.pending.shift(); // 上限保護（保留最近，含召喚）
       persist(r);
       if (mention && r.status === 'idle') runNow(r);
@@ -752,7 +758,11 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     // history 仍綁 sessionId（每個成品獨立對話：無 sessionId → 全新,不續接,避免 context 暴脹/混淆）
     const sessionId = spec.sessionId || newId();
     const sess = sessions.get(sessionId) || { history: [] };
-    const kernel = createKernel(make({ cwd: workdir }), { cwd: workdir, model: runModel, getApiKey, resolveModel, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes', autoExtractMemory: true, ...(ask ? { askUser: ask } : {}) });
+    // readOnly（L2）：剝除 pack 的 mutating 工具（write/edit/bash/gen_doc…）→ agent 只能讀/查/答，不能改動共享 workspace。
+    // 同時 getPlanMode:true 擋下 kernel 內建的 mutating 工具（memory_save/bash_bg 等殘留）。
+    let pack = make({ cwd: workdir });
+    if (spec.readOnly) pack = { ...pack, tools: () => pack.tools().filter((t) => !isMutating(t)), mutatingTools: [] };
+    const kernel = createKernel(pack, { cwd: workdir, model: runModel, getApiKey, resolveModel, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes', autoExtractMemory: true, ...(spec.readOnly ? { getPlanMode: () => true } : {}), ...(ask ? { askUser: ask } : {}) });
     const usage = { input: 0, output: 0 };
     onEvent?.({ type: 'session_start', sessionId }); // 串流首事件：讓前端立刻知道此輪的 sessionId
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
@@ -802,8 +812,8 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   // 只在有人 @ai 時觸發；房間 sessionId 綁定 → 續接同一 history（跨回合、跨重啟）。
   const rooms = createRoomStore({
     persistDir: join(baseDir, 'rooms'),
-    runAiTurn: ({ room, input, emit, onAgent }) =>
-      runKernel({ pack: room.pack, model: room.model || undefined, mode: 'turn', input: expandFileRefs(input, workspaceDir(baseDir, room.workspace, local)), workspace: room.workspace, sessionId: room.sessionId || undefined },
+    runAiTurn: ({ room, input, emit, onAgent, readOnly }) =>
+      runKernel({ pack: room.pack, model: room.model || undefined, mode: 'turn', readOnly, input: expandFileRefs(input, workspaceDir(baseDir, room.workspace, local)), workspace: room.workspace, sessionId: room.sessionId || undefined },
         (ev) => { const m = mapEvent(ev); if (m) emit(m); }, undefined, onAgent),
     // 會議紀要：獨立 goal（docgen pack 拿 gen_doc、fresh session 不污染對話），把整段 transcript 整理成決策/待辦/摘要並產成檔。
     runMinutes: ({ room, transcript, emit, onAgent }) =>
@@ -1014,7 +1024,9 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const room = rooms.get(mSay[1]); if (!room) return json(res, 404, { error: 'room not found' });
       const auth = roomAuth(req, room, 'member'); if (!auth.ok) return json(res, 401, { error: '需要成員 token' });
       const body = await readBody(req);
-      const r = rooms.say(mSay[1], { memberId: auth.memberId || body.memberId, text: body.text });
+      // 破壞性把關（L2）：唯讀房的非主持人發言 → writeAllowed=false → 其 @ai 回合唯讀，不能改共享檔。
+      const writeAllowed = !room.readonly || !!auth.master;
+      const r = rooms.say(mSay[1], { memberId: auth.memberId || body.memberId, text: body.text, writeAllowed });
       if (r.error) return json(res, r.code || 400, { error: r.error });
       log({ room: mSay[1], action: 'say', triggered: r.triggered });
       return json(res, 200, r);
