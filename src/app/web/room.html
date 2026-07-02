@@ -152,6 +152,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
     <div class="side-actions">
       <button class="ghost" id="copyBtn" type="button" title="複製邀請連結">🔗 複製邀請連結</button>
       <input id="inviteBox" class="invite-box" readonly hidden onclick="this.select()" title="邀請連結（點一下全選）">
+      <button class="ghost" id="minutesBtn" type="button" title="讓 AI 把整段對話整理成決策／待辦／摘要，產出可下載的檔案" style="margin-top:6px">📋 生成會議紀要</button>
     </div>
     <div class="members">
       <h3>成員 <span id="mcount">(0)</span></h3>
@@ -460,6 +461,15 @@ $("#copyBtn").onclick = async () => {
   const ok = await copyText(url);
   if (ok) { b.textContent = "✓ 已複製，發給要邀請的人"; setTimeout(() => (b.textContent = "🔗 複製邀請連結"), 1800); }
   else { b.textContent = "請手動選取下方連結複製"; box.focus(); box.select(); setTimeout(() => (b.textContent = "🔗 複製邀請連結"), 2600); }
+};
+
+// 生成會議紀要：後端非同步跑，進度/結果經 SSE（thinking → idle 自動刷新檔案 + 系統訊息）。
+$("#minutesBtn").onclick = async () => {
+  const b = $("#minutesBtn"); b.disabled = true; const t0 = b.textContent; b.textContent = "📋 整理中…";
+  try {
+    const r = await api(`/v1/rooms/${roomId}/minutes`, { method: "POST" }).then((x) => x.json()).catch(() => ({}));
+    if (r && r.error) alert(r.error);
+  } finally { setTimeout(() => { b.disabled = false; b.textContent = t0; }, 2000); }
 };
 
 /* ── 事件流 ───────────────────────────────────────────── */

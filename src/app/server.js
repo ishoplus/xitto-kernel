@@ -403,7 +403,20 @@ export const mentionsAi = (text) => /(^|[\s(（【「,，。、!！?？])@ai\b/i
  * @param {number} [o.maxMessages]  每房保留最近幾則訊息（replay 用，預設 300）
  * @param {number} [o.maxPending]   兩次 AI 回合之間最多累積幾則作為上下文（預設 50）
  */
-export function createRoomStore({ runAiTurn, persistDir, maxMessages = 300, maxPending = 50 } = {}) {
+// 會議紀要 goal：把整段對話 transcript 整理成三節（決策/待辦/摘要）並用 gen_doc 產出檔案。只依對話、不編造。
+export const minutesGoal = (transcript) => [
+  '把以下「會議對話」整理成一份專業會議紀要，用 gen_doc 產出檔案 會議紀要.pdf（缺工具會自動退回 HTML，沒關係）。',
+  '內容分三節，用 markdown 標題：',
+  '## 決策（會議達成的結論；沒有就寫「（無）」）',
+  '## 待辦（可執行的行動項，盡量標出負責人與期限；沒有就寫「（無）」）',
+  '## 摘要（討論重點與脈絡）',
+  '只根據對話內容，不要編造未提及的事；發言人以 [名字] 標示。',
+  '',
+  '會議對話：',
+  String(transcript || '').slice(0, 24000),
+].join('\n');
+
+export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages = 300, maxPending = 50 } = {}) {
   const rooms = new Map();  // id -> room
   const subs = new Map();   // id -> Set<(ev)=>void>
 
@@ -469,7 +482,34 @@ export function createRoomStore({ runAiTurn, persistDir, maxMessages = 300, maxP
     }
   }
 
+  // 生成會議紀要：把「整場對話」（含未召喚 AI 的閒聊——那些沒進 session）整理成決策/待辦/摘要並產出檔案。
+  // 走獨立 goal（fresh session、docgen pack）→ 不污染房間的共享對話 history；成品落房間 workspace，狀態轉 idle 時前端自動刷新檔案列表。
+  async function generateMinutes(r) {
+    r.status = 'thinking'; fanout(r, { type: 'status', status: 'thinking' }); persist(r);
+    const transcript = r.messages.map((m) => `[${m.name || m.kind}] ${m.text}`).join('\n');
+    const emit = (ev) => fanout(r, { type: 'ai', ev });
+    try {
+      const res = await runMinutes({ room: r, transcript, emit, onAgent: (a) => { r.agentRef = a; } });
+      push(r, { kind: 'system', name: 'system', text: '📋 已整理會議紀要，請看「工作台」的檔案（可下載）。' + (res?.text ? '\n' + String(res.text).slice(0, 300) : '') });
+    } catch (e) {
+      push(r, { kind: 'system', name: 'system', text: '生成會議紀要失敗：' + (e?.message || String(e)) });
+    } finally {
+      r.agentRef = null;
+      r.status = 'idle'; fanout(r, { type: 'status', status: 'idle' }); persist(r);
+    }
+    return { ok: true };
+  }
+
   return {
+    // 生成會議紀要（成員可觸發）：同步校驗後 fire-and-forget，進度/結果經 SSE 廣播；回 { ok } 或 { error, code }。
+    minutes(id) {
+      const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
+      if (!runMinutes) return { error: '此部署未啟用會議紀要', code: 501 };
+      if (r.status === 'thinking') return { error: 'AI 忙碌中，請稍候再試', code: 409 };
+      if (!r.messages.length) return { error: '尚無對話可整理', code: 400 };
+      generateMinutes(r); // 不 await：交給 SSE 廣播進度與結果
+      return { ok: true };
+    },
     create({ workspace = 'default', pack = 'general', model = null, name = '', readonly = false } = {}) {
       // inviteToken：房間專屬邀請碼（放進邀請連結，不再外洩 master token）。name：人類可讀會議名（可空，前端回退顯示 workspace）。
       // readonly：訪客唯讀（只能看檔案+聊天+@ai，不能上傳/建夾）；主持人（master）不受限。
@@ -756,6 +796,10 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     runAiTurn: ({ room, input, emit, onAgent }) =>
       runKernel({ pack: room.pack, model: room.model || undefined, mode: 'turn', input: expandFileRefs(input, workspaceDir(baseDir, room.workspace, local)), workspace: room.workspace, sessionId: room.sessionId || undefined },
         (ev) => { const m = mapEvent(ev); if (m) emit(m); }, undefined, onAgent),
+    // 會議紀要：獨立 goal（docgen pack 拿 gen_doc、fresh session 不污染對話），把整段 transcript 整理成決策/待辦/摘要並產成檔。
+    runMinutes: ({ room, transcript, emit, onAgent }) =>
+      runKernel({ pack: 'docgen', model: room.model || undefined, mode: 'goal', workspace: room.workspace, goal: minutesGoal(transcript) },
+        (ev) => { const m = mapEvent(ev); if (m) emit(m); }, undefined, onAgent),
   });
 
   return createServer(async (req, res) => {
@@ -965,6 +1009,17 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (r.error) return json(res, r.code || 400, { error: r.error });
       log({ room: mSay[1], action: 'say', triggered: r.triggered });
       return json(res, 200, r);
+    }
+
+    // 生成會議紀要（憑成員 token）：非同步跑（成品/狀態經 SSE 廣播），立即回 202。
+    const mMinutes = path.match(/^\/v1\/rooms\/([^/]+)\/minutes$/);
+    if (req.method === 'POST' && mMinutes) {
+      const room = rooms.get(mMinutes[1]); if (!room) return json(res, 404, { error: 'room not found' });
+      if (!roomAuth(req, room, 'member').ok) return json(res, 401, { error: '需要成員 token' });
+      const r = rooms.minutes(mMinutes[1]); // 不 await：交給 SSE 廣播進度與結果
+      if (r && r.error) return json(res, r.code || 400, { error: r.error });
+      log({ room: mMinutes[1], action: 'minutes' });
+      return json(res, 202, { ok: true });
     }
 
     // 房間事件流（SSE，憑邀請碼或成員 token）：即時收「他人發言 + AI 串流 + 成員進出 + 狀態」；連上先回放近況。
