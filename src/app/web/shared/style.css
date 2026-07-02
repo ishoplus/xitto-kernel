@@ -528,3 +528,25 @@ a:focus-visible {
 @media (min-width: 1400px) {
   :root { --max-w: 1400px; }
 }
+
+/* ── 帳號 chip（SSO 登入後，右上角固定；由 shared/account.js 注入）───────── */
+#xk-account {
+  position: fixed; top: 10px; right: 12px; z-index: 60;
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm); font-size: 13px; color: var(--fg);
+  max-width: min(46vw, 360px);
+}
+#xk-account .xk-acc-ic { opacity: .8; }
+#xk-account .xk-acc-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#xk-account .xk-acc-role {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+}
+#xk-account .xk-acc-out {
+  margin-left: 2px; padding-left: 8px; border-left: 1px solid var(--line);
+  color: var(--dim); text-decoration: none;
+}
+#xk-account .xk-acc-out:hover { color: var(--accent); }
+@media (max-width: 640px) { #xk-account .xk-acc-name { max-width: 30vw; } }

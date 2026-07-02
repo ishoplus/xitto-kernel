@@ -328,6 +328,12 @@ test('createRoleStore：釘死 admin 不可改/刪；一般項增刪並持久化
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('HTTP：非 SSO 模式 /v1/me → { ssoActive:false }（前端據此不顯示帳號 chip）', async () => {
+  await withServer(async ({ url }) => {
+    assert.deepEqual(await fetch(url('/v1/me')).then((r) => r.json()), { ssoActive: false });
+  });
+});
+
 test('HTTP：/v1/admins CRUD 需 operator；釘死 admin 受保護', async () => {
   const base = mkdtempSync(join(tmpdir(), 'xk-admins-'));
   const srv = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', adminEmails: ['boss@corp.com'], baseDir: join(base, '.srv') });

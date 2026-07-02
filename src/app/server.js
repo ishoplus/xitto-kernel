@@ -765,6 +765,14 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     if (authAdapter.handle && await authAdapter.handle(req, res)) return;
     if (req.method === 'GET' && path === '/health') return json(res, 200, { ok: true, packs: Object.keys(PACKS), model: model.id, tasks: tasks.stats() });
 
+    // 「我是誰」（公開，前端據此顯示帳號 chip / 登出）：非 SSO → ssoActive:false；SSO 未登入 → authenticated:false。
+    if (req.method === 'GET' && path === '/v1/me') {
+      if (!ssoActive) return json(res, 200, { ssoActive: false });
+      const p = authAdapter.principal?.(req);
+      if (!p) return json(res, 200, { ssoActive: true, authenticated: false });
+      return json(res, 200, { ssoActive: true, authenticated: true, name: p.name || '', email: p.email || '', role: roleStore.roleOf(p) || null });
+    }
+
     // favicon（公開，免 auth）：瀏覽器會自動抓 /favicon.ico，沒這條會被 auth 擋成 401。回一個內嵌 SVG 標誌。
     if (req.method === 'GET' && (path === '/favicon.ico' || path === '/favicon.svg')) {
       const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/><circle cx="12" cy="11" r="1"/><circle cx="23" cy="19" r="1"/></g></svg>';

@@ -8,6 +8,7 @@
 <!-- 設計系統（與許願台／對話頁共用同一套 token、字體、明暗主題）-->
 <link rel="stylesheet" href="shared/style.css">
 <script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, origin: "__PUBLIC_ORIGIN__" };</script>
+<script src="shared/account.js"></script>
 <style>
 /* ── 會議室頁面樣式（沿用 shared/style.css 的設計 token）────────── */
 :root { --sidebar-w: 300px; }
@@ -318,6 +319,12 @@ const api = (p, opt = {}, tok = authTok) => fetch(p, { ...opt, headers: { "conte
   $("#packSelect").innerHTML = packs.map((p) => `<option value="${p}"${p === "general" ? " selected" : ""}>${p}</option>`).join("");
   loadModels();   // master 才拿得到清單（訪客 401 → 靜默隱藏選單，用房間既定模型）
   const saved = localStorage.getItem("xitto_room_name"); if (saved) $("#nameInput").value = saved;
+  // SSO 已登入 → 用真實身份預填並鎖定名字（與後端 join 綁 principal 一致，不讓使用者亂填）
+  fetch("/v1/me", { credentials: "same-origin" }).then((r) => r.json()).then((me) => {
+    if (me && me.ssoActive && me.authenticated && me.name) {
+      const el = $("#nameInput"); el.value = me.name; el.readOnly = true; el.title = "已由 SSO 帶入，無法修改";
+    }
+  }).catch(() => {});
   if (joinRoomId) {
     $("#gateDesc").textContent = "加入既有會議室，共享同一份專案上下文與檔案。";
     $("#newRoomFields").style.display = "none";
