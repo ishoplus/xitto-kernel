@@ -258,6 +258,18 @@ test('HTTP：/v1/rooms/:id/typing 需成員 token → 200；無 → 401', async 
   });
 });
 
+test('HTTP：/settings（模型設定）帶關閉鈕 + 注入 EXISTING（可不操作直接關閉）', async () => {
+  await withServer(async ({ url, H }) => {
+    const res = await fetch(url('/settings'), { headers: H });
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    assert.match(html, /id="closeBtn"/, '有關閉鈕元素');
+    assert.match(html, /var EXISTING=\[/, 'EXISTING 已注入陣列（設定模式 → 顯示關閉鈕）');
+    assert.doesNotMatch(html, /var EXISTING=\/\*EXISTING\*\/null/, '非首次引導（EXISTING 非 null）');
+    assert.match(html, /模型設定/, '標題改為模型設定');
+  });
+});
+
 // ── 會議紀要（生成決策/待辦/摘要 + 匯出）──
 test('minutesGoal：含決策/待辦/摘要三節 + gen_doc 產檔 + 對話 transcript', () => {
   const g = minutesGoal('[小明] 決定用 A');

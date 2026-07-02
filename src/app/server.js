@@ -1358,8 +1358,10 @@ const SETUP_HTML = `<!doctype html>
 @media (prefers-color-scheme: light){:root{--bg:#f5f6f8;--card:#fff;--inset:#f0f1f4;--line:#d9dce2;--fg:#1a1d24;--dim:#6b7280;--btnfg:#fff}}
 *{box-sizing:border-box}html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;display:flex;align-items:center;justify-content:center;padding:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;width:min(520px,96vw);padding:26px;max-height:94vh;overflow-y:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;width:min(520px,96vw);padding:26px;max-height:94vh;overflow-y:auto;position:relative}
 .brand{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.close{width:auto;margin:0 0 0 auto;padding:5px 10px;background:transparent;color:var(--dim);border:1px solid var(--line);border-radius:8px;font-size:15px;font-weight:400;line-height:1}
+.close:hover{color:var(--fg);border-color:var(--accent)}
 .brand svg{width:30px;height:30px}.brand h1{font-size:20px;margin:0}
 .sub{color:var(--dim);font-size:14px;margin:0 0 18px}
 label{display:block;font-size:13px;color:var(--dim);margin:14px 0 5px}
@@ -1383,7 +1385,7 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
 .exist-m .def{color:var(--accent);font-weight:600}
 </style></head><body>
 <div class="card">
-  <div class="brand"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/></g></svg><h1>初始設定</h1></div>
+  <div class="brand"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/></g></svg><h1>初始設定</h1><button id="closeBtn" class="close" type="button" title="關閉（不變更）" hidden>✕ 關閉</button></div>
   <p class="sub">尚未偵測到 provider 設定（<code>providers.json</code>）。填入要用的模型服務，儲存後服務會自動啟動——不需要重進容器。</p>
   <div id="existing"></div>
   <label>快速套用（選一個服務會自動帶入網址，仍可修改）</label>
@@ -1436,6 +1438,11 @@ if(EXISTING){                              // 設定模式：顯示已配置的 
   });
   $("#existing").innerHTML=html;
   $("#save").textContent="新增 / 更新模型";
+  // 設定模式（已有 provider）：可直接關閉離開、不必操作。首次引導（EXISTING 為 null）則不給關，需先設定。
+  var cb=$("#closeBtn");
+  var close=function(){if(history.length>1)history.back();else location.href="/"};
+  cb.hidden=false;cb.onclick=close;
+  document.addEventListener("keydown",function(e){if(e.key==="Escape")close()});
 }
 $("#save").onclick=async function(){
   var body={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim(),modelName:$("#modelName").value.trim(),contextWindow:Number($("#contextWindow").value)||undefined,maxTokens:Number($("#maxTokens").value)||undefined,makeDefault:$("#makeDefault").checked||undefined};
