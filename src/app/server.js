@@ -427,13 +427,15 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     for (const f of readdirSync(persistDir).filter((x) => x.endsWith('.json')).sort()) {
       try {
         const s = JSON.parse(readFileSync(join(persistDir, f), 'utf8'));
-        rooms.set(s.id, { ...s, messages: s.messages || [], members: new Map(), pending: [], status: 'idle', agentRef: null });
+        rooms.set(s.id, { ...s, messages: s.messages || [], members: new Map(), online: new Map(), pending: [], status: 'idle', agentRef: null });
       } catch { /* 壞檔略 */ }
     }
   }
 
   const memberNames = (r) => [...r.members.values()].map((m) => m.name);
-  const view = (r) => ({ roomId: r.id, name: r.name || '', workspace: r.workspace, pack: r.pack, model: r.model || null, readonly: !!r.readonly, sessionId: r.sessionId || null, status: r.status, members: memberNames(r), memberCount: r.members.size, messageCount: r.messages.length, createdAt: r.createdAt });
+  // 在線名單（presence）：有活躍 SSE 連線的成員（r.online: memberId→連線數）；與「已加入名冊」區分（關分頁不算離開）。
+  const onlineNames = (r) => [...r.members.entries()].filter(([mid]) => (r.online?.get(mid) || 0) > 0).map(([, m]) => m.name);
+  const view = (r) => ({ roomId: r.id, name: r.name || '', workspace: r.workspace, pack: r.pack, model: r.model || null, readonly: !!r.readonly, sessionId: r.sessionId || null, status: r.status, members: memberNames(r), online: onlineNames(r), memberCount: r.members.size, messageCount: r.messages.length, createdAt: r.createdAt });
 
   const fanout = (r, ev) => { const s = subs.get(r.id); if (s) for (const fn of s) { try { fn(ev); } catch { /* 訂閱端錯不影響房間 */ } } };
   // 記錄一則訊息（人類/AI/系統）進 replay buffer 並廣播。
@@ -529,7 +531,7 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       // readonly：訪客唯讀（只能看檔案+聊天+@ai，不能上傳/建夾）；主持人（master）不受限。
       // model：此房 AI 回合用的 model（null=用伺服器預設）；與 pack 正交，可事後 setModel 切換。
       const nm = String(name || '').trim().slice(0, 60);
-      const r = { id: newId('r'), name: nm, workspace, pack, model: model || null, readonly: !!readonly, sessionId: null, inviteToken: newToken(), members: new Map(), messages: [], pending: [], status: 'idle', agentRef: null, createdAt: new Date().toISOString() };
+      const r = { id: newId('r'), name: nm, workspace, pack, model: model || null, readonly: !!readonly, sessionId: null, inviteToken: newToken(), members: new Map(), online: new Map(), messages: [], pending: [], status: 'idle', agentRef: null, createdAt: new Date().toISOString() };
       rooms.set(r.id, r); persist(r);
       return { ...view(r), inviteToken: r.inviteToken }; // 建房者才拿得到 inviteToken
     },
@@ -593,6 +595,26 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       return { ok: true, triggered: mention, status: r.status };
     },
     subscribe(id, fn) { let s = subs.get(id); if (!s) { s = new Set(); subs.set(id, s); } s.add(fn); return () => s.delete(fn); },
+    // 上線/下線（presence）：綁 SSE 連線生命週期。同一成員多分頁 → 計數；0↔1 轉換才廣播（省事件）。回退訂用函式。
+    connect(id, memberId) {
+      const r = rooms.get(id); if (!r || !memberId || !r.members.has(memberId)) return () => {};
+      const n = (r.online.get(memberId) || 0) + 1; r.online.set(memberId, n);
+      if (n === 1) fanout(r, { type: 'presence', online: onlineNames(r) });
+      let done = false;
+      return () => { // 斷線回收：計數歸零才廣播離線
+        if (done) return; done = true;
+        const c = (r.online.get(memberId) || 1) - 1;
+        if (c <= 0) { r.online.delete(memberId); fanout(r, { type: 'presence', online: onlineNames(r) }); }
+        else r.online.set(memberId, c);
+      };
+    },
+    // 打字中（transient，不落地、不進 pending）：廣播給全員 → 前端顯示「X 正在輸入…」，逾時自動清。
+    typing(id, memberId, on) {
+      const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
+      const m = r.members.get(memberId); if (!m) return { error: '請先加入房間', code: 403 };
+      fanout(r, { type: 'typing', name: m.name, on: !!on });
+      return { ok: true };
+    },
     stats: () => ({ roomCount: rooms.size }),
   };
 }
@@ -1058,8 +1080,10 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     const mRoomEv = path.match(/^\/v1\/rooms\/([^/]+)\/events$/);
     if (req.method === 'GET' && mRoomEv) {
       const room = rooms.get(mRoomEv[1]); if (!room) return json(res, 404, { error: 'room not found' });
-      if (!roomAuth(req, room, 'read').ok) return json(res, 401, { error: '需要邀請碼或成員 token' });
+      const evAuth = roomAuth(req, room, 'read'); if (!evAuth.ok) return json(res, 401, { error: '需要邀請碼或成員 token' });
       sseHead(res);
+      // presence：成員（有 memberId）的 SSE 連線 = 上線；斷線即下線（invite 訪客無 memberId → 不計）。
+      const offline = rooms.connect(mRoomEv[1], evAuth.memberId);
       // 事件帶 SSE id（用訊息 id）→ 斷線重連時瀏覽器自動回傳 Last-Event-ID，服務端只補發其後的訊息（省頻寬）。
       const sse = (o, id) => res.write((id ? `id: ${id}\n` : '') + `data: ${JSON.stringify(o)}\n\n`);
       sse({ type: 'hello', room: rooms.view(mRoomEv[1]) });
@@ -1070,8 +1094,19 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (lastId) { const i = msgs.findIndex((m) => m.id === lastId); if (i >= 0) from = i + 1; }
       for (let k = from; k < msgs.length; k++) sse({ type: 'say', message: msgs[k], replay: true }, msgs[k].id);
       const unsub = rooms.subscribe(mRoomEv[1], (ev) => sse(ev, ev.type === 'say' ? ev.message?.id : undefined));
-      req.on('close', () => { try { unsub(); } catch { /* 略 */ } });
+      req.on('close', () => { try { unsub(); } catch { /* 略 */ } try { offline(); } catch { /* 略 */ } });
       return;
+    }
+
+    // 打字中（憑成員 token，transient）：廣播「X 正在輸入…」給全員。body.on 布林。
+    const mTyping = path.match(/^\/v1\/rooms\/([^/]+)\/typing$/);
+    if (req.method === 'POST' && mTyping) {
+      const room = rooms.get(mTyping[1]); if (!room) return json(res, 404, { error: 'room not found' });
+      const authT = roomAuth(req, room, 'member'); if (!authT.ok) return json(res, 401, { error: '需要成員 token' });
+      const body = await readBody(req);
+      const r = rooms.typing(mTyping[1], authT.memberId || body.memberId, body.on);
+      if (r && r.error) return json(res, r.code || 400, { error: r.error });
+      return json(res, 200, { ok: true });
     }
 
     // 房間工作區檔案（档案目录）：逐層列檔，限本房 workspace（憑邀請碼/成員 token）。
