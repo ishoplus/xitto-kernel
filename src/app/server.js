@@ -431,12 +431,25 @@ export function createRoomStore({ runAiTurn, persistDir, maxMessages = 300, maxP
 
   const fmtPending = (msgs) => msgs.map((m) => `[${m.name}] ${m.text}`).join('\n');
 
+  // 會議室情境提示（L1 群聊感知）：讓 AI 知道自己在多人房、發言以「[名字]」標明發話人、要分辨誰在問並點名回覆。
+  // 每輪注入（成員名單會變動、弱模型跨輪會遺忘），保持精簡以免 history 膨脹；只有一位成員時語氣不強調「多人」。
+  const roomContext = (r) => {
+    const names = memberNames(r);
+    const who = names.length ? names.join('、') : '（暫無其他成員）';
+    const multi = names.length > 1;
+    return `〔會議室情境〕你在一個多人協作房間，當前成員：${who}。以下每則發言以「[名字]」標明發話人。`
+      + (multi
+        ? '請分辨各則分別出自誰；回覆時點名對方（例如「@小明 …」），若多人同時提問就分別回應。'
+        : '回覆時可點名發話人。')
+      + '\n\n';
+  };
+
   // 跑一輪 AI：把待處理發言（含召喚那則）整理成一段上下文餵給 LLM；回合制，跑完若又有新的 @ai 就續跑。
   async function runNow(r) {
     if (r.status === 'thinking') return;
     r.status = 'thinking'; fanout(r, { type: 'status', status: 'thinking' }); persist(r);
     const batch = r.pending.splice(0, r.pending.length);
-    const input = fmtPending(batch);
+    const input = roomContext(r) + fmtPending(batch);
     let finalText = '';
     const emit = (ev) => { if (ev?.type === 'text') finalText += ev.delta || ''; fanout(r, { type: 'ai', ev }); };
     const onAgent = (a) => { r.agentRef = a; };

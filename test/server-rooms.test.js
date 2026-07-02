@@ -73,6 +73,22 @@ test('房間：@ai 觸發一輪 AI，串流事件與最終訊息都廣播；cont
   assert.equal(store.get(r.roomId).sessionId, 'sess'); // 首輪建立 sessionId → 續接
 });
 
+test('房間：餵給 AI 的 input 前置會議室情境 + 成員名單（L1 群聊感知）', async () => {
+  let capturedInput = null;
+  const store = createRoomStore({ runAiTurn: async ({ input }) => { capturedInput = input; return { sessionId: 's', text: 'r' }; } });
+  const r = store.create({});
+  const a = store.join(r.roomId, '小明');
+  store.join(r.roomId, '小華');
+  store.say(r.roomId, { memberId: a.memberId, text: '@ai 幫忙' });
+  await tick(); await tick(); await tick();
+  assert.match(capturedInput, /會議室情境/);
+  assert.match(capturedInput, /小明/);          // 成員名單含兩位成員
+  assert.match(capturedInput, /小華/);
+  assert.match(capturedInput, /點名/);           // 多人 → 引導點名回覆
+  // 情境在前、發話人前綴在後
+  assert.ok(capturedInput.indexOf('會議室情境') < capturedInput.indexOf('[小明]'), '情境應在發言之前');
+});
+
 test('房間：AI 忙碌時的 @ai 不重疊；回合末自動續跑', async () => {
   const d1 = defer();
   let calls = 0;
