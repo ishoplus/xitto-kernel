@@ -258,6 +258,31 @@ test('HTTP：/v1/rooms/:id/typing 需成員 token → 200；無 → 401', async 
   });
 });
 
+test('HTTP：/v1/setup setDefault 把既有模型設為預設（免重填憑證）+ /settings 顯示「設為預設」鈕', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'xk-cfg-'));
+  const cfgPath = join(base, 'providers.json');
+  writeFileSync(cfgPath, JSON.stringify({ defaultModel: 'a', providers: { p: { api: 'openai-completions', baseUrl: 'http://x', apiKey: 'k', models: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }] } } }));
+  const srv = createServerApp({ model: { id: 'a', provider: 'p' }, getApiKey: () => 'k', token: 't', baseDir: join(base, '.srv'), configPath: cfgPath });
+  await new Promise((r) => srv.listen(0, r));
+  const port = srv.address().port; const U = (p) => `http://localhost:${port}${p}`;
+  const H = { 'content-type': 'application/json', authorization: 'Bearer t' };
+  try {
+    // /settings 具備「設為預設」機制：setDefault 函式 + onclick 模板 + 注入含 model b 的 EXISTING（清單由前端據此渲染）
+    const html = await fetch(U('/settings'), { headers: H }).then((r) => r.text());
+    assert.match(html, /function setDefault/, '有 setDefault 函式');
+    assert.match(html, /onclick="setDefault/, '模型列帶設為預設 onclick 模板');
+    assert.match(html, /"id":"b"/, 'EXISTING 注入含 model b');
+    // 未知 model → 400
+    assert.equal((await fetch(U('/v1/setup'), { method: 'POST', headers: H, body: JSON.stringify({ setDefault: 'nope' }) })).status, 400);
+    // 設 b 為預設 → 200，檔案 defaultModel 變 b、憑證未動
+    assert.equal((await fetch(U('/v1/setup'), { method: 'POST', headers: H, body: JSON.stringify({ setDefault: 'b' }) })).status, 200);
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    assert.equal(cfg.defaultModel, 'b', 'defaultModel 改為 b');
+    assert.equal(cfg.providers.p.apiKey, 'k', 'apiKey 未被清空/覆蓋');
+    assert.equal(cfg.providers.p.models.length, 2, 'models 未變動');
+  } finally { srv.close(); rmSync(base, { recursive: true, force: true }); }
+});
+
 test('HTTP：/settings（模型設定）帶關閉鈕 + 注入 EXISTING（可不操作直接關閉）', async () => {
   await withServer(async ({ url, H }) => {
     const res = await fetch(url('/settings'), { headers: H });

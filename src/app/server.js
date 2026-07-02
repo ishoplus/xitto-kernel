@@ -967,7 +967,17 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const body = await readBody(req);
       const cfgPath = providersConfigPath(configPath);
       let base = null; try { base = loadProvidersConfig(cfgPath); } catch { /* 尚無檔 → 等同新建 */ }
-      let cfg; try { cfg = mergeSetupConfig(base, body); buildModel(cfg, cfg.defaultModel); } catch (e) { return json(res, 400, { error: e.message }); }
+      let cfg;
+      if (body.setDefault && !body.provider) {
+        // 輕量操作：只把「已配置的某個 model」設為預設，不需重填 provider/baseUrl/apiKey。
+        if (!base || !base.providers) return json(res, 400, { error: '尚無任何模型設定' });
+        const exists = Object.values(base.providers).some((p) => (p.models || []).some((m) => m.id === body.setDefault));
+        if (!exists) return json(res, 400, { error: `未知 model「${body.setDefault}」，無法設為預設` });
+        cfg = { ...base, defaultModel: body.setDefault };
+        try { buildModel(cfg, cfg.defaultModel); } catch (e) { return json(res, 400, { error: e.message }); }
+      } else {
+        try { cfg = mergeSetupConfig(base, body); buildModel(cfg, cfg.defaultModel); } catch (e) { return json(res, 400, { error: e.message }); }
+      }
       try { mkdirSync(dirname(cfgPath), { recursive: true }); writeFileSync(cfgPath, JSON.stringify(cfg, null, 2)); }
       catch (e) { return json(res, 500, { error: '寫入設定失敗：' + e.message }); }
       log({ action: 'reconfigure', provider: Object.keys(body.provider ? { [body.provider]: 1 } : {})[0], model: body.modelId });
@@ -1362,6 +1372,8 @@ body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-app
 .brand{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .close{width:auto;margin:0 0 0 auto;padding:5px 10px;background:transparent;color:var(--dim);border:1px solid var(--line);border-radius:8px;font-size:15px;font-weight:400;line-height:1}
 .close:hover{color:var(--fg);border-color:var(--accent)}
+.mini{width:auto;margin:0 0 0 6px;padding:1px 8px;font-size:11px;font-weight:500;background:transparent;color:var(--accent);border:1px solid var(--line);border-radius:6px;vertical-align:middle}
+.mini:hover{border-color:var(--accent)}
 .brand svg{width:30px;height:30px}.brand h1{font-size:20px;margin:0}
 .sub{color:var(--dim);font-size:14px;margin:0 0 18px}
 label{display:block;font-size:13px;color:var(--dim);margin:14px 0 5px}
@@ -1434,7 +1446,7 @@ if(EXISTING){                              // 設定模式：顯示已配置的 
   var html='<div class="exist-h">目前已配置 '+EXISTING.length+' 個 provider · '+n+' 個模型（下方表單可新增或更新一個；不會覆蓋其他）：</div>';
   EXISTING.forEach(function(p){
     html+='<div class="exist-p"><b>'+esc(p.provider)+'</b> <span class="exist-m">'+esc(p.api||"")+'</span><div class="exist-m">'+
-      p.models.map(function(m){return (m.default?'<span class="def">★ ':'')+esc(m.name||m.id)+(m.name&&m.name!==m.id?' ('+esc(m.id)+')':'')+(m.default?'（預設）</span>':'')}).join(' · ')+'</div></div>';
+      p.models.map(function(m){var lbl=esc(m.name||m.id)+(m.name&&m.name!==m.id?' ('+esc(m.id)+')':'');return m.default?'<span class="def">★ '+lbl+'（預設）</span>':lbl+' <button class="mini" type="button" onclick="setDefault(\\''+esc(m.id)+'\\')">設為預設</button>'}).join(' · ')+'</div></div>';
   });
   $("#existing").innerHTML=html;
   $("#save").textContent="新增 / 更新模型";
@@ -1443,6 +1455,13 @@ if(EXISTING){                              // 設定模式：顯示已配置的 
   var close=function(){if(history.length>1)history.back();else location.href="/"};
   cb.hidden=false;cb.onclick=close;
   document.addEventListener("keydown",function(e){if(e.key==="Escape")close()});
+}
+// 把已配置的某個 model 設為預設（不需重填憑證）：POST {setDefault} → 熱重載後刷新頁面。
+async function setDefault(id){
+  var r;try{r=await fetch("/v1/setup",{method:"POST",headers:AUTH,body:JSON.stringify({setDefault:id})}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}
+  if(!r||r.error)return showMsg((r&&r.error)||"設定失敗","err");
+  showMsg("已設為預設，服務重載中…","ok");
+  var tries=0;var poll=async function(){tries++;try{var h=await fetch("/health",{cache:"no-store"}).then(function(x){return x.json()});if(h&&h.mode!=="setup"){location.reload();return}}catch(e){}if(tries>40)return showMsg("已設定，請手動重新整理。","ok");setTimeout(poll,800)};setTimeout(poll,1000);
 }
 $("#save").onclick=async function(){
   var body={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim(),modelName:$("#modelName").value.trim(),contextWindow:Number($("#contextWindow").value)||undefined,maxTokens:Number($("#maxTokens").value)||undefined,makeDefault:$("#makeDefault").checked||undefined};
