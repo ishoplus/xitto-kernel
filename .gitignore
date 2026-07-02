@@ -4,6 +4,12 @@ node_modules/
 # 本機 provider 設定（含 API key）— 永不進版控
 providers.json
 .xitto-code/
+# 內網 registry 憑證（含 _auth）— 永不進版控
+.npmrc
+
+# Docker / K8s 部署檔（含內網 registry 位址、映像路徑、叢集配置）— 留本機，勿進公開版控
+Dockerfile
+deploy/
 # kernel 執行期資料（記憶 / session）
 .xitto-kernel/
 
