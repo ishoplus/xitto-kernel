@@ -395,14 +395,16 @@ export function createTaskStore({ runJob, concurrency = 2, onFinish, maxEvents =
 export const mentionsAi = (text) => /(^|[\s(（【「,，。、!！?？])@ai\b/i.test(String(text || ''));
 
 /**
- * 專案會議室（多人 + LLM 同一對話）。純記憶體 + 可選持久化，與 HTTP 無關、可單測。
- * 一間房 = 共享 workspace（五層經驗累積）+ 共享對話 history（綁 sessionId）+ 成員 + 訊息流。
- * 人類發言即時廣播給全員；只有點名「@ai」才餵給 LLM 回覆（回合制，不重疊）。
+ * 專案會議室（多人 + LLM）。純記憶體 + 可選持久化，與 HTTP 無關、可單測。
+ * 一間房 = 共享 workspace（五層經驗累積）+ 共享訊息流（replay/紀要/上下文）+ 成員 + 每人一條 AI lane。
+ * 每人一條 lane：獨立 session（私有 history）、並發跑（別人的複雜問題不卡你）、各自可中斷；
+ * 但共享會議全部上下文（每輪注入「你不在時房裡發生的增量」）。人類發言即時廣播；只有 @ai 才觸發回覆。
  * @param {Object} o
- * @param {(args:{room:object,input:string,emit:(ev:object)=>void,onAgent:(a:any)=>void})=>Promise<any>} o.runAiTurn  跑一輪 AI（回傳 { sessionId, text, ... }）
- * @param {string} [o.persistDir]   每間房落地一個 json（重啟後房間與訊息還在；成員為即時態不存）
- * @param {number} [o.maxMessages]  每房保留最近幾則訊息（replay 用，預設 300）
- * @param {number} [o.maxPending]   兩次 AI 回合之間最多累積幾則作為上下文（預設 50）
+ * @param {(args:{room:object,input:string,emit:(ev:object)=>void,onAgent:(a:any)=>void,readOnly:boolean,sessionId?:string})=>Promise<any>} o.runAiTurn  跑一輪 AI（用傳入的 lane sessionId 續接；回傳 { sessionId, text, ... }）
+ * @param {string} [o.persistDir]     每間房落地一個 json（重啟後房間與訊息還在；成員與 lane 為即時態不存）
+ * @param {number} [o.maxMessages]    每房保留最近幾則訊息（replay 用，預設 300）
+ * @param {number} [o.maxPending]     每條 lane 最多累積幾則待處理（預設 50）
+ * @param {number} [o.maxConcurrency] 一房最多幾條 lane 同時跑 AI（預設 3；超出排隊）
  */
 // 會議紀要 goal：把整段對話 transcript 整理成三節（決策/待辦/摘要）並用 gen_doc 產出檔案。只依對話、不編造。
 export const minutesGoal = (transcript) => [
@@ -417,7 +419,7 @@ export const minutesGoal = (transcript) => [
   String(transcript || '').slice(0, 24000),
 ].join('\n');
 
-export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages = 300, maxPending = 50 } = {}) {
+export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages = 300, maxPending = 50, maxConcurrency = 3 } = {}) {
   const rooms = new Map();  // id -> room
   const subs = new Map();   // id -> Set<(ev)=>void>
 
@@ -427,7 +429,7 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     for (const f of readdirSync(persistDir).filter((x) => x.endsWith('.json')).sort()) {
       try {
         const s = JSON.parse(readFileSync(join(persistDir, f), 'utf8'));
-        rooms.set(s.id, { ...s, messages: s.messages || [], members: new Map(), online: new Map(), pending: [], status: 'idle', agentRef: null });
+        rooms.set(s.id, { ...s, messages: s.messages || [], members: new Map(), online: new Map(), lanes: new Map() });
       } catch { /* 壞檔略 */ }
     }
   }
@@ -435,7 +437,20 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
   const memberNames = (r) => [...r.members.values()].map((m) => m.name);
   // 在線名單（presence）：有活躍 SSE 連線的成員（r.online: memberId→連線數）；與「已加入名冊」區分（關分頁不算離開）。
   const onlineNames = (r) => [...r.members.entries()].filter(([mid]) => (r.online?.get(mid) || 0) > 0).map(([, m]) => m.name);
-  const view = (r) => ({ roomId: r.id, name: r.name || '', workspace: r.workspace, pack: r.pack, model: r.model || null, readonly: !!r.readonly, sessionId: r.sessionId || null, status: r.status, members: memberNames(r), online: onlineNames(r), memberCount: r.members.size, messageCount: r.messages.length, createdAt: r.createdAt });
+
+  // ── 每人一條 AI lane（並發、私有 session、各自可中斷）──
+  // 一條 lane = 某成員跟 AI 的獨立回合線：自己的 pending 佇列、thinking 狀態、agentRef（供中止）、
+  // sessionId（私有 history 連續性）、lastSeenTs（已看到共享 transcript 到哪，供「共享上下文增量」注入）。
+  // 不同成員的 lane 並行跑 → 別人的複雜問題不會卡住你的快問；同一成員同 lane 串行（回合制不重疊）。
+  const laneOf = (r, mid) => {
+    let L = r.lanes.get(mid);
+    if (!L) { L = { sessionId: null, pending: [], status: 'idle', agentRef: null, _stopped: false, lastSeenTs: 0 }; r.lanes.set(mid, L); }
+    return L;
+  };
+  const activeCount = (r) => [...r.lanes.values()].filter((L) => L.status === 'thinking').length;
+  const roomStatus = (r) => (activeCount(r) > 0 ? 'thinking' : 'idle'); // 房級聚合狀態（任一 lane 忙 = 忙）：相容既有前端單一狀態列/停止鈕
+
+  const view = (r) => ({ roomId: r.id, name: r.name || '', workspace: r.workspace, pack: r.pack, model: r.model || null, readonly: !!r.readonly, sessionId: r.sessionId || null, status: roomStatus(r), members: memberNames(r), online: onlineNames(r), memberCount: r.members.size, messageCount: r.messages.length, createdAt: r.createdAt });
 
   const fanout = (r, ev) => { const s = subs.get(r.id); if (s) for (const fn of s) { try { fn(ev); } catch { /* 訂閱端錯不影響房間 */ } } };
   // 記錄一則訊息（人類/AI/系統）進 replay buffer 並廣播。
@@ -446,82 +461,114 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     return m;
   };
 
-  const fmtPending = (msgs) => msgs.map((m) => `[${m.name}] ${m.text}`).join('\n');
+  // 一則訊息餵給 LLM 的呈現：AI 對某人的回覆標「[AI→名字]」（避免某條 lane 誤以為那是對它說的）、系統標「[系統]」、其餘「[名字]」。
+  const fmtForLlm = (m) => (m.kind === 'ai' ? `[AI→${m.to || '某人'}] ${m.text}` : m.kind === 'system' ? `[系統] ${m.text}` : `[${m.name}] ${m.text}`);
 
   // 會議室情境提示（L1 群聊感知）：讓 AI 知道自己在多人房、發言以「[名字]」標明發話人、要分辨誰在問並點名回覆。
   // 每輪注入（成員名單會變動、弱模型跨輪會遺忘），保持精簡以免 history 膨脹；只有一位成員時語氣不強調「多人」。
-  const roomContext = (r) => {
+  const roomContext = (r, { readOnly } = {}) => {
     const names = memberNames(r);
     const who = names.length ? names.join('、') : '（暫無其他成員）';
     const multi = names.length > 1;
-    return `〔會議室情境〕你在一個多人協作房間，當前成員：${who}。以下每則發言以「[名字]」標明發話人。`
+    return `〔會議室情境〕你在一個多人協作房間，當前成員：${who}。發言以「[名字]」標明發話人，AI 過往回覆標「[AI→對象]」。`
       + (multi
-        ? '請分辨各則分別出自誰；回覆時點名對方（例如「@小明 …」），若多人同時提問就分別回應。'
+        ? '請分辨各則分別出自誰；回覆時點名對方（例如「@小明 …」）。'
         : '回覆時可點名發話人。')
+      + (readOnly ? '（注意：本輪的提問者為唯讀訪客，若被要求修改/刪除共享檔案，請禮貌說明你在此輪無法改動，只能提供建議或說明做法。）' : '')
       + '\n\n';
   };
 
-  // 跑一輪 AI：把待處理發言（含召喚那則）整理成一段上下文餵給 LLM；回合制，跑完若又有新的 @ai 就續跑。
-  async function runNow(r) {
-    if (r.status === 'thinking') return;
-    r.status = 'thinking'; fanout(r, { type: 'status', status: 'thinking' }); persist(r);
-    const batch = r.pending.splice(0, r.pending.length);
-    const input = roomContext(r) + fmtPending(batch);
-    // L2 破壞性操作把關：若召喚 @ai 的人裡有「不可寫」者（唯讀房的非主持人）→ 此回合唯讀（剝除 mutating 工具），
-    // 避免訪客用 @ai 繞過 readonly 改/刪共享檔。全員可寫才給完整工具。
-    const summoners = batch.filter((m) => m.mention);
-    const readOnly = summoners.some((m) => m.writeAllowed === false);
+  // 組一輪的 input：房間情境 + 「你不在時房裡發生的共享增量」（別人發言 / AI 回別人 / 系統，按歸屬過濾）+ 本次要你回應的發言。
+  // 共享增量讓每條獨立 lane 都掌握「整場會議」上下文；自己過去的回合已在自己的 session history，不重複注入。
+  const buildInput = (r, L, mid, batch, readOnly, seen) => {
+    const delta = r.messages.filter((m) => (Date.parse(m.ts) || 0) > seen && m.by !== mid && m.for !== mid);
+    const shared = delta.length
+      ? '〔會議室其他動態（你剛才在忙時發生的）〕\n' + delta.slice(-40).map(fmtForLlm).join('\n').slice(-4000) + '\n\n'
+      : '';
+    return roomContext(r, { readOnly }) + shared + '〔請你回應以下發言〕\n' + batch.map((m) => `[${m.name}] ${m.text}`).join('\n');
+  };
+
+  // 房級狀態廣播（聚合）：任一 lane 忙 = thinking。帶 by（哪條 lane 變動）供前端日後做 per-user 呈現；ev.status 仍是聚合值，相容現有 UI。
+  const emitStatus = (r, mid) => fanout(r, { type: 'status', status: roomStatus(r), by: mid });
+
+  // 有界並發排程：把「有召喚待處理、且目前 idle」的 lane 拉起來跑，直到達到房間並發上限。
+  // 上限保護（maxConcurrency）：避免一房 N 人同時 @ai 就對 provider 併發 N 條 → 超出的排隊，等有 lane 結束再拉起。
+  const schedule = (r) => {
+    for (const [mid, L] of r.lanes) {
+      if (activeCount(r) >= maxConcurrency) break;
+      if (L.status === 'idle' && L.pending.some((m) => m.mention)) runLane(r, mid);
+    }
+  };
+
+  // 跑某成員的一輪 AI（該成員的 lane）：整理其待處理發言 + 共享增量餵給 LLM，用該 lane 的私有 session 續接。
+  // 回合末：若同 lane 又有新 @ai 或別的 lane 在排隊 → schedule 續拉。被本人中止則該 lane 不自動續跑。
+  async function runLane(r, mid) {
+    const L = laneOf(r, mid);
+    if (L.status === 'thinking') return;                 // 同 lane 串行：回合制不重疊
+    if (activeCount(r) >= maxConcurrency) return;         // 併發已滿 → 交給後續 schedule 再拉
+    const batch = L.pending.splice(0, L.pending.length);
+    if (!batch.length) return;
+    const seen = L.lastSeenTs;                            // 本輪之前「已看到共享 transcript 到哪」→ 用來抓增量
+    L.status = 'thinking'; L.lastSeenTs = Date.now();     // 更新為此刻：回合中湧入的別人發言下輪才納入（不漏、不重覆）
+    emitStatus(r, mid); persist(r);
+    // L2 破壞性操作把關：召喚者含「不可寫」者（唯讀房非主持人）→ 此回合唯讀（剝除 mutating 工具）。
+    const readOnly = batch.filter((m) => m.mention).some((m) => m.writeAllowed === false);
+    const input = buildInput(r, L, mid, batch, readOnly, seen);
+    const member = r.members.get(mid);
     let finalText = '';
-    const emit = (ev) => { if (ev?.type === 'text') finalText += ev.delta || ''; fanout(r, { type: 'ai', ev }); };
-    const onAgent = (a) => { r.agentRef = a; };
+    const emit = (ev) => { if (ev?.type === 'text') finalText += ev.delta || ''; fanout(r, { type: 'ai', by: mid, ev }); };
+    const onAgent = (a) => { L.agentRef = a; };
     try {
-      const res = await runAiTurn({ room: r, input, emit, onAgent, readOnly });
-      if (res?.sessionId) r.sessionId = res.sessionId; // 首輪建立 → 之後續接同一對話
+      const res = await runAiTurn({ room: r, input, emit, onAgent, readOnly, sessionId: L.sessionId || undefined });
+      if (res?.sessionId) { L.sessionId = res.sessionId; r.sessionId = res.sessionId; } // lane 私有 session；r.sessionId 鏡像最近一條（相容 view/snapshot/聯刪）
       const text = (res?.text ?? finalText) || '';
-      if (!r._stopped) push(r, { kind: 'ai', name: 'AI', text }); // 被中止 → ⏹ 訊息已由 stop() 廣播，不再推（可能半截）回覆
+      if (!L._stopped) push(r, { kind: 'ai', name: 'AI', text, by: mid, for: mid, to: member?.name || '' }); // for=此 lane；別的 lane 增量會據此排除
     } catch (e) {
-      if (!r._stopped) push(r, { kind: 'system', name: 'system', text: 'AI 回覆失敗：' + (e?.message || String(e)) });
+      if (!L._stopped) push(r, { kind: 'system', name: 'system', text: 'AI 回覆失敗：' + (e?.message || String(e)) });
     } finally {
-      r.agentRef = null; const stopped = r._stopped; r._stopped = false;
-      r.status = 'idle'; fanout(r, { type: 'status', status: 'idle' }); persist(r);
-      // 回合中若又有人 @ai（新累積的 pending 含召喚）→ 立刻續跑；但被使用者中止時不自動續跑（pending 已清）。
-      if (!stopped && r.pending.some((m) => m.mention)) runNow(r);
+      L.agentRef = null; L._stopped = false;
+      L.status = 'idle'; emitStatus(r, mid); persist(r);
+      schedule(r); // 拉起同 lane 續跑（新 @ai）或別條排隊中的 lane
     }
   }
 
   // 生成會議紀要：把「整場對話」（含未召喚 AI 的閒聊——那些沒進 session）整理成決策/待辦/摘要並產出檔案。
   // 走獨立 goal（fresh session、docgen pack）→ 不污染房間的共享對話 history；成品落房間 workspace，狀態轉 idle 時前端自動刷新檔案列表。
   async function generateMinutes(r) {
-    r.status = 'thinking'; fanout(r, { type: 'status', status: 'thinking' }); persist(r);
+    // 紀要用一條保留 lane（'__minutes__'）：參與房級聚合狀態（期間佔並發位、避免與寫入回合搶 workspace 檔），但不進成員名單、不被 schedule 拉起。
+    const L = laneOf(r, '__minutes__');
+    L.status = 'thinking'; emitStatus(r, '__minutes__'); persist(r);
     const transcript = r.messages.map((m) => `[${m.name || m.kind}] ${m.text}`).join('\n');
-    const emit = (ev) => fanout(r, { type: 'ai', ev });
+    const emit = (ev) => fanout(r, { type: 'ai', by: '__minutes__', ev });
     try {
-      const res = await runMinutes({ room: r, transcript, emit, onAgent: (a) => { r.agentRef = a; } });
+      const res = await runMinutes({ room: r, transcript, emit, onAgent: (a) => { L.agentRef = a; } });
       push(r, { kind: 'system', name: 'system', text: '📋 已整理會議紀要，請看「工作台」的檔案（可下載）。' + (res?.text ? '\n' + String(res.text).slice(0, 300) : '') });
     } catch (e) {
       push(r, { kind: 'system', name: 'system', text: '生成會議紀要失敗：' + (e?.message || String(e)) });
     } finally {
-      r.agentRef = null;
-      r.status = 'idle'; fanout(r, { type: 'status', status: 'idle' }); persist(r);
+      L.agentRef = null;
+      L.status = 'idle'; emitStatus(r, '__minutes__'); persist(r);
     }
     return { ok: true };
   }
 
   return {
-    // 中止進行中的 AI 回合（任何成員可觸發）：abort agent + 清 pending（避免 finally 又續跑）+ 廣播中止訊息。
-    stop(id) {
+    // 中止「自己那條 lane」進行中的 AI 回合（各停各的）：abort 該 lane 的 agent + 清該 lane pending + 廣播中止訊息。
+    // 不傳 memberId（或該成員無進行中回合）→ 409，不影響別人的 lane。
+    stop(id, memberId) {
       const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
-      if (r.status !== 'thinking' || !r.agentRef) return { error: '目前沒有進行中的 AI 回合', code: 409 };
-      r._stopped = true; r.pending = [];
-      try { r.agentRef.abort(); } catch { /* 略 */ }
-      push(r, { kind: 'system', name: 'system', text: '⏹ AI 回合已被中止' });
+      const L = memberId ? r.lanes.get(memberId) : null;
+      if (!L || L.status !== 'thinking' || !L.agentRef) return { error: '你目前沒有進行中的 AI 回合', code: 409 };
+      L._stopped = true; L.pending = [];
+      try { L.agentRef.abort(); } catch { /* 略 */ }
+      push(r, { kind: 'system', name: 'system', text: `⏹ ${r.members.get(memberId)?.name || '某成員'} 中止了自己的 AI 回覆` });
       return { ok: true };
     },
     // 生成會議紀要（成員可觸發）：同步校驗後 fire-and-forget，進度/結果經 SSE 廣播；回 { ok } 或 { error, code }。
     minutes(id) {
       const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
       if (!runMinutes) return { error: '此部署未啟用會議紀要', code: 501 };
-      if (r.status === 'thinking') return { error: 'AI 忙碌中，請稍候再試', code: 409 };
+      if (roomStatus(r) === 'thinking') return { error: 'AI 忙碌中，請稍候再試', code: 409 };
       if (!r.messages.length) return { error: '尚無對話可整理', code: 400 };
       generateMinutes(r); // 不 await：交給 SSE 廣播進度與結果
       return { ok: true };
@@ -531,7 +578,7 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       // readonly：訪客唯讀（只能看檔案+聊天+@ai，不能上傳/建夾）；主持人（master）不受限。
       // model：此房 AI 回合用的 model（null=用伺服器預設）；與 pack 正交，可事後 setModel 切換。
       const nm = String(name || '').trim().slice(0, 60);
-      const r = { id: newId('r'), name: nm, workspace, pack, model: model || null, readonly: !!readonly, sessionId: null, inviteToken: newToken(), members: new Map(), online: new Map(), messages: [], pending: [], status: 'idle', agentRef: null, createdAt: new Date().toISOString() };
+      const r = { id: newId('r'), name: nm, workspace, pack, model: model || null, readonly: !!readonly, sessionId: null, inviteToken: newToken(), members: new Map(), online: new Map(), messages: [], lanes: new Map(), createdAt: new Date().toISOString() };
       rooms.set(r.id, r); persist(r);
       return { ...view(r), inviteToken: r.inviteToken }; // 建房者才拿得到 inviteToken
     },
@@ -555,12 +602,13 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     // 回傳該房 sessionId 供呼叫端聯刪 session（避免孤兒 history）。已無此房回 null。
     remove(id) {
       const r = rooms.get(id); if (!r) return null;
-      const sessionId = r.sessionId;
+      // 每條 lane 有自己的 session → 全部回傳供聯刪（避免孤兒 history）；sessionId 保留鏡像值供相容。
+      const sessionIds = [...new Set([...r.lanes.values()].map((L) => L.sessionId).concat(r.sessionId).filter(Boolean))];
       fanout(r, { type: 'room_closed', roomId: id });
       const s = subs.get(id); if (s) { s.clear(); subs.delete(id); }
       rooms.delete(id);
       if (persistDir) { try { rmSync(join(persistDir, id + '.json'), { force: true }); } catch { /* 略 */ } }
-      return { ok: true, sessionId };
+      return { ok: true, sessionId: r.sessionId, sessionIds };
     },
     // 加入房間 → 發 memberId + 專屬成員 token（後續發言/收流的憑證，區分身分、防冒名）+ 廣播進場。
     join(id, name) {
@@ -580,19 +628,21 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       fanout(r, { type: 'member_leave', name: m.name, members: memberNames(r), memberCount: r.members.size });
       return true;
     },
-    // 發言：立刻廣播給全員 + 進 AI 上下文佇列；點名 @ai 才觸發（或合併進進行中的回合，回合末續跑）。
-    // writeAllowed：此發言者能否觸發寫入/破壞性操作（唯讀房的非主持人 = false）；帶進 pending 供 runNow 決定該回合是否唯讀（L2）。
+    // 發言：立刻廣播給全員 + 進「發話者自己那條 lane」的佇列；點名 @ai 才觸發（同 lane 忙則排隊、回合末續跑）。
+    // 每人一條 lane → 別人的複雜問題不會卡住你的 @ai；由 schedule 依房間並發上限拉起。
+    // writeAllowed：此發言者能否觸發寫入/破壞性操作（唯讀房的非主持人 = false）；帶進 pending 供 runLane 決定該回合是否唯讀（L2）。
     say(id, { memberId, text, writeAllowed = true }) {
       const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
       const m = r.members.get(memberId); if (!m) return { error: '請先加入房間', code: 403 };
       const msg = String(text ?? '').trim(); if (!msg) return { error: '發言不可為空', code: 400 };
       const mention = mentionsAi(msg);
-      push(r, { kind: 'user', name: m.name, text: msg });
-      r.pending.push({ name: m.name, text: msg, mention, writeAllowed: writeAllowed !== false });
-      while (r.pending.length > maxPending) r.pending.shift(); // 上限保護（保留最近，含召喚）
+      push(r, { kind: 'user', name: m.name, text: msg, by: memberId }); // by=發話者 → 別的 lane 的共享增量會據此排除（不把自己的話當「別人動態」）
+      const L = laneOf(r, memberId);
+      L.pending.push({ name: m.name, text: msg, mention, writeAllowed: writeAllowed !== false });
+      while (L.pending.length > maxPending) L.pending.shift(); // 上限保護（保留最近，含召喚）
       persist(r);
-      if (mention && r.status === 'idle') runNow(r);
-      return { ok: true, triggered: mention, status: r.status };
+      if (mention) schedule(r);
+      return { ok: true, triggered: mention, status: roomStatus(r) };
     },
     subscribe(id, fn) { let s = subs.get(id); if (!s) { s = new Set(); subs.set(id, s); } s.add(fn); return () => s.delete(fn); },
     // 上線/下線（presence）：綁 SSE 連線生命週期。同一成員多分頁 → 計數；0↔1 轉換才廣播（省事件）。回退訂用函式。
@@ -651,15 +701,18 @@ export function defaultAuth({ token } = {}) {
     return { ok: false };
   };
   // 預設無 SSO 身份（房間 join 走匿名 name）、無 /auth/* 路由。
-  return { bearerOf, authed, roomAuth, principal: () => null, handle: null };
+  // 非 SSO 模式全靠 master token → authed 與 authedAdmin 同義。
+  return { bearerOf, authed, authedAdmin: authed, roomAuth, principal: () => null, handle: null };
 }
 
 // SSO 授權：xitto 自管的角色名冊（IdP 不在管理範圍 → 授權由此決定）。見 docs/10-sso-design.md §4。
 // 持久化於 <dir>/roles.json（email→role）；adminEmails 為 env 釘死的 admin（不落地、不可刪，防自鎖）。
-export function createRoleStore({ dir, adminEmails = [], allowedDomain = '' } = {}) {
+export function createRoleStore({ dir, adminEmails = [], allowedDomain = '', openAccess = false } = {}) {
   const norm = (e) => String(e || '').trim().toLowerCase();
   const pinned = new Set(adminEmails.map(norm).filter(Boolean));
-  const domain = norm(allowedDomain).replace(/^@/, '');
+  // allowedDomain='*' 視同開放模式（任何 SSO 身份放行），而非字面網域。
+  const open = openAccess || norm(allowedDomain) === '*';
+  const domain = open ? '' : norm(allowedDomain).replace(/^@/, '');
   const ROLES = new Set(['admin', 'member', 'readonly']);
   const file = dir ? join(dir, 'roles.json') : null;
   const roles = new Map(); // email -> role（不含釘死 admin）
@@ -667,13 +720,18 @@ export function createRoleStore({ dir, adminEmails = [], allowedDomain = '' } = 
     try { const o = JSON.parse(readFileSync(file, 'utf8')); for (const [e, r] of Object.entries(o || {})) if (ROLES.has(r)) roles.set(norm(e), r); } catch { /* 壞檔略過 */ }
   }
   const persist = () => { if (!file) return; try { mkdirSync(dir, { recursive: true }); writeFileSync(file, JSON.stringify(Object.fromEntries(roles))); } catch { /* 略 */ } };
-  // 判角色（不含 master-token break-glass，那在 adapter 層）：釘死 admin → 名冊 → 網域放行(member) → 皆無回 null（封閉名冊拒絕）。
+  // 判角色（不含 master-token break-glass，那在 adapter 層）：釘死 admin → 名冊 → 網域放行 → 開放模式 → 皆無回 null。
+  // openAccess（開放模式）：只要 SSO 通過即給 member，不看名冊/網域；仍尊重 XITTO_ADMIN_EMAILS 指定的 admin。
   const roleOf = (principal) => {
-    const email = norm(principal?.email);
-    if (!email || principal?.email_verified === false) return null; // 需 email 且未被標記為未驗證
-    if (pinned.has(email)) return 'admin';
-    if (roles.has(email)) return roles.get(email);
-    if (domain && email.endsWith('@' + domain)) return 'member';
+    if (!principal) return null;
+    const email = norm(principal.email);
+    // 明確授權（皆需已驗證 email）：釘死 admin → 名冊 → 網域放行(member)。
+    if (email && principal.email_verified !== false) {
+      if (pinned.has(email)) return 'admin';
+      if (roles.has(email)) return roles.get(email);
+      if (domain && email.endsWith('@' + domain)) return 'member';
+    }
+    if (open) return 'member'; // 開放模式：任何 SSO 已認證身份 → member（不看名冊/網域，email 可缺）
     return null;
   };
   return {
@@ -695,7 +753,7 @@ export function createRoleStore({ dir, adminEmails = [], allowedDomain = '' } = 
   };
 }
 
-export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
+export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', ssoOpen = false, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
   // 可選 model 清單（跨 provider）：給 /v1/models 與「未知 model」錯誤訊息用；始終含當前預設 model。
   const modelList = (models && models.length) ? models : [{ id: model.id, name: model.name || model.id, provider: model.provider }];
   const knownModel = (id) => !id || id === model.id || modelList.some((m) => m.id === id);
@@ -711,7 +769,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
 
   const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
   // SSO 授權名冊（xitto 自管）：SSO 開時查它決定 admin/member/readonly；SSO 關時仍可用 master token 經 /v1/admins 預先配置。
-  const roleStore = createRoleStore({ dir: join(baseDir, 'auth'), adminEmails, allowedDomain: allowedEmailDomain });
+  const roleStore = createRoleStore({ dir: join(baseDir, 'auth'), adminEmails, allowedDomain: allowedEmailDomain, openAccess: ssoOpen });
   // 認證 adapter：注入的優先（SSO），否則用 defaultAuth 封裝的現有 token 邏輯 → 未注入即與過去完全一致。
   // roleStore 掛給 adapter，讓注入的 SSO adapter 共用同一份名冊。
   const authAdapter = auth || defaultAuth({ token });
@@ -724,7 +782,15 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   // 頁面注入的 token：SSO 開啟時清空（改靠 cookie session，避免把 master token 發給每個登入者 → 提權）。
   const pageToken = (t) => (ssoActive ? '' : (t || ''));
   const authed = (req) => authAdapter.authed(req);
+  // 提權敏感端點（改名冊角色、改 provider 設定）：SSO 下限 admin；adapter 未提供則回退到 authed（非 SSO 同義）。
+  const authedAdmin = (req) => (authAdapter.authedAdmin || authAdapter.authed)(req);
   const roomAuth = (req, room, need) => authAdapter.roomAuth(req, room, need);
+  // 管理端點守門：非 admin 一律擋。未認證 → 401（無憑證）；已認證但非 admin（如 SSO member）→ 403（已登入、權限不足，符合「登入後不 401」）。
+  const adminOnly = (req, res) => {
+    if (authedAdmin(req)) return false;
+    if (authed(req)) { json(res, 403, { error: 'forbidden（需 admin）' }); return true; }
+    json(res, 401, { error: 'unauthorized' }); return true;
+  };
   const log = (o) => console.log(JSON.stringify({ ts: new Date().toISOString(), ...o }));
   const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 1e6) req.destroy(); }); req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch { resolve({}); } }); });
   // 上傳原始 bytes（不解析 JSON）：超過上限即停止緩衝並斷流 → 回 { over:true }，否則 { buffer }。
@@ -784,7 +850,14 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     // 同時 getPlanMode:true 擋下 kernel 內建的 mutating 工具（memory_save/bash_bg 等殘留）。
     let pack = make({ cwd: workdir });
     if (spec.readOnly) pack = { ...pack, tools: () => pack.tools().filter((t) => !isMutating(t)), mutatingTools: [] };
-    const kernel = createKernel(pack, { cwd: workdir, model: runModel, getApiKey, resolveModel, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, confirm: async () => 'yes', autoExtractMemory: true, ...(spec.readOnly ? { getPlanMode: () => true } : {}), ...(ask ? { askUser: ask } : {}) });
+    // 環境能力畫像：雲端託管容器 vs 使用者本機。決定哪些工具/技能對 agent 可見，並提示它環境邊界。
+    //   workspaceFs：可讀寫「被分配的工作目錄」（雲端也有 → 雲端 agent 能查看自己的檔案目錄）。
+    //   hostFs     ：可存取容器外主機任意路徑/絕對路徑（僅本地模式）。
+    const caps = local ? ['workspaceFs', 'hostFs', 'shell', 'network'] : ['workspaceFs', 'shell', 'network'];
+    const envNote = local
+      ? '你運行在使用者本機。可自由讀寫上面的工作目錄；經授權時亦可存取指定的本機絕對路徑。'
+      : '你運行在雲端託管容器。上面的「工作目錄」是分配給你的專屬工作區——你可以自由讀取、瀏覽（list）、建立、修改其中及所有子目錄的檔案，放心操作。但你無法存取容器外的主機路徑、其他工作區，或 /tmp、/app 等系統絕對路徑；也不要嘗試瀏覽本機任意資料夾（此環境不支援）。所有成品一律寫在工作目錄內。';
+    const kernel = createKernel(pack, { cwd: workdir, model: runModel, getApiKey, resolveModel, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, env: local ? 'local' : 'cloud', caps, envNote, confirm: async () => 'yes', autoExtractMemory: true, ...(spec.readOnly ? { getPlanMode: () => true } : {}), ...(ask ? { askUser: ask } : {}) });
     const usage = { input: 0, output: 0 };
     onEvent?.({ type: 'session_start', sessionId }); // 串流首事件：讓前端立刻知道此輪的 sessionId
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
@@ -830,12 +903,14 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     return extra ? text + extra : text;
   };
 
-  // 專案會議室：多人 + LLM 同一對話（共享 workspace/history）。AI 回合走同一個 runKernel（turn 模式），
-  // 只在有人 @ai 時觸發；房間 sessionId 綁定 → 續接同一 history（跨回合、跨重啟）。
+  // 專案會議室：多人 + LLM 共享 workspace/上下文。每人一條 AI lane（並發、私有 session、各自可中斷），
+  // 只在有人 @ai 時觸發；lane 的 sessionId 綁定該成員的私有 history，續接其提問線（跨回合）。
+  // 房間並發上限：XITTO_ROOM_CONCURRENCY（預設 3）→ 一房多人同時 @ai 時的最大並行回合數，超出排隊。
   const rooms = createRoomStore({
     persistDir: join(baseDir, 'rooms'),
-    runAiTurn: ({ room, input, emit, onAgent, readOnly }) =>
-      runKernel({ pack: room.pack, model: room.model || undefined, mode: 'turn', readOnly, input: expandFileRefs(input, workspaceDir(baseDir, room.workspace, local)), workspace: room.workspace, sessionId: room.sessionId || undefined },
+    maxConcurrency: Number(process.env.XITTO_ROOM_CONCURRENCY || 3),
+    runAiTurn: ({ room, input, emit, onAgent, readOnly, sessionId }) =>
+      runKernel({ pack: room.pack, model: room.model || undefined, mode: 'turn', readOnly, input: expandFileRefs(input, workspaceDir(baseDir, room.workspace, local)), workspace: room.workspace, sessionId: sessionId || undefined },
         (ev) => { const m = mapEvent(ev); if (m) emit(m); }, undefined, onAgent),
     // 會議紀要：獨立 goal（docgen pack 拿 gen_doc、fresh session 不污染對話），把整段 transcript 整理成決策/待辦/摘要並產成檔。
     runMinutes: ({ room, transcript, emit, onAgent }) =>
@@ -929,24 +1004,24 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     // ── SSO 角色名冊（operator only）：xitto 自管 admin/member/readonly，供 SSO 授權查詢（見 docs/10-sso-design.md §4/§5）──
     // SSO 未開時也能用（master token），供上線前預先配置名冊。env 釘死的 admin 標 pinned、不可改/刪。
     if (path === '/v1/admins' && req.method === 'GET') {
-      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      if (adminOnly(req, res)) return;
       return json(res, 200, { roles: roleStore.list() });
     }
     if (path === '/v1/admins' && req.method === 'POST') {
-      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      if (adminOnly(req, res)) return;
       const b = await readBody(req); const r = roleStore.set(b.email, b.role);
       return json(res, r.ok ? 200 : 400, r.ok ? { ok: true, email: r.email, role: r.role } : { error: r.error });
     }
     const mAdminDel = path.match(/^\/v1\/admins\/(.+)$/);
     if (mAdminDel && req.method === 'DELETE') {
-      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      if (adminOnly(req, res)) return;
       const r = roleStore.remove(decodeURIComponent(mAdminDel[1]));
       return json(res, r.ok ? 200 : 400, r.ok ? { ok: true, email: r.email } : { error: r.error });
     }
 
     // 設定入口（master only）：復用引導頁，改成「新增/更新一個 provider」語境。POST /v1/setup 合併進既有 providers.json 後熱重載。
     if (req.method === 'GET' && path === '/settings') {
-      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      if (adminOnly(req, res)) return;
       // 現有設定 → 注入頁面（不含 apiKey，避免外洩）：[{provider,api,models:[{id,name,default}]}]。
       let existing = [];
       try {
@@ -963,7 +1038,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(html);
     }
     if (req.method === 'POST' && path === '/v1/setup') {
-      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      if (adminOnly(req, res)) return;
       const body = await readBody(req);
       const cfgPath = providersConfigPath(configPath);
       let base = null; try { base = loadProvidersConfig(cfgPath); } catch { /* 尚無檔 → 等同新建 */ }
@@ -1014,7 +1089,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
       const r = rooms.remove(mDelRoom[1]);
       if (!r) return json(res, 404, { error: 'room not found' });
-      dropSession(r.sessionId);
+      for (const s of r.sessionIds || [r.sessionId]) dropSession(s); // 每條 lane 的私有 session 都要聯刪
       log({ room: mDelRoom[1], action: 'remove' });
       return json(res, 200, { ok: true });
     }
@@ -1064,12 +1139,12 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       return json(res, 200, r);
     }
 
-    // 中止進行中的 AI 回合（憑成員 token）：任何成員可打斷共享 AI。
+    // 中止「自己那條 lane」進行中的 AI 回合（憑成員 token）：各停各的，不影響別人。
     const mStop = path.match(/^\/v1\/rooms\/([^/]+)\/stop$/);
     if (req.method === 'POST' && mStop) {
       const room = rooms.get(mStop[1]); if (!room) return json(res, 404, { error: 'room not found' });
-      if (!roomAuth(req, room, 'member').ok) return json(res, 401, { error: '需要成員 token' });
-      const r = rooms.stop(mStop[1]);
+      const authStop = roomAuth(req, room, 'member'); if (!authStop.ok) return json(res, 401, { error: '需要成員 token' });
+      const r = rooms.stop(mStop[1], authStop.memberId);
       if (r && r.error) return json(res, r.code || 400, { error: r.error });
       log({ room: mStop[1], action: 'stop' });
       return json(res, 200, { ok: true });
@@ -1526,17 +1601,27 @@ export function startServer(opts = {}) {
   // SSO 授權（見 docs/10-sso-design.md）：釘死的首任 admin email + 選填的網域放行；不設即封閉名冊。
   const adminEmails = opts.adminEmails ?? String(process.env.XITTO_ADMIN_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const allowedEmailDomain = opts.allowedEmailDomain ?? process.env.XITTO_ALLOWED_EMAIL_DOMAIN ?? '';
+  // 開放模式（XITTO_SSO_OPEN=1 或 XITTO_ALLOWED_EMAIL_DOMAIN=*）：只要 SSO 通過即可用（給 member），不看名冊/網域。
+  const ssoOpen = opts.ssoOpen ?? (process.env.XITTO_SSO_OPEN === '1' || allowedEmailDomain === '*');
   // SSO 認證（純 opt-in）：設了 issuer 或顯式授權端點才啟用 OAuth2/OIDC；否則 auth=undefined → createServerApp 走 defaultAuth（現況）。
   let auth = opts.auth;
   const oidcIssuer = process.env.XITTO_OAUTH_ISSUER;
   const oidcAuthz = process.env.XITTO_OAUTH_AUTHZ_ENDPOINT;
-  if (!auth && (oidcIssuer || oidcAuthz)) {
+  if (!auth && (oidcIssuer || oidcAuthz || process.env.XITTO_OAUTH_USERINFO_ENDPOINT)) {
     try {
       auth = oauth2Auth({
         issuer: oidcIssuer,
         authorizationEndpoint: oidcAuthz,
         tokenEndpoint: process.env.XITTO_OAUTH_TOKEN_ENDPOINT,
         jwksUri: process.env.XITTO_OAUTH_JWKS_URI,
+        // 非 OIDC（無 id_token，如部分企業 CAS）：設 userinfo 端點 → 拿 access_token 取身份；PKCE 可關；logout 可連 IdP 單點登出。
+        userinfoEndpoint: process.env.XITTO_OAUTH_USERINFO_ENDPOINT,
+        userinfoTokenIn: process.env.XITTO_OAUTH_USERINFO_TOKEN_IN || 'query',
+        tokenParamsIn: process.env.XITTO_OAUTH_TOKEN_PARAMS_IN || 'body',  // 部分 CAS 設 'query'（參數拼 url）
+        usePkce: process.env.XITTO_OAUTH_PKCE !== '0',
+        logoutEndpoint: process.env.XITTO_OAUTH_LOGOUT_ENDPOINT,
+        logoutReturnParam: process.env.XITTO_OAUTH_LOGOUT_RETURN_PARAM || 'returnurl',
+        postLogoutRedirect: process.env.XITTO_OAUTH_POST_LOGOUT_REDIRECT,
         clientId: process.env.XITTO_OAUTH_CLIENT_ID,
         clientSecret: process.env.XITTO_OAUTH_CLIENT_SECRET,
         redirectUri: process.env.XITTO_OAUTH_REDIRECT_URI,
@@ -1561,7 +1646,7 @@ export function startServer(opts = {}) {
   let server;
   // 熱重載：/v1/setup 存檔後關掉現有 server、用同 opts 重起（載入新設定），同 port 不需重進容器。
   const onReconfigure = () => { try { server.close(); } catch { /* 略 */ } startServer(opts); };
-  server = createServerApp({ model, getApiKey, resolveModel, models, token, auth, adminEmails, allowedEmailDomain, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
+  server = createServerApp({ model, getApiKey, resolveModel, models, token, auth, adminEmails, allowedEmailDomain, ssoOpen, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
   server.listen(port, () => {
     console.log(`🪄 許願台：http://localhost:${port}/  （本機瀏覽器打開即用）`);
     console.log(`👥 會議室：http://localhost:${port}/room  （多人 + AI 針對專案對談；點名 @ai 才回覆）`);

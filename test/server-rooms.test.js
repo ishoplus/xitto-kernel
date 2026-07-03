@@ -103,15 +103,15 @@ test('房間：AI 忙碌時的 @ai 不重疊；回合末自動續跑', async () 
   store.say(r.roomId, { memberId: u.memberId, text: '@ai 問題一' });
   await tick();
   assert.equal(calls, 1, '第一輪進行中');
-  assert.equal(store.get(r.roomId).status, 'thinking');
-  store.say(r.roomId, { memberId: u.memberId, text: '@ai 問題二' }); // 忙碌 → 不開新回合
+  assert.equal(store.view(r.roomId).status, 'thinking');
+  store.say(r.roomId, { memberId: u.memberId, text: '@ai 問題二' }); // 同一成員同 lane 忙碌 → 不開新回合（串行）
   await tick();
-  assert.equal(calls, 1, '不重疊：第二個 @ai 未立刻起跑');
+  assert.equal(calls, 1, '不重疊：同 lane 第二個 @ai 未立刻起跑');
   d1.resolve();
   await tick(); await tick(); await tick();
-  assert.equal(calls, 2, '回合末偵測到待處理 @ai → 續跑');
+  assert.equal(calls, 2, '回合末偵測到同 lane 待處理 @ai → 續跑');
   assert.match(inputs[1], /問題二/);
-  assert.equal(store.get(r.roomId).status, 'idle');
+  assert.equal(store.view(r.roomId).status, 'idle');
 });
 
 test('房間：runAiTurn 拋錯 → 房間回 idle + 系統訊息，不卡死', async () => {
@@ -122,7 +122,7 @@ test('房間：runAiTurn 拋錯 → 房間回 idle + 系統訊息，不卡死', 
   store.subscribe(r.roomId, (ev) => evs.push(ev));
   store.say(r.roomId, { memberId: u.memberId, text: '@ai 出事' });
   await tick(); await tick();
-  assert.equal(store.get(r.roomId).status, 'idle');
+  assert.equal(store.view(r.roomId).status, 'idle');
   assert.ok(evs.some((e) => e.type === 'say' && e.message.kind === 'system' && /boom/.test(e.message.text)));
 });
 
@@ -323,7 +323,7 @@ test('房間：生成會議紀要 — 帶「整段 transcript」呼叫 runMinute
 
 test('房間：紀要 AI 忙碌 → 409；未啟用（無 runMinutes）→ 501', () => {
   const busy = createRoomStore({ runAiTurn: async () => ({}), runMinutes: async () => ({}) });
-  const r = busy.create({}); busy.get(r.roomId).status = 'thinking';
+  const r = busy.create({}); busy.get(r.roomId).lanes.set('x', { status: 'thinking' }); // 造一條忙碌 lane → 房級聚合狀態 thinking
   assert.equal(busy.minutes(r.roomId).code, 409);
   const nogen = createRoomStore({ runAiTurn: async () => ({}) }); // 未注入 runMinutes
   const r2 = nogen.create({});
@@ -377,19 +377,89 @@ test('房間：stop 中止進行中的 AI 回合 → abort agent + ⏹ 訊息 + 
   const r = store.create({});
   const u = store.join(r.roomId, '小明');
   const evs = []; store.subscribe(r.roomId, (ev) => evs.push(ev));
-  store.say(r.roomId, { memberId: u.memberId, text: '@ai 跑個大任務' }); // 觸發 runNow
+  store.say(r.roomId, { memberId: u.memberId, text: '@ai 跑個大任務' }); // 觸發自己那條 lane
   await tick();
-  assert.equal(store.get(r.roomId).status, 'thinking');
-  assert.equal(store.stop(r.roomId).ok, true);
+  assert.equal(store.view(r.roomId).status, 'thinking');
+  assert.equal(store.stop(r.roomId, u.memberId).ok, true); // 中止自己那條 lane
   await tick(); await tick();
   assert.ok(aborted, 'agent 被 abort');
-  assert.equal(store.get(r.roomId).status, 'idle', '中止後回 idle');
+  assert.equal(store.view(r.roomId).status, 'idle', '中止後回 idle');
   assert.ok(evs.some((e) => e.type === 'say' && e.message.kind === 'system' && /中止/.test(e.message.text)), '廣播 ⏹ 中止訊息');
   assert.ok(!evs.some((e) => e.type === 'say' && e.message.kind === 'ai'), '不推半截 AI 泡泡');
   assert.ok(!evs.some((e) => e.type === 'say' && e.message.kind === 'system' && /失敗/.test(e.message.text)), '不推 AI 失敗訊息');
-  // 中止後 idle，再 stop → 409
-  assert.equal(store.stop(r.roomId).code, 409, '無進行中回合 → 409');
-  assert.equal(store.stop('nope').code, 404);
+  // 中止後 idle，自己再 stop → 409
+  assert.equal(store.stop(r.roomId, u.memberId).code, 409, '無進行中回合 → 409');
+  assert.equal(store.stop('nope', u.memberId).code, 404);
+});
+
+// ── 每人一條 lane：並發不塞車 + 各自可中止 + 共享上下文 ──
+test('房間 lane：A 的複雜問題進行中，B 的 @ai 仍能並行起跑（不塞車）', async () => {
+  const dA = defer();
+  const running = new Set();
+  const store = createRoomStore({
+    runAiTurn: async ({ input }) => {
+      // 判別要用「只會出現在自己 batch」的文字：B 先前的發言會出現在 B 的共享增量裡，故用 B 的獨有句判 B。
+      const me = /快問一句/.test(input) ? 'B' : 'A'; running.add(me);
+      if (me === 'A') await dA.promise;        // A 掛住不結束
+      return { sessionId: 's-' + me, text: 'r' };
+    },
+  });
+  const r = store.create({});
+  const a = store.join(r.roomId, '小明');
+  const b = store.join(r.roomId, '小華');
+  store.say(r.roomId, { memberId: a.memberId, text: '@ai 跑個大任務' }); // A 卡住
+  await tick();
+  store.say(r.roomId, { memberId: b.memberId, text: '@ai 快問一句' });   // B 不應被 A 卡住
+  await tick(); await tick(); await tick();
+  assert.ok(running.has('A') && running.has('B'), 'A、B 兩條 lane 並行（B 未被 A 阻塞）');
+  // B 已完成回覆，A 仍在跑
+  assert.ok(store.get(r.roomId).messages.some((m) => m.kind === 'ai' && m.for === b.memberId), 'B 已拿到回覆');
+  assert.equal(store.get(r.roomId).lanes.get(a.memberId).status, 'thinking', 'A 仍進行中');
+  dA.resolve();
+});
+
+test('房間 lane：各停各的 — 中止 A 不影響進行中的 B', async () => {
+  const dA = defer(); const dB = defer();
+  let abortedA = false;
+  const store = createRoomStore({
+    runAiTurn: ({ input, onAgent }) => new Promise((resolve, reject) => {
+      // B 的獨有句判 B（A 的發言會出現在 B 的共享增量，不能拿它判 A）
+      if (/B 的任務/.test(input)) { dB.promise.then(() => resolve({ sessionId: 's-b', text: 'b' })); }
+      else { onAgent({ abort: () => { abortedA = true; reject(new Error('Aborted')); } }); dA.promise.then(() => resolve({ text: 'a' })); }
+    }),
+  });
+  const r = store.create({});
+  const a = store.join(r.roomId, '小明');
+  const b = store.join(r.roomId, '小華');
+  store.say(r.roomId, { memberId: a.memberId, text: '@ai A 的任務' });
+  store.say(r.roomId, { memberId: b.memberId, text: '@ai B 的任務' });
+  await tick(); await tick();
+  assert.equal(store.stop(r.roomId, a.memberId).ok, true, 'A 中止自己');
+  await tick();
+  assert.ok(abortedA, 'A 被 abort');
+  assert.equal(store.get(r.roomId).lanes.get(b.memberId).status, 'thinking', 'B 不受影響仍在跑');
+  dB.resolve(); await tick(); await tick();
+  assert.ok(store.get(r.roomId).messages.some((m) => m.kind === 'ai' && m.for === b.memberId), 'B 正常完成');
+});
+
+test('房間 lane：B 的回合能看到「共享增量」（A 先前的發言與 AI 回覆）', async () => {
+  let capturedB = null;
+  const store = createRoomStore({
+    runAiTurn: async ({ input }) => {
+      const isB = /剛剛小明說什麼/.test(input); if (isB) capturedB = input; // 依本次發言判別（名單每輪都在）
+      return { sessionId: isB ? 's-b' : 's-a', text: isB ? 'ok' : 'A的回覆內容' };
+    },
+  });
+  const r = store.create({});
+  const a = store.join(r.roomId, '小明');
+  const b = store.join(r.roomId, '小華');
+  store.say(r.roomId, { memberId: a.memberId, text: '@ai 我覺得首頁要改版' }); // A 一輪，完成後進 transcript
+  await tick(); await tick(); await tick();
+  store.say(r.roomId, { memberId: b.memberId, text: '@ai 剛剛小明說什麼' });   // B 一輪，應看到 A 的發言 + AI 回 A
+  await tick(); await tick(); await tick();
+  assert.match(capturedB, /其他動態/, 'B 的 input 帶共享增量段');
+  assert.match(capturedB, /首頁要改版/, 'B 看得到 A 的發言');
+  assert.match(capturedB, /AI→小明/, 'B 看得到 AI 回給 A 的內容（帶歸屬標記）');
 });
 
 test('HTTP：/v1/rooms/:id/stop 需成員 token；idle 時 409', async () => {
