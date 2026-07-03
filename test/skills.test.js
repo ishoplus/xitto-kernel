@@ -175,3 +175,27 @@ test('kernel：真實 runVerify — verify 通過(true)才新增，失敗(false)
     assert.match(k2.systemPrompt, /release：發版 SOP/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
+
+test('capFilter：環境不支援的技能不列、不可載入', async () => {
+  const dir = tmp('sk-cap-');
+  try {
+    const sd = join(dir, 'skills');
+    mkdirSync(sd, { recursive: true });
+    writeFileSync(join(sd, 'browse.md'), '---\ndescription: 瀏覽主機資料夾\nrequires: hostFs\n---\n\n# 步驟\nx');
+    writeFileSync(join(sd, 'onlylocal.md'), '---\ndescription: 只在本機\nenv: local\n---\n\n# 步驟\ny');
+    writeFileSync(join(sd, 'anywhere.md'), '---\ndescription: 到處都行\n---\n\n# 步驟\nz');
+    // 雲端能力畫像：有 workspaceFs、無 hostFs，env=cloud
+    const caps = new Set(['workspaceFs', 'shell']);
+    const capFilter = (fm) => {
+      const req = String(fm.requires || '').split(/[,\s]+/).filter(Boolean);
+      if (req.length && !req.every((c) => caps.has(c))) return false;
+      if (fm.env && fm.env !== 'any' && fm.env !== 'cloud') return false;
+      return true;
+    };
+    const s = createSkills(sd, { capFilter });
+    assert.deepEqual(s.list().map((x) => x.name).sort(), ['anywhere'], '缺 hostFs 的 browse、env:local 的 onlylocal 應被隱藏');
+    // 被隱藏的技能連 skill 工具也載不到
+    const out = JSON.parse((await s.tool.execute('t', { name: 'browse' })).content[0].text);
+    assert.match(out.error, /找不到技能/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

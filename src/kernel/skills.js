@@ -41,8 +41,11 @@ const firstDesc = (body) => {
 const slug = (s) => String(s || '').trim().toLowerCase()
   .replace(/[^a-z0-9一-龥_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
 
-export function createSkills(dir, { verifyRunner } = {}) {
+export function createSkills(dir, { verifyRunner, capFilter } = {}) {
   const fileOf = (name) => join(dir, `${name}.md`);
+  // capFilter(fm)：依環境能力篩技能（frontmatter 可標 `requires: cap,…` 或 `env: local`）。
+  // 不通過的技能不列入 → 不出現在 prompt、skill 也載不到 → 錯環境下模型看不到無效技能。
+  const allowFm = (fm) => (typeof capFilter !== 'function') || capFilter(fm);
   const readAll = () => {
     const out = [];
     if (existsSync(dir)) {
@@ -50,6 +53,7 @@ export function createSkills(dir, { verifyRunner } = {}) {
         try {
           const md = readFileSync(join(dir, f), 'utf8');
           const { fm } = splitFront(md);
+          if (!allowFm(fm)) continue; // 環境不支援 → 略過此技能
           out.push({ name: f.replace(/\.md$/, ''), desc: firstDesc(md), body: md, used: Number(fm.usedCount) || 0, stale: fm.stale === 'true' });
         } catch { /* 略 */ }
       }

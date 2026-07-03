@@ -97,3 +97,33 @@ test('confirm 注入：mutating 工具拒絕則擋', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// 環境能力門控：不同環境（雲端/本機）只暴露該環境能用的工具/技能，並把邊界寫進 system prompt。
+test('環境門控：caps/env 不滿足的 pack 工具不註冊，滿足的照常在', () => {
+  const pack = {
+    name: 'envpack', systemPrompt: 'x', tools: () => [
+      { name: 'read_ws', readOnly: true, requires: ['workspaceFs'], description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [] }) },
+      { name: 'browse_host', readOnly: true, requires: ['hostFs'], description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [] }) },
+      { name: 'local_only', readOnly: true, env: 'local', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [] }) },
+    ],
+  };
+  // 雲端：有 workspaceFs、無 hostFs → read_ws 在、browse_host / local_only 被剔除
+  const cloud = createKernel(pack, { caps: ['workspaceFs', 'shell'], env: 'cloud' });
+  assert.ok(cloud.registry.has('read_ws'), '雲端應保留 workspace 工具（agent 可查看分配目錄）');
+  assert.ok(!cloud.registry.has('browse_host'), '雲端缺 hostFs → 主機瀏覽工具不註冊');
+  assert.ok(!cloud.registry.has('local_only'), 'env:local 工具在雲端不註冊');
+  assert.deepEqual(cloud.env.droppedTools.sort(), ['browse_host', 'local_only']);
+  // 本機：全能力 → 三個都在
+  const localK = createKernel(pack, { caps: ['workspaceFs', 'hostFs', 'shell'], env: 'local' });
+  for (const n of ['read_ws', 'browse_host', 'local_only']) assert.ok(localK.registry.has(n));
+  // 未給 caps（CLI）→ 不門控，向後相容
+  const cli = createKernel(pack);
+  for (const n of ['read_ws', 'browse_host', 'local_only']) assert.ok(cli.registry.has(n));
+});
+
+test('環境門控：envNote 注入 system prompt', () => {
+  const pack = { name: 'envpack2', systemPrompt: 'base', tools: () => [] };
+  const k = createKernel(pack, { caps: ['workspaceFs'], env: 'cloud', envNote: '你運行在雲端託管容器。' });
+  assert.match(k.systemPrompt, /運行環境/);
+  assert.match(k.systemPrompt, /雲端託管容器/);
+});

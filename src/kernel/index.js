@@ -218,6 +218,23 @@ export function createKernel(pack, config = {}) {
   const getSandbox = config.getSandbox || (() => !!sandboxCfg.enabled);
   const getSandboxConfig = () => sandboxCfg;
 
+  // ── 環境能力門控 ──
+  // 讓「工具/技能」與「運行環境」對齊：雲端託管容器 vs 使用者本機，可用的能力不同。
+  // 不滿足的能力對應的工具/技能「一開始就不註冊、不列出」→ 模型根本看不到，從源頭避免在錯的環境誤用無效工具/技能。
+  //   config.caps：本環境具備的能力字串（如 ['workspaceFs','hostFs','shell','network']）。未提供 → 不門控（本機 CLI 全能力，向後相容）。
+  //   config.env ：環境名（'cloud'|'local'…），供以 env: 標記的工具/技能精準匹配。
+  //   宣告方式：工具用 requires:[cap,…]（或 env:'local'）；技能用 frontmatter `requires: a,b` / `env: local`。
+  const caps = config.caps ? new Set(config.caps) : null;
+  const envName = config.env || null;
+  const envAllows = (meta) => {
+    if (!meta) return true;
+    const req = Array.isArray(meta.requires) ? meta.requires
+      : (typeof meta.requires === 'string' ? meta.requires.split(/[,\s]+/).filter(Boolean) : null);
+    if (caps && req && req.length && !req.every((c) => caps.has(c))) return false; // 缺所需能力
+    if (envName && meta.env && meta.env !== 'any' && meta.env !== envName) return false; // 環境不符
+    return true;
+  };
+
   // 技能驗證器：結晶新技能前，先在沙箱跑一條驗證指令，須 exit 0 才准新增（結晶=已驗證的成功）。
   // 靜態安全：危險指令一律擋；開沙箱時併查靜態策略，再用 Seatbelt 包執行。
   const runVerify = (command, { timeoutMs = 60000 } = {}) => {
@@ -235,7 +252,7 @@ export function createKernel(pack, config = {}) {
     if (r.error) return { ok: false, code: null, output: (output + ' ' + r.error.message).trim() };
     return { ok: r.status === 0, code: r.status, output: output || '(no output)' };
   };
-  const skills = createSkills(join(dataDir, 'skills'), { verifyRunner: runVerify }); // 漸進揭露 + 結晶（須驗證）
+  const skills = createSkills(join(dataDir, 'skills'), { verifyRunner: runVerify, capFilter: envAllows }); // 漸進揭露 + 結晶（須驗證）；capFilter：環境不支援的技能不列不載
   const agents = createAgents(join(dataDir, 'agents')); // 自訂 agent 類型（spawn_agent/spawn_agents 的 agentType）
 
   // 澄清通道：app 提供 askUser 才有 ask_user 工具（結果導向:自主完成,只在非問不可時才打斷使用者）。
@@ -252,9 +269,12 @@ export function createKernel(pack, config = {}) {
   } : null;
 
   // 工具：pack 工具（sandboxable 包 Seatbelt、mutating+path 加 undo 快照）+ kernel 內建記憶工具 + spawn_agent。
+  // 先做環境門控：requires/env 不滿足的 pack 工具直接剔除（不進 registry → 不出現在給模型的工具清單）。
   const undoStack = [];
+  const envDroppedTools = [];
+  const packToolsForEnv = pack.tools().filter((t) => envAllows(t) || (envDroppedTools.push(t.name), false));
   const baseTools = [
-    ...pack.tools().map((t) => wrapUndo(wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }), { cwd, undoStack })),
+    ...packToolsForEnv.map((t) => wrapUndo(wrapSandboxable(t, { cwd, getSandbox, getSandboxConfig }), { cwd, undoStack })),
     ...memory.tools,
     ...playbook.tools,
     ...episodes.tools,
@@ -324,6 +344,7 @@ export function createKernel(pack, config = {}) {
     loadContextFiles(cwd, pack.contextFiles) +          // 注入領域規範檔（CLAUDE.md 等）
     '\n\n# 記憶與專案手冊\n' + (pack.memoryGuide || DEFAULT_MEMORY_GUIDE) + '\n' + DEFAULT_PLAYBOOK_GUIDE + '\n' + DEFAULT_EPISODE_GUIDE +
     '\n\n# 工作目錄\n你的工作目錄是：' + cwd + '\n所有檔案請用相對路徑寫在這個目錄內（如 report.md、data/x.csv）。除非使用者明確要求，絕對不要寫到此目錄之外（例如 /tmp、/app、/workspace、系統根目錄）——寫在外面使用者拿不到成品。' +
+    (config.envNote ? '\n\n# 運行環境\n' + config.envNote : '') +   // app 注入的環境邊界（雲端/本機能力差異），讓模型不去試無效工具
     '\n\n# 成品與暫存\n' + DEFAULT_OUTPUT_GUIDE +
     (memText ? `\n\n# 已記住的事實（跨 session）\n${memText}` : '') +
     (pbText ? `\n\n# 專案手冊（這個專案怎麼做事，跨 session 累積）\n${pbText}` : '') +
@@ -373,6 +394,8 @@ export function createKernel(pack, config = {}) {
       path: allowStore.path,
     },
     sandbox: { isOn: () => getSandbox(), config: () => getSandboxConfig() },
+    // 環境能力畫像 + 因環境被剔除的 pack 工具（供 app 記錄/診斷「為何某工具不見了」）。
+    env: { name: envName, caps: caps ? [...caps] : null, droppedTools: envDroppedTools },
     memory,
     // 事實層自動萃取：從指定（或上一輪）對話抽持久事實存進 memory，回 { extracted: [...] }。
     extractMemory: (opts = {}) => doExtract(opts.messages || lastMessages),
