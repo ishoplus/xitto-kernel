@@ -2,11 +2,12 @@
 // 工具以輕量真實實作示範（read/ls/write/edit 真的動檔案）；bash 走 shell。
 // read-before-edit 守衛與 read 工具透過閉包共享 readFiles 狀態，故能真實生效。
 // 對應 docs/05-example-packs.md「A. coding pack」。
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
 import { createBackgroundTools } from '../../kernel/bg.js';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
+import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
@@ -29,7 +30,7 @@ const SYSTEM_PROMPT = [
  * @returns {import('../../types.js').DomainPack}
  */
 export function createCodingPack({ cwd = process.cwd() } = {}) {
-  const readFiles = new Set(); // 已 read 過的絕對路徑（read 工具寫入、read-before-edit 守衛讀取）
+  const readFiles = new Map(); // path → 讀取當下 mtimeMs（read 工具寫入、read-before-edit 守衛用 has()、併發陳舊防護用 mtime）
   const abs = (p) => (isAbsolute(p) ? p : join(cwd, p));
   // 寫檔限制在工作目錄內：逃逸 cwd（如 /tmp、/app）回 null。讀檔不限制。
   const within = (p) => { const full = abs(p); const r = relative(cwd, full); return (r === '' || (!r.startsWith('..') && !isAbsolute(r))) ? full : null; };
@@ -43,12 +44,12 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     execute: async (_id, { path, offset, limit }) => {
       const p = abs(path);
       if (!existsSync(p)) return txt({ error: '檔案不存在', path });
-      readFiles.add(p);
       let content;
       if (isDocFile(p)) {                                      // Word/Excel/PPT/ODF/RTF/PDF → 萃取文字
         try { content = extractDocText(p); }
         catch (e) { return txt({ error: '文件解析失敗', detail: e.message, path }); }
       } else content = readFileSync(p, 'utf8');
+      markRead(readFiles, p);
       const lines = content.split('\n');
       const start = Math.max(0, (offset || 1) - 1);
       const count = limit && limit > 0 ? limit : 2000;
@@ -74,8 +75,8 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
     execute: async (_id, { path, content }) => {
       const p = within(path); if (!p) return escapeErr(path);
-      writeFileSync(p, content ?? '', 'utf8');
-      readFiles.add(p); // 寫過即視為已知內容
+      // 併發陳舊防護：本回合讀過此檔、落地前已被別條 lane/外部改動 → 擋，避免整檔覆寫蓋掉他人更新。
+      if (writeAtomic(readFiles, p, content ?? '', true).stale) return txt({ error: `${path} 在你 read 之後被改動（避免覆寫他人更新），請重新 read 再寫`, path });
       return txt({ written: path, bytes: Buffer.byteLength(content ?? '') });
     },
   };
@@ -92,7 +93,7 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
       if (occurrences === 0) return txt({ error: 'oldText 未找到（請先 read 確認當前內容）', path });
       if (occurrences > 1 && !replaceAll) return txt({ error: `oldText 出現 ${occurrences} 次，請提供更精確、唯一的 oldText（含上下文），或設 replaceAll:true`, path });
       const after = replaceAll ? before.split(oldText).join(newText) : before.replace(oldText, newText);
-      writeFileSync(p, after, 'utf8');
+      writeAtomic(readFiles, p, after); // edit 已重讀當前內容再套 oldText → 只需原子落地，不做陳舊誤擋
       return txt({ edited: path, replaced: replaceAll ? occurrences : 1 });
     },
   };

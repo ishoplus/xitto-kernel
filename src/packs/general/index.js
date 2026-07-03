@@ -1,9 +1,10 @@
 // general pack — 通用自主 agent。廣的 system prompt + 檔案/shell/web 工具。
 // 搭配 kernel 的 runGoal（目標循環）+ 子 agent + MCP，即為「給目標、自己做到完成」的通用 agent。
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, extname, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
+import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { createWebFetchTool, createWebSearchTool, createHttpTool } from '../shared/web-tools.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 
@@ -23,7 +24,7 @@ const SYSTEM_PROMPT = [
 ].join('\n');
 
 export function createGeneralPack({ cwd = process.cwd() } = {}) {
-  const readFiles = new Set();
+  const readFiles = new Map(); // path → 讀取當下 mtimeMs（供併發陳舊防護）；has(p) 仍表「本回合讀過」
   const abs = (p) => (isAbsolute(p) ? p : join(cwd, p));
   // 寫檔限制在工作目錄內：回解析後路徑,逃逸 cwd（如 /tmp、/app）回 null。讀檔不限制。
   const within = (p) => { const full = abs(p); const r = relative(cwd, full); return (r === '' || (!r.startsWith('..') && !isAbsolute(r))) ? full : null; };
@@ -35,7 +36,7 @@ export function createGeneralPack({ cwd = process.cwd() } = {}) {
     execute: async (_id, { path }) => {
       const p = abs(path);
       if (!existsSync(p)) return txt({ error: '檔案不存在', path });
-      readFiles.add(p);
+      markRead(readFiles, p);
       if (isDocFile(p)) { try { return txt(extractDocText(p)); } catch (e) { return txt({ error: '文件解析失敗', detail: e.message, path }); } }
       return txt(readFileSync(p, 'utf8'));
     },
@@ -48,12 +49,16 @@ export function createGeneralPack({ cwd = process.cwd() } = {}) {
   const write = {
     name: 'write', label: '寫檔', description: '建立或覆寫檔案', mutating: true,
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
-    execute: async (_id, { path, content }) => { const p = within(path); if (!p) return escapeErr(path); writeFileSync(p, content ?? '', 'utf8'); readFiles.add(p); return txt({ written: path, bytes: Buffer.byteLength(content ?? '') }); },
+    execute: async (_id, { path, content }) => {
+      const p = within(path); if (!p) return escapeErr(path);
+      if (writeAtomic(readFiles, p, content ?? '', true).stale) return txt({ error: `${path} 在你 read 之後被改動（避免覆寫他人更新），請重新 read 再寫`, path });
+      return txt({ written: path, bytes: Buffer.byteLength(content ?? '') });
+    },
   };
   const edit = {
     name: 'edit', label: '編輯', description: '把檔案中的 oldText 換成 newText', mutating: true,
     parameters: { type: 'object', properties: { path: { type: 'string' }, oldText: { type: 'string' }, newText: { type: 'string' } }, required: ['path', 'oldText', 'newText'] },
-    execute: async (_id, { path, oldText, newText }) => { const p = within(path); if (!p) return escapeErr(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path }); const b = readFileSync(p, 'utf8'); if (!b.includes(oldText)) return txt({ error: 'oldText 未找到', path }); writeFileSync(p, b.replace(oldText, newText), 'utf8'); return txt({ edited: path }); },
+    execute: async (_id, { path, oldText, newText }) => { const p = within(path); if (!p) return escapeErr(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path }); const b = readFileSync(p, 'utf8'); if (!b.includes(oldText)) return txt({ error: 'oldText 未找到', path }); writeAtomic(readFiles, p, b.replace(oldText, newText)); return txt({ edited: path }); },
   };
   const bash = {
     name: 'bash', label: 'bash', description: '執行 shell 命令（可選 timeout 秒數，預設 120）', mutating: true, sandboxable: true,

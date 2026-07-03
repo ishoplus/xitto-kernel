@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.26
+
+- **會議室併發寫入安全（技術債收尾）**：多人房每人一條並發 AI lane、共享同一 workspace（見 0.9.25 之前的 per-lane 重構），先前殘留「並發寫同一檔可能競態」的已知限制。本版把每條寫入路徑補上兩道保護：
+  - **原子落地**：`write`/`edit` 改走 `tmp + rename`（唯一 tmp 名，消除同 process 內 `${p}.tmp-${pid}` 撞名）→ 別條 lane 在寫入途中 `read` 同一檔，只會看到舊全貌或新全貌，不會是半寫檔。
+  - **陳舊防護（write）**：整檔覆寫是基於「本回合稍早讀到的內容」算出來的；若落地前該檔已被別條 lane/外部改動 → 擋下並要求重新 `read`，避免把對方更新整個蓋掉（lost update）。`edit` 在 execute 當下重讀最新內容再套 `oldText`，本就對到最新版，只需原子落地、不做陳舊誤擋。
+  - 修法：新增 `packs/shared/safe-write.js`（`markRead` / `writeAtomic`），並讓 `general`/`coding`（房間預設 pack，先前各自重造了比 `createFsTools` 更弱的 fs 工具、`readFiles` 只記「讀過沒」無 mtime）改用之——`readFiles` `Set`→`Map(mtime)`；`createFsTools` 則在 `write.execute` 補一道同步陳舊再驗，關掉 `preToolPolicy`（policy 期驗 mtime）到落地之間的 TOCTOU 窗。
+  - 新增 `test/safe-write.test.js`（原子寫、連續非陳舊寫 ok、陳舊覆寫被擋且不覆寫、edit 不誤擋、tmp 不殘留 + general pack 端到端）。
+- 測試 378/378。
+
 ## 0.9.25
 
 - **對齊 Node 22**：相依（`@earendil-works/pi-ai`、`ink`）實際要求 Node `>=22`，但 `engines` 與 CI 還停在 20（宣稱支援卻會噴 EBADENGINE、是定時炸彈）。`engines.node` `>=20`→`>=22`；CI 矩陣 `[20,22]`→`[22,24]`（最低支援 + 現行 LTS）；`release.yml` `node 20`→`22`、`setup-node@v4`→`@v6`（消除 Node 20 deprecation 警告）。

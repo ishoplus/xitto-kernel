@@ -95,6 +95,9 @@ export function createFsTools(cwd) {
     execute: async (_id, { path, content }) => {
       const p = within(path); if (!p) return escapeErr(path);
       try {
+        // 原子防陳舊覆寫：與 readBeforeEdit 同語意，但在同步 execute body 內再驗一次 →
+        // 關掉 preToolPolicy（policy 期驗 mtime）到此處落地之間的 TOCTOU 窗（併發 lane 場景）。
+        try { const rp = realpathSync(p); const base = readFiles.get(rp); if (base !== undefined && statSync(p).mtimeMs > base) return txt({ error: `${path} 在你 read 之後被改動，請重新 read 再寫`, path }); } catch { /* 新檔無 realpath → 略（建新檔不涉覆寫） */ }
         const body = content ?? '';
         mkdirSync(dirname(p), { recursive: true });          // ① 自動建父目錄
         const tmp = `${p}.tmp-${process.pid}`;               // ② 原子寫：暫存檔 + rename
