@@ -419,6 +419,17 @@ export const minutesGoal = (transcript) => [
   String(transcript || '').slice(0, 24000),
 ].join('\n');
 
+// 上傳文件自動簡報 prompt：AI 主動用一兩句說明文件在講什麼，再提議 1–3 件可據此做的具體事。
+// 內容已由 HTTP 層抽好（doc-extract／純文字）傳入，只讀不改；語氣像會議裡自然搭話。
+export const briefPrompt = (name, text) => [
+  `有成員剛上傳了檔案《${name}》到會議工作區。以下是它的內容（節選）。`,
+  '請先用一到兩句話說明這份檔案在講什麼，再主動提議接下來可以據此做的 1–3 件具體事',
+  '（例如「要我整理成摘要／翻譯／據此起草…嗎？」）。語氣像在會議裡自然搭話：簡潔、不客套、不要逐段複述。',
+  '',
+  '---',
+  String(text || '').slice(0, 12000),
+].join('\n');
+
 export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages = 300, maxPending = 50, maxConcurrency = 3 } = {}) {
   const rooms = new Map();  // id -> room
   const subs = new Map();   // id -> Set<(ev)=>void>
@@ -552,6 +563,27 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     return { ok: true };
   }
 
+  // 主動簡報：有人上傳可讀文件 → AI 不等 @ai 就用一兩句說明並提議下一步。
+  // 走保留 lane '__auto__'（獨立私有 session、參與房級忙碌狀態、不進成員名單、不被 schedule 拉起），
+  // readOnly（只讀不改共享檔）。失敗靜默（自動行為不該用錯誤訊息打擾會議）。
+  async function generateBrief(r, { name, text }) {
+    const L = laneOf(r, '__auto__');
+    if (L.status === 'thinking') return; // 已在簡報中 → 不疊（連續上傳多檔時，逐一交給回合末不處理，簡單起見只簡報當前忙完前的第一個）
+    L.status = 'thinking'; emitStatus(r, '__auto__'); persist(r);
+    let finalText = '';
+    const emit = (ev) => { if (ev?.type === 'text') finalText += ev.delta || ''; fanout(r, { type: 'ai', by: '__auto__', ev }); };
+    try {
+      const res = await runAiTurn({ room: r, input: briefPrompt(name, text), emit, onAgent: (a) => { L.agentRef = a; }, readOnly: true, sessionId: L.sessionId || undefined });
+      if (res?.sessionId) L.sessionId = res.sessionId; // __auto__ 私有 session：連續上傳有前後文
+      const t = (res?.text ?? finalText) || '';
+      if (t.trim()) push(r, { kind: 'ai', name: 'AI', text: t, by: '__auto__' });
+    } catch { /* 靜默：簡報失敗不打擾會議 */ }
+    finally {
+      L.agentRef = null;
+      L.status = 'idle'; emitStatus(r, '__auto__'); persist(r);
+    }
+  }
+
   return {
     // 中止「自己那條 lane」進行中的 AI 回合（各停各的）：abort 該 lane 的 agent + 清該 lane pending + 廣播中止訊息。
     // 不傳 memberId（或該成員無進行中回合）→ 409，不影響別人的 lane。
@@ -571,6 +603,14 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       if (roomStatus(r) === 'thinking') return { error: 'AI 忙碌中，請稍候再試', code: 409 };
       if (!r.messages.length) return { error: '尚無對話可整理', code: 400 };
       generateMinutes(r); // 不 await：交給 SSE 廣播進度與結果
+      return { ok: true };
+    },
+    // 上傳文件 → AI 主動簡報（HTTP 層抽好文字後呼叫；fire-and-forget，結果經 SSE 廣播）。
+    // 需部署有接 runAiTurn；text 空或房不存在則靜默略過（自動行為不報錯）。
+    autoBrief(id, { name = '檔案', text = '' } = {}) {
+      const r = rooms.get(id); if (!r || !runAiTurn) return { skipped: true };
+      if (!String(text).trim()) return { skipped: true };
+      generateBrief(r, { name, text });
       return { ok: true };
     },
     create({ workspace = 'default', pack = 'general', model = null, name = '', readonly = false } = {}) {
@@ -1243,6 +1283,16 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (!r.buffer || !r.buffer.length) return json(res, 400, { error: '空檔案' });
       try { mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, r.buffer); } catch (e) { return json(res, 400, { error: e.message }); }
       log({ room: mRoomUpload[1], action: 'upload', path: rel, size: r.buffer.length });
+      // 主動簡報：上傳的是可讀文件 → 抽文字讓 AI 主動說明+提議下一步（不等 @ai）。
+      // fire-and-forget、失敗靜默、不阻塞上傳回應；XITTO_ROOM_AUTO_BRIEF=0 可關；過大檔跳過避免抽取拖慢。
+      if (process.env.XITTO_ROOM_AUTO_BRIEF !== '0' && r.buffer.length <= 4 * 1048576) {
+        try {
+          let text = '';
+          if (isDocFile(full)) text = extractDocText(full);
+          else if (/\.(md|markdown|txt|csv|tsv|json|ya?ml|log|html?|xml)$/i.test(full)) text = r.buffer.toString('utf8');
+          if (text && text.trim()) rooms.autoBrief(mRoomUpload[1], { name: basename(full), text });
+        } catch { /* 靜默：簡報失敗不影響上傳 */ }
+      }
       return json(res, 200, { ok: true, name: basename(full), size: r.buffer.length, sub: rel });
     }
 

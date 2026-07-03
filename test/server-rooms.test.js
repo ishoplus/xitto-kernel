@@ -75,6 +75,34 @@ test('房間：@ai 觸發一輪 AI，串流事件與最終訊息都廣播；cont
   assert.equal(store.get(r.roomId).sessionId, 'sess'); // 首輪建立 sessionId → 續接
 });
 
+test('房間：上傳文件自動簡報——AI 不等 @ai 就主動說明並貼 AI 訊息（走 __auto__ lane）', async () => {
+  let capturedInput = null;
+  const store = createRoomStore({
+    runAiTurn: async ({ input, emit, readOnly }) => {
+      capturedInput = input;
+      assert.equal(readOnly, true);                  // 簡報只讀不改共享檔
+      emit({ type: 'text', delta: '這是一份需求文件。' });
+      return { sessionId: 'auto1', text: '這是一份需求文件。要我整理成摘要嗎？' };
+    },
+  });
+  const r = store.create({});
+  store.join(r.roomId, '小明');
+  const evs = [];
+  store.subscribe(r.roomId, (ev) => evs.push(ev));
+  assert.equal(store.autoBrief(r.roomId, { name: '需求.md', text: '首頁改版需求：加入登入。' }).ok, true);
+  await tick(); await tick(); await tick();
+  // prompt 帶入檔名與內容
+  assert.match(capturedInput, /需求\.md/);
+  assert.match(capturedInput, /首頁改版需求/);
+  // 主動貼出 AI 訊息（不需任何 @ai）
+  assert.ok(evs.some((e) => e.type === 'say' && e.message.kind === 'ai' && /要我整理成摘要/.test(e.message.text)));
+  // 忙碌/idle 狀態有廣播（__auto__ lane 參與房級聚合）
+  assert.ok(evs.some((e) => e.type === 'status' && e.status === 'thinking'));
+  assert.ok(evs.some((e) => e.type === 'status' && e.status === 'idle'));
+  // 空內容 / 沒接 runAiTurn → 靜默略過
+  assert.deepEqual(store.autoBrief(r.roomId, { name: 'x', text: '   ' }), { skipped: true });
+});
+
 test('房間：餵給 AI 的 input 前置會議室情境 + 成員名單（L1 群聊感知）', async () => {
   let capturedInput = null;
   const store = createRoomStore({ runAiTurn: async ({ input }) => { capturedInput = input; return { sessionId: 's', text: 'r' }; } });
