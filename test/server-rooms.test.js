@@ -75,6 +75,62 @@ test('房間：@ai 觸發一輪 AI，串流事件與最終訊息都廣播；cont
   assert.equal(store.get(r.roomId).sessionId, 'sess'); // 首輪建立 sessionId → 續接
 });
 
+test('房間：散會自動紀要——最後一人離開 → 自動整理；去重、門檻、非最後一人不觸發', async () => {
+  let minutesCalls = 0;
+  const store = createRoomStore({
+    runAiTurn: async () => ({ sessionId: 's', text: 'ok' }),
+    runMinutes: async () => { minutesCalls++; return { text: '紀要完成' }; },
+  });
+  const r = store.create({});
+  const a = store.join(r.roomId, '小明');
+  const b = store.join(r.roomId, '小華');
+  // 少於門檻（<3 條人類發言）→ 全員離開也不觸發
+  store.say(r.roomId, { memberId: a.memberId, text: '嗨' });
+  store.leave(r.roomId, a.memberId);
+  store.leave(r.roomId, b.memberId);        // 房空但只有 1 條發言 → 不整理
+  await tick(); await tick();
+  assert.equal(minutesCalls, 0, '瑣碎房（發言太少）不自動整理');
+
+  // 補足發言後，最後一人離開才觸發一次
+  const c = store.join(r.roomId, '小明');
+  const d = store.join(r.roomId, '小華');
+  store.say(r.roomId, { memberId: c.memberId, text: '首頁要改版' });
+  store.say(r.roomId, { memberId: d.memberId, text: '登入也要改' });
+  store.say(r.roomId, { memberId: c.memberId, text: '就這麼定' }); // 累計 4 條人類發言 ≥ 門檻
+  store.leave(r.roomId, c.memberId);          // 還有 d 在 → 不觸發
+  await tick();
+  assert.equal(minutesCalls, 0, '非最後一人離開不觸發');
+  store.leave(r.roomId, d.memberId);          // 最後一人 → 觸發
+  await tick(); await tick(); await tick();
+  assert.equal(minutesCalls, 1, '最後一人離開 → 自動整理一次');
+
+  // 再有人進出但沒有新發言 → 去重，不重跑
+  const e = store.join(r.roomId, '小明');
+  store.leave(r.roomId, e.memberId);
+  await tick(); await tick();
+  assert.equal(minutesCalls, 1, '自上次紀要後無新發言 → 不重跑');
+});
+
+test('房間：autoMinutes:false 或未接 runMinutes → 散會不自動整理', async () => {
+  // 未接 runMinutes
+  const s1 = createRoomStore({ runAiTurn: async () => ({}) });
+  const r1 = s1.create({});
+  const u1 = s1.join(r1.roomId, 'x');
+  for (const t of ['a', 'b', 'c']) s1.say(r1.roomId, { memberId: u1.memberId, text: t });
+  s1.leave(r1.roomId, u1.memberId);
+  await tick();
+  // 沒有 runMinutes → maybeAutoMinutes 直接 return，不拋錯即通過（無副作用可斷言，靠不 throw）
+  // 明確關閉開關
+  let calls = 0;
+  const s2 = createRoomStore({ runAiTurn: async () => ({}), runMinutes: async () => { calls++; return {}; }, autoMinutes: false });
+  const r2 = s2.create({});
+  const u2 = s2.join(r2.roomId, 'y');
+  for (const t of ['a', 'b', 'c']) s2.say(r2.roomId, { memberId: u2.memberId, text: t });
+  s2.leave(r2.roomId, u2.memberId);
+  await tick(); await tick();
+  assert.equal(calls, 0, 'autoMinutes:false → 不自動整理');
+});
+
 test('房間：上傳文件自動簡報——AI 不等 @ai 就主動說明並貼 AI 訊息（走 __auto__ lane）', async () => {
   let capturedInput = null;
   const store = createRoomStore({

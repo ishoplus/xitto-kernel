@@ -430,7 +430,7 @@ export const briefPrompt = (name, text) => [
   String(text || '').slice(0, 12000),
 ].join('\n');
 
-export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages = 300, maxPending = 50, maxConcurrency = 3 } = {}) {
+export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages = 300, maxPending = 50, maxConcurrency = 3, autoMinutes = true } = {}) {
   const rooms = new Map();  // id -> room
   const subs = new Map();   // id -> Set<(ev)=>void>
 
@@ -545,7 +545,9 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
 
   // 生成會議紀要：把「整場對話」（含未召喚 AI 的閒聊——那些沒進 session）整理成決策/待辦/摘要並產出檔案。
   // 走獨立 goal（fresh session、docgen pack）→ 不污染房間的共享對話 history；成品落房間 workspace，狀態轉 idle 時前端自動刷新檔案列表。
+  const userMsgCount = (r) => r.messages.reduce((n, m) => n + (m.kind === 'user' ? 1 : 0), 0);
   async function generateMinutes(r) {
+    r._minutesAt = userMsgCount(r); // 記下「已整理到第幾則人類發言」→ 供散會自動紀要去重（沒有新發言就不重跑）
     // 紀要用一條保留 lane（'__minutes__'）：參與房級聚合狀態（期間佔並發位、避免與寫入回合搶 workspace 檔），但不進成員名單、不被 schedule 拉起。
     const L = laneOf(r, '__minutes__');
     L.status = 'thinking'; emitStatus(r, '__minutes__'); persist(r);
@@ -583,6 +585,17 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       L.status = 'idle'; emitStatus(r, '__auto__'); persist(r);
     }
   }
+
+  // 散會自動紀要：最後一人離開房間 → 若自上次紀要後有夠多新發言，主動整理一份（不必誰記得按按鈕）。
+  // 去重靠 r._minutesAt（generateMinutes 設）；門檻擋掉「進來沒聊幾句就走」的瑣碎房；忙碌中則略過。
+  const maybeAutoMinutes = (r) => {
+    if (!autoMinutes || !runMinutes) return;
+    if (roomStatus(r) === 'thinking') return;              // 有回合/紀要在跑 → 不疊
+    const n = userMsgCount(r);
+    if (n < 3) return;                                     // 內容太少不值得整理
+    if (n <= (r._minutesAt || 0)) return;                  // 自上次紀要後沒有新發言 → 不重跑
+    generateMinutes(r);                                    // fire-and-forget（散會後無訂閱者也沒關係：紀要落 workspace 檔、系統訊息進 replay）
+  };
 
   return {
     // 中止「自己那條 lane」進行中的 AI 回合（各停各的）：abort 該 lane 的 agent + 清該 lane pending + 廣播中止訊息。
@@ -666,6 +679,7 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       const m = r.members.get(memberId); if (!m) return false;
       r.members.delete(memberId);
       fanout(r, { type: 'member_leave', name: m.name, members: memberNames(r), memberCount: r.members.size });
+      if (r.members.size === 0) maybeAutoMinutes(r); // 最後一人離開＝散會 → 自動整理紀要
       return true;
     },
     // 發言：立刻廣播給全員 + 進「發話者自己那條 lane」的佇列；點名 @ai 才觸發（同 lane 忙則排隊、回合末續跑）。
@@ -949,6 +963,8 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   const rooms = createRoomStore({
     persistDir: join(baseDir, 'rooms'),
     maxConcurrency: Number(process.env.XITTO_ROOM_CONCURRENCY || 3),
+    autoMinutes: process.env.XITTO_ROOM_AUTO_MINUTES !== '0', // 散會（最後一人離開）自動整理紀要；設 0 關閉
+
     runAiTurn: ({ room, input, emit, onAgent, readOnly, sessionId }) =>
       runKernel({ pack: room.pack, model: room.model || undefined, mode: 'turn', readOnly, input: expandFileRefs(input, workspaceDir(baseDir, room.workspace, local)), workspace: room.workspace, sessionId: sessionId || undefined },
         (ev) => { const m = mapEvent(ev); if (m) emit(m); }, undefined, onAgent),
