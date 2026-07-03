@@ -774,13 +774,13 @@ const closeFilePreview = () => ($("#file-preview").innerHTML = "");
 async function wbView(encPath, name) {
   const v = $("#file-preview"); if (!v) return;
   const url = `/v1/rooms/${roomId}/file?path=` + encPath + (authTok ? "&token=" + encodeURIComponent(authTok) : "");
-  const IMG = /\.(png|jpe?g|gif|webp|svg)$/i, HTMLF = /\.html?$/i, JSONF = /\.json$/i;
+  const IMG = /\.(png|jpe?g|gif|webp|svg)$/i, HTMLF = /\.html?$/i, JSONF = /\.json$/i, MD = /\.(md|markdown)$/i;
   const DOC = /\.(docx|pptx|xlsx|odt|odp|ods|rtf|pdf)$/i;
   let body = "";
   if (IMG.test(name)) body = `<img class="preview-img" src="${url}" alt="${esc(name)}">`;
   else if (HTMLF.test(name)) body = `<div class="empty">（HTML 檔案，請用「開新分頁」檢視）</div>`;
   else if (DOC.test(name)) { const r = await fetch(url + "&as=text").catch(() => null); body = (!r || !r.ok) ? `<div class="empty">（無法預覽，可下載原檔）</div>` : `<pre class="preview-pre">${esc(await r.text())}</pre>`; }
-  else { const txt = await fetch(url).then((r) => (r.ok ? r.text() : null)).catch(() => null); if (txt == null) body = `<div class="empty">（無法預覽）</div>`; else if (JSONF.test(name)) { try { body = `<pre class="preview-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`; } catch { body = `<pre class="preview-pre">${esc(txt)}</pre>`; } } else body = `<pre class="preview-pre">${esc(txt)}</pre>`; }
+  else { const txt = await fetch(url).then((r) => (r.ok ? r.text() : null)).catch(() => null); if (txt == null) body = `<div class="empty">（無法預覽）</div>`; else if (MD.test(name)) body = `<div class="md">${mdRender(txt)}</div>`; else if (JSONF.test(name)) { try { body = `<pre class="preview-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`; } catch { body = `<pre class="preview-pre">${esc(txt)}</pre>`; } } else body = `<pre class="preview-pre">${esc(txt)}</pre>`; }
   v.innerHTML = `<div class="preview-panel" role="dialog" aria-modal="true" aria-label="檔案預覽：${esc(name)}">
     <div class="preview-bar"><span class="preview-name">📄 ${esc(name)}</span><a href="${url}" target="_blank">開新分頁</a><a href="${url}&download=1">下載</a><span class="spacer"></span><button class="ghost" onclick="closeFilePreview()" type="button">✕ 關閉</button></div>
     <div class="preview-body">${body}</div></div>`;
