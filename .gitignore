@@ -29,3 +29,5 @@ bench/**/*.results.jsonl
 .env
 .env.*
 docs/*.docx
+# 內部 SSO 接入文件（含內網 IAM 端點／認證流程）— 留本機，勿進公開版控
+docs/12-sso-integration.md
