@@ -712,6 +712,7 @@ function pickMention(i) {
   hideMention(); ta.focus(); ta.dispatchEvent(new Event("input"));
 }
 $("#input").addEventListener("keydown", (e) => {
+  if (e.isComposing || e.keyCode === 229) return; // 輸入法組字中（拼音選字等）→ Enter/方向鍵交給 IME，別誤送出或誤選提及
   if (!mpop().hidden) {
     if (e.key === "ArrowDown") { e.preventDefault(); return moveMention(1); }
     if (e.key === "ArrowUp") { e.preventDefault(); return moveMention(-1); }

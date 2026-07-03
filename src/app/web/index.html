@@ -1494,6 +1494,7 @@ function renderCurrent(t) {
     const inp = $("#ans");
     inp.focus();
     inp.onkeydown = async (e) => {
+      if (e.isComposing || e.keyCode === 229) return; // 輸入法組字中 → Enter 交給 IME，別誤送出
       if (e.key === "Enter" && inp.value.trim()) {
         const ans = inp.value.trim();
         inp.disabled = true;
