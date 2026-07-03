@@ -82,9 +82,13 @@ body { display: flex; flex-direction: column; }
 .composer { border-top: 1px solid var(--line); background: var(--inset); padding: var(--sp-3) var(--sp-4); position: relative; }
 
 /* @ 提及 / 檔案引用 的內文樣式 */
-.mention { color: var(--accent); font-weight: 600; }
+.mention { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); padding: 0 4px; border-radius: 5px; font-weight: 600; }
 .mention.ai { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); padding: 0 4px; border-radius: 5px; }
 .mention.me { background: color-mix(in srgb, var(--accent) 24%, transparent); padding: 0 4px; border-radius: 5px; }
+/* 自己訊息的氣泡底是 accent-strong（≈ 靛藍提及色 → 糊在一起、淺色主題甚至同色）。
+   在自己氣泡內把提及改成「白字＋半透明白晶片」確保對比；@ai 保留綠識別但加深綠晶片。 */
+.msg.me .mention { color: var(--btnfg); background: color-mix(in srgb, var(--btnfg) 22%, transparent); padding: 0 4px; border-radius: 5px; }
+.msg.me .mention.ai { color: #eafff4; background: color-mix(in srgb, var(--ok) 46%, transparent); }
 .msg.mentions-me .bubble { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
 .ref { background: var(--inset); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; font: inherit; font-size: .92em; cursor: pointer; color: var(--fg); }
 .ref:hover { background: var(--accent-soft); }
