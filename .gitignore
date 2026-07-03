@@ -24,3 +24,8 @@ verified*.jsonl
 
 # GAIA 跑分輸出
 bench/**/*.results.jsonl
+
+# SSO 憑證與供應商原始規格文件（含 client_secret 等敏感值）— 勿進公開版控
+.env
+.env.*
+docs/*.docx
