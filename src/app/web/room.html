@@ -76,6 +76,8 @@ body { display: flex; flex-direction: column; }
 .msg.system .bubble { background: transparent; border: 0; color: var(--warn); font-size: 13px; text-align: center; padding: 2px; }
 .msg .bubble .tool { color: var(--dim); font-size: 12px; font-family: var(--mono, ui-monospace,SFMono-Regular,Menlo,monospace); margin-bottom: 4px; }
 .typing { color: var(--dim); font-size: 13px; padding: 0 var(--sp-4) 4px; height: 18px; text-align: center; }
+.ai-status { color: #5b63e6; font-size: 13px; padding: 0 var(--sp-4) 2px; min-height: 16px; text-align: center; font-weight: 600; }
+.ai-status:empty { padding: 0; min-height: 0; }
 
 .composer { border-top: 1px solid var(--line); background: var(--inset); padding: var(--sp-3) var(--sp-4); position: relative; }
 
@@ -182,6 +184,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
   <!-- 主區：訊息串 + 輸入 -->
   <main class="thread">
     <div class="thread-scroll" id="logWrap"><div class="thread-inner" id="log"></div></div>
+    <div class="ai-status" id="aiStatus"></div>
     <div class="typing" id="typing"></div>
     <div class="composer">
       <div class="mention-pop" id="mpop" hidden></div>
@@ -285,7 +288,8 @@ let canWrite = true;                       // 是否能上傳/建夾（唯讀會
 let currentMembers = [], lastFiles = [];   // @ 自動完成的候選來源：成員名、目前資料夾的檔案
 let onlineSet = new Set();                  // presence：目前在線的成員名
 const typers = new Map();                   // 打字中：name → 清除 timer
-let aiMsgEl = null, aiText = "", aiTools = [];
+const aiLanes = new Map();                  // 每條 AI lane 一個串流泡泡：by → { el, text, tools }（多人並行各問各的，不互相蓋字）
+const aiThinkers = new Map();               // 進行中的 AI lane：by → 顯示標籤（誰的 AI 在跑）→ per-user 狀態列
 let MODELS = [], DEFAULT_MODEL = "";   // 可選模型清單（master 拉到）；空=不顯示選單（訪客或單一模型）
 
 // 拉可選模型清單（需 master）；成功則填建房選單並顯示。訪客/單模型 → 靜默略過。
@@ -399,8 +403,9 @@ function returnToLobby() {
   // 復位憑證到「進房前」：SSO 下為空（改靠 cookie），非 SSO 下回退 master token。
   // 否則殘留的成員 token 會讓大廳操作（建房/關房/切模型，走 authed）被 401 unauthorized。
   roomId = null; memberId = null; myName = ""; canWrite = true; onlineSet = new Set(); currentMembers = []; authTok = token || "";
-  // 清畫面：訊息串 / 成員 / 檔案 / 打字中 / 邀請框 / 標題與 pill，避免再進他房時殘留上一場內容。
-  $("#log").innerHTML = ""; $("#members").innerHTML = ""; $("#wbfiles").innerHTML = ""; $("#typing").textContent = "";
+  aiLanes.clear(); aiThinkers.clear(); // 清 per-lane 串流泡泡與 per-user AI 狀態
+  // 清畫面：訊息串 / 成員 / 檔案 / 打字中 / AI 狀態 / 邀請框 / 標題與 pill，避免再進他房時殘留上一場內容。
+  $("#log").innerHTML = ""; $("#members").innerHTML = ""; $("#wbfiles").innerHTML = ""; $("#typing").textContent = ""; $("#aiStatus").textContent = "";
   const ib = $("#inviteBox"); ib.hidden = true; ib.value = "";
   $("#roomTitle").textContent = "專案會議室"; document.title = "專案會議室";
   $("#mcount").textContent = "(0)";
@@ -541,10 +546,10 @@ function handle(ev) {
     case "member_leave": addSystem(`${ev.name} 離開了`); onlineSet.delete(ev.name); renderMembers(ev.members); return;
     case "presence": onlineSet = new Set(ev.online || []); renderMembers(currentMembers); return;
     case "typing": onTyping(ev.name, ev.on); return;
-    case "status": setStatus(ev.status); if (ev.status === "idle") { finishAi(); loadFiles(); } return;
+    case "status": updateThinker(ev.by, ev.byName, ev.laneStatus); setStatus(ev.status); if (ev.laneStatus === "idle" && ev.by) finishAi(ev.by); if (ev.status === "idle") loadFiles(); return;
     case "say": renderMessage(ev.message); return;
     case "room_model": setModelPill(ev.model); return;
-    case "ai": handleAi(ev.ev); return;
+    case "ai": handleAi(ev.by, ev.byName, ev.ev); return;
     case "room_closed": addSystem("此會議室已被關閉，連線結束。"); if (es) { es.close(); es = null; } $("#input").disabled = true; $("#send").disabled = true; setStatus("已關閉"); return;
   }
 }
@@ -567,7 +572,7 @@ function renderText(text) {
 const renderedIds = new Set();   // 已渲染的訊息 id → SSE 斷線重連時服務端會重放全部歷史，按 id 去重避免重複渲染
 function renderMessage(m) {
   if (m.id) { if (renderedIds.has(m.id)) return; renderedIds.add(m.id); } // 先記 id（含 AI 落定分支）→ 重連重放同 id 一律略過
-  if (m.kind === "ai" && aiMsgEl) { aiText = m.text || aiText; finishAi(); return; } // 串流泡泡落定，避免重複
+  if (m.kind === "ai" && aiLanes.has(m.by)) { finishAi(m.by, m.text); return; } // 該 lane 的串流泡泡落定（用權威全文），避免重複；無 live 泡泡（重連重放）則往下走靜態渲染
   const cls = m.kind === "ai" ? "ai" : m.kind === "system" ? "system" : (m.name === myName ? "me" : "");
   const el = document.createElement("div");
   el.className = "msg " + cls;
@@ -583,26 +588,49 @@ function renderMessage(m) {
 }
 const addSystem = (text) => renderMessage({ kind: "system", text });
 
-function handleAi(ev) {
+// lane 顯示標籤：成員 lane → 該成員名（AI 回誰）；保留 lane → 人話。
+function laneLabel(by, byName) {
+  if (by === "__minutes__") return "會議紀要"; if (by === "__auto__") return "AI 簡報";
+  return byName || "";
+}
+// 串流：每條 lane（by）一個獨立泡泡 → 多人並行各問各的不會互相蓋字。
+function handleAi(by, byName, ev) {
   if (!ev) return;
-  if (!aiMsgEl) {
-    aiMsgEl = document.createElement("div"); aiMsgEl.className = "msg ai";
-    aiMsgEl.innerHTML = `<div class="who">AI</div><div class="bubble"></div>`;
-    appendLog(aiMsgEl); aiText = ""; aiTools = [];
+  let lane = aiLanes.get(by);
+  if (!lane) {
+    const el = document.createElement("div"); el.className = "msg ai";
+    const label = laneLabel(by, byName);
+    el.innerHTML = `<div class="who">AI${label ? " → " + esc(label) : ""}</div><div class="bubble"></div>`;
+    appendLog(el); lane = { el, text: "", tools: [] }; aiLanes.set(by, lane);
   }
-  const bubble = aiMsgEl.querySelector(".bubble");
-  if (ev.type === "text") aiText += ev.delta || "";
-  else if (ev.type === "tool") aiTools.push(`⏺ ${esc(ev.name)}${ev.args ? " " + esc(argSum(ev.args)) : ""}`);
-  else if (ev.type === "phase") aiTools.push(`… ${esc(ev.phase)}`);
-  bubble.innerHTML = (aiTools.length ? `<div class="tool">${aiTools.slice(-6).join("<br>")}</div>` : "") + esc(aiText) + (aiText ? "" : (aiTools.length ? "" : "…"));
+  const bubble = lane.el.querySelector(".bubble");
+  if (ev.type === "text") lane.text += ev.delta || "";
+  else if (ev.type === "tool") lane.tools.push(`⏺ ${esc(ev.name)}${ev.args ? " " + esc(argSum(ev.args)) : ""}`);
+  else if (ev.type === "phase") lane.tools.push(`… ${esc(ev.phase)}`);
+  bubble.innerHTML = (lane.tools.length ? `<div class="tool">${lane.tools.slice(-6).join("<br>")}</div>` : "") + esc(lane.text) + (lane.text ? "" : (lane.tools.length ? "" : "…"));
   scrollDown();
 }
-function finishAi() {
-  if (!aiMsgEl) return;
-  // 落定：收掉步驟雜訊，把整段文字用 markdown 渲染（串流中間態維持純文字，
-  // 半截 **粗體 / 未閉合 ``` 逐字重繪代價高，落定再整體渲染 —— 同 Claude Code 做法）。
-  if (aiText) { const b = aiMsgEl.querySelector(".bubble"); b.innerHTML = mdRender(aiText); b.classList.add("md"); }
-  aiMsgEl = null; aiText = ""; aiTools = [];
+// 落定某條 lane 的泡泡：優先用權威全文（say 事件帶的 m.text），否則用串流累積值。
+// 收掉步驟雜訊，整段用 markdown 渲染（串流中間態維持純文字，半截 **粗體/未閉合 ``` 逐字重繪代價高，落定再整體渲染）。
+function finishAi(by, finalText) {
+  const lane = aiLanes.get(by); if (!lane) return;
+  const text = finalText != null ? finalText : lane.text;
+  const b = lane.el.querySelector(".bubble");
+  if (text) { b.innerHTML = mdRender(text); b.classList.add("md"); }
+  else lane.el.remove(); // 空泡泡（如純工具後被中止）→ 移除佔位
+  aiLanes.delete(by);
+}
+// per-user AI 狀態列：哪幾條 lane 正在跑（thinking），以人話呈現「X 的 AI 思考中…」。
+function updateThinker(by, byName, laneStatus) {
+  if (!by) return;
+  if (laneStatus === "thinking") aiThinkers.set(by, laneLabel(by, byName) || "AI");
+  else aiThinkers.delete(by);
+  renderAiStatus();
+}
+function renderAiStatus() {
+  const el = $("#aiStatus"); if (!el) return;
+  const names = [...aiThinkers.values()];
+  el.textContent = !names.length ? "" : names.length === 1 ? `🤔 ${names[0]} 的 AI 回覆中…` : `🤔 ${names.slice(0, 3).join("、")}${names.length > 3 ? " 等" : ""} 的 AI 回覆中…`;
 }
 const argSum = (a) => { const v = a.command ?? a.path ?? a.pattern ?? a.query ?? a.url ?? a.name ?? a.topic; return v ? String(v).slice(0, 60) : ""; };
 const appendLog = (el) => { $("#log").appendChild(el); scrollDown(); };

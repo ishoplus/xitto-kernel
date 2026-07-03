@@ -452,6 +452,45 @@ test('房間：生成會議紀要 — 帶「整段 transcript」呼叫 runMinute
   assert.ok(evs.some((e) => e.type === 'say' && e.message.kind === 'system' && /會議紀要/.test(e.message.text)));
 });
 
+test('房間：長會（超過 replay buffer 上限）→ 紀要仍含最早的發言（完整逐字稿）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xk-transcript-'));
+  try {
+    let gotTranscript = null;
+    const store = createRoomStore({
+      runAiTurn: async () => ({}),
+      runMinutes: async ({ transcript }) => { gotTranscript = transcript; return { text: 'ok' }; },
+      persistDir: dir, maxMessages: 5, // 硬砍成 5 則 → 逼出 replay buffer 溢位
+    });
+    const r = store.create({});
+    const u = store.join(r.roomId, '小明');
+    store.say(r.roomId, { memberId: u.memberId, text: '最早的關鍵決策：採用方案 Z' }); // 會被 buffer 砍掉
+    for (let i = 0; i < 10; i++) store.say(r.roomId, { memberId: u.memberId, text: '後續閒聊 ' + i });
+    assert.ok(store.get(r.roomId).messages.length <= 5, 'replay buffer 已被砍到上限');
+    assert.equal(store.minutes(r.roomId).ok, true);
+    await tick(); await tick(); await tick();
+    assert.match(gotTranscript, /方案 Z/, '紀要逐字稿仍含被 buffer 砍掉的最早發言');
+    assert.match(gotTranscript, /後續閒聊 9/, '也含最新發言');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('房間：status 事件帶 by/byName/laneStatus（供前端 per-user AI 狀態）', async () => {
+  const gate = defer();
+  const store = createRoomStore({ runAiTurn: async () => { await gate.promise; return { text: 'hi' }; } });
+  const r = store.create({});
+  const u = store.join(r.roomId, '小明');
+  const evs = []; store.subscribe(r.roomId, (ev) => { if (ev.type === 'status') evs.push(ev); });
+  store.say(r.roomId, { memberId: u.memberId, text: '@ai 你好' });
+  await tick();
+  const thinking = evs.find((e) => e.laneStatus === 'thinking');
+  assert.ok(thinking, '有 thinking 的 status 事件');
+  assert.equal(thinking.by, u.memberId, 'by = 該成員 lane');
+  assert.equal(thinking.byName, '小明', 'byName = 該成員名（供前端顯示「小明 的 AI…」）');
+  assert.equal(thinking.status, 'thinking', '聚合 status 仍在（相容現有 UI）');
+  gate.resolve(); await tick(); await tick();
+  const idle = evs.find((e) => e.laneStatus === 'idle' && e.by === u.memberId);
+  assert.ok(idle, '該 lane 完成時廣播 laneStatus idle');
+});
+
 test('房間：紀要 AI 忙碌 → 409；未啟用（無 runMinutes）→ 501', () => {
   const busy = createRoomStore({ runAiTurn: async () => ({}), runMinutes: async () => ({}) });
   const r = busy.create({}); busy.get(r.roomId).lanes.set('x', { status: 'thinking' }); // 造一條忙碌 lane → 房級聚合狀態 thinking

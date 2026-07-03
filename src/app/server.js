@@ -3,7 +3,7 @@
 // JSON 或 SSE 串流，以及「背景任務 + 完成通知（webhook）」—— 派任務出去、做完回呼，不用一直盯著。
 // 這是「另一個 app 消費同一組 kernel 事件」—— 不動 kernel 核心。
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, isAbsolute, relative, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, networkInterfaces } from 'node:os';
@@ -479,6 +479,15 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
 
   const snapshot = (r) => ({ id: r.id, name: r.name || '', workspace: r.workspace, pack: r.pack, model: r.model || null, readonly: !!r.readonly, sessionId: r.sessionId, inviteToken: r.inviteToken, messages: r.messages, createdAt: r.createdAt });
   const persist = (r) => { if (!persistDir) return; try { mkdirSync(persistDir, { recursive: true }); writeFileSync(join(persistDir, r.id + '.json'), JSON.stringify(snapshot(r))); } catch { /* 略 */ } };
+  // 完整逐字稿（append-only）：replay buffer（r.messages）為省記憶體硬砍最近 maxMessages 則，
+  // 但紀要需要「整場」內容。每則訊息在此另 append 進 <persistDir>/<id>.transcript.jsonl（不進記憶體、不砍）。
+  const transcriptPath = (r) => join(persistDir, r.id + '.transcript.jsonl');
+  const appendTranscript = (r, m) => { if (!persistDir) return; try { mkdirSync(persistDir, { recursive: true }); appendFileSync(transcriptPath(r), JSON.stringify({ ts: m.ts, kind: m.kind, name: m.name || m.kind, text: m.text }) + '\n'); } catch { /* 略 */ } };
+  // 取整場逐字稿：優先讀 append-only 檔（含被 replay buffer 砍掉的前段）；無持久化/無檔則退回 r.messages。
+  const fullTranscript = (r) => {
+    if (persistDir) { try { const raw = readFileSync(transcriptPath(r), 'utf8'); const lines = raw.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); if (lines.length) return lines; } catch { /* 無檔 → 退回 */ } }
+    return r.messages;
+  };
   if (persistDir && existsSync(persistDir)) {
     for (const f of readdirSync(persistDir).filter((x) => x.endsWith('.json')).sort()) {
       try {
@@ -511,6 +520,7 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
   const push = (r, msg) => {
     const m = { id: newId('m'), ts: new Date().toISOString(), ...msg };
     r.messages.push(m); if (r.messages.length > maxMessages) r.messages.shift();
+    appendTranscript(r, m); // 進完整逐字稿（不受 replay buffer 上限影響）→ 長會紀要不漏前段
     fanout(r, { type: 'say', message: m });
     return m;
   };
@@ -542,8 +552,10 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     return roomContext(r, { readOnly }) + shared + '〔請你回應以下發言〕\n' + batch.map((m) => `[${m.name}] ${m.text}`).join('\n');
   };
 
-  // 房級狀態廣播（聚合）：任一 lane 忙 = thinking。帶 by（哪條 lane 變動）供前端日後做 per-user 呈現；ev.status 仍是聚合值，相容現有 UI。
-  const emitStatus = (r, mid) => fanout(r, { type: 'status', status: roomStatus(r), by: mid });
+  // lane 的顯示標籤：成員 lane → 該成員名；保留 lane → 人話（供前端 per-user 狀態/串流泡泡標示）。
+  const laneLabel = (r, mid) => (mid === '__minutes__' ? '會議紀要' : mid === '__auto__' ? 'AI 簡報' : (r.members.get(mid)?.name || '某成員'));
+  // 房級狀態廣播：帶聚合 status（相容現有 UI 單一狀態列/停止鈕）＋ by/byName/laneStatus（哪條 lane、誰、該 lane 現況）供前端做 per-user 呈現。
+  const emitStatus = (r, mid) => { const L = r.lanes.get(mid); fanout(r, { type: 'status', status: roomStatus(r), by: mid, byName: laneLabel(r, mid), laneStatus: L ? L.status : 'idle' }); };
 
   // 有界並發排程：把「有召喚待處理、且目前 idle」的 lane 拉起來跑，直到達到房間並發上限。
   // 上限保護（maxConcurrency）：避免一房 N 人同時 @ai 就對 provider 併發 N 條 → 超出的排隊，等有 lane 結束再拉起。
@@ -570,7 +582,7 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     const input = buildInput(r, L, mid, batch, readOnly, seen);
     const member = r.members.get(mid);
     let finalText = '';
-    const emit = (ev) => { if (ev?.type === 'text') finalText += ev.delta || ''; fanout(r, { type: 'ai', by: mid, ev }); };
+    const emit = (ev) => { if (ev?.type === 'text') finalText += ev.delta || ''; fanout(r, { type: 'ai', by: mid, byName: member?.name || '', ev }); };
     const onAgent = (a) => { L.agentRef = a; };
     try {
       const res = await runAiTurn({ room: r, input, emit, onAgent, readOnly, sessionId: L.sessionId || undefined });
@@ -594,7 +606,7 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     // 紀要用一條保留 lane（'__minutes__'）：參與房級聚合狀態（期間佔並發位、避免與寫入回合搶 workspace 檔），但不進成員名單、不被 schedule 拉起。
     const L = laneOf(r, '__minutes__');
     L.status = 'thinking'; emitStatus(r, '__minutes__'); persist(r);
-    const transcript = r.messages.map((m) => `[${m.name || m.kind}] ${m.text}`).join('\n');
+    const transcript = fullTranscript(r).map((m) => `[${m.name || m.kind}] ${m.text}`).join('\n'); // 整場（含被 replay buffer 砍掉的前段）
     const emit = (ev) => fanout(r, { type: 'ai', by: '__minutes__', ev });
     try {
       const res = await runMinutes({ room: r, transcript, emit, onAgent: (a) => { L.agentRef = a; } });
@@ -703,7 +715,7 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       fanout(r, { type: 'room_closed', roomId: id });
       const s = subs.get(id); if (s) { s.clear(); subs.delete(id); }
       rooms.delete(id);
-      if (persistDir) { try { rmSync(join(persistDir, id + '.json'), { force: true }); } catch { /* 略 */ } }
+      if (persistDir) { try { rmSync(join(persistDir, id + '.json'), { force: true }); rmSync(transcriptPath(r), { force: true }); } catch { /* 略 */ } }
       return { ok: true, sessionId: r.sessionId, sessionIds };
     },
     // 加入房間 → 發 memberId + 專屬成員 token（後續發言/收流的憑證，區分身分、防冒名）+ 廣播進場。
