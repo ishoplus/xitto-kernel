@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRoomStore, mentionsAi, createServerApp, defaultAuth, createRoleStore, minutesGoal, lanIPs, joinUploadRel } from '../src/app/server.js';
+import { createRoomStore, mentionsAi, createServerApp, defaultAuth, createRoleStore, minutesGoal, lanIPs, joinUploadRel, classifyLedger, appendLedger } from '../src/app/server.js';
 import { isMutating } from '../src/kernel/tool-registry.js';
 import { createGeneralPack } from '../src/packs/general/index.js';
 
@@ -73,6 +73,53 @@ test('房間：@ai 觸發一輪 AI，串流事件與最終訊息都廣播；cont
   assert.ok(evs.some((e) => e.type === 'status' && e.status === 'idle'));
   assert.ok(evs.some((e) => e.type === 'say' && e.message.kind === 'ai' && e.message.text === '回覆完成'));
   assert.equal(store.get(r.roomId).sessionId, 'sess'); // 首輪建立 sessionId → 續接
+});
+
+test('classifyLedger：決策/待辦廉價分類（保守；同時命中偏待辦）', () => {
+  // 決策
+  assert.equal(classifyLedger('那就這麼定，用 PostgreSQL'), 'decision');
+  assert.equal(classifyLedger('結論是先上 MVP'), 'decision');
+  assert.equal(classifyLedger('我們採用方案 B'), 'decision');
+  assert.equal(classifyLedger("let's go with option A"), 'decision');
+  // 待辦
+  assert.equal(classifyLedger('我來負責前端改版'), 'action');
+  assert.equal(classifyLedger('這個週五前完成'), 'action');
+  assert.equal(classifyLedger('麻煩你把文件整理一下'), 'action');
+  assert.equal(classifyLedger('deadline 是下週三'), 'action');
+  // 同時像決策又像待辦（有指派/期限）→ 偏待辦
+  assert.equal(classifyLedger('就這麼定，我來處理，週五前交'), 'action');
+  // 一般閒聊 → null（保守不亂抓）
+  assert.equal(classifyLedger('大家早安'), null);
+  assert.equal(classifyLedger('這個想法不錯欸'), null);
+  assert.equal(classifyLedger(''), null);
+});
+
+test('appendLedger：即時把決策/待辦追加進 會議記錄.md（分段、最新在上、去重）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-'));
+  assert.equal(appendLedger(dir, { kind: 'decision', name: '小明', text: '用 PostgreSQL' }), true);
+  assert.equal(appendLedger(dir, { kind: 'action', name: '小華', text: '週五前交設計稿' }), true);
+  assert.equal(appendLedger(dir, { kind: 'decision', name: '小明', text: '用 PostgreSQL' }), false, '同段相同原句 → 去重');
+  const md = readFileSync(join(dir, '會議記錄.md'), 'utf8');
+  assert.match(md, /## 決策[\s\S]*小明.*用 PostgreSQL/);
+  assert.match(md, /## 待辦[\s\S]*小華.*週五前交設計稿/);
+  // 決策不會跑進待辦段
+  const 待辦段 = md.slice(md.indexOf('## 待辦'));
+  assert.doesNotMatch(待辦段, /用 PostgreSQL/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('房間：發言命中決策/待辦 → 觸發 onLedger；閒聊不觸發', async () => {
+  const hits = [];
+  const store = createRoomStore({ runAiTurn: async () => ({}), onLedger: ({ kind, name, text }) => hits.push({ kind, name, text }) });
+  const r = store.create({});
+  const u = store.join(r.roomId, '小明');
+  store.say(r.roomId, { memberId: u.memberId, text: '隨便聊聊天氣' });     // 閒聊 → 不記
+  store.say(r.roomId, { memberId: u.memberId, text: '就這麼定，用方案 A' }); // 決策
+  store.say(r.roomId, { memberId: u.memberId, text: '我來負責寫文件' });     // 待辦
+  assert.deepEqual(hits, [
+    { kind: 'decision', name: '小明', text: '就這麼定，用方案 A' },
+    { kind: 'action', name: '小明', text: '我來負責寫文件' },
+  ]);
 });
 
 test('房間：散會自動紀要——最後一人離開 → 自動整理；去重、門檻、非最後一人不觸發', async () => {

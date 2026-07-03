@@ -430,7 +430,50 @@ export const briefPrompt = (name, text) => [
   String(text || '').slice(0, 12000),
 ].join('\n');
 
-export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages = 300, maxPending = 50, maxConcurrency = 3, autoMinutes = true } = {}) {
+// 決策／待辦的廉價啟發式分類（零 token：不呼叫 LLM，只用正則）。
+// 保守：寧可漏抓也不亂抓（誤判會污染記錄）。同時命中→有指派/期限者算「待辦」，否則「決策」。
+// 回 'action' | 'decision' | null。
+export function classifyLedger(text) {
+  const s = String(text || '');
+  if (!s.trim()) return null;
+  const action =
+    /(^|[\s，,、])(我來|我負責|我來負責|我處理|我搞定|我跟進|你來|你負責|請你|麻煩你?|幫我|指派|分派|認領)/.test(s) ||
+    /(待辦|to-?do|action item|行動項|記得要|別忘了|要記得)/i.test(s) ||
+    /(deadline|截止|期限|限期|交期)/i.test(s) ||
+    /((這|本|下|上)?(週|周|禮拜|星期)[一二三四五六日天]|今天|明天|後天|下週|下周|月底|週末|周末|\d{1,2}\/\d{1,2}|\d{1,2}月\d{1,2}[日號])[^。！!？?]{0,6}(前|之前|截止|完成|交)/.test(s) ||
+    /(前|之前)\s*(完成|交付?|給我|做完|搞定|提交)/.test(s);
+  const decision =
+    /(就這麼定|就這樣定|就這麼辦|就這樣辦|定案|拍板|敲定|一致(同意|通過)|結論(是|為|就是)|最終決定|決議|我們(就)?(用|採用|選用|選擇)|那就(用|採用|選))/.test(s) ||
+    /\b(decide[ds]?|decision|let'?s\s+go\s+with|finaliz)/i.test(s);
+  if (action) return 'action';
+  if (decision) return 'decision';
+  return null;
+}
+
+// 把一條決策／待辦即時追加進工作區的「會議記錄.md」（活的、討論中就留痕；散會另出正式紀要）。
+// 新項插在對應段落標題正下方（最新在上）；輕量去重（同段已有相同原句就跳過）。純同步檔操作、失敗靜默。
+export function appendLedger(dir, { kind, name, text }) {
+  const file = join(dir, '會議記錄.md');
+  const header = kind === 'action' ? '## 待辦' : '## 決策';
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return false;
+  const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const line = `- [${name}] ${clean}　（${ts}）`;
+  let body = '';
+  try { body = existsSync(file) ? readFileSync(file, 'utf8') : ''; } catch { body = ''; }
+  if (!body.trim()) body = '# 會議記錄（自動彙整，討論中即時留痕；散會會另出正式紀要）\n\n## 決策\n\n## 待辦\n';
+  const lines = body.split('\n');
+  let idx = lines.findIndex((l) => l.trim() === header);
+  if (idx === -1) { lines.push('', header); idx = lines.length - 1; }
+  // 去重：同一段落已有一模一樣的原句 → 不重複記
+  const secEnd = lines.findIndex((l, i) => i > idx && /^##\s/.test(l));
+  const sec = lines.slice(idx + 1, secEnd === -1 ? undefined : secEnd);
+  if (sec.some((l) => l.includes(clean))) return false;
+  lines.splice(idx + 1, 0, line);
+  try { mkdirSync(dir, { recursive: true }); writeFileSync(file, lines.join('\n')); return true; } catch { return false; }
+}
+
+export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages = 300, maxPending = 50, maxConcurrency = 3, autoMinutes = true, onLedger } = {}) {
   const rooms = new Map();  // id -> room
   const subs = new Map();   // id -> Set<(ev)=>void>
 
@@ -691,6 +734,8 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       const msg = String(text ?? '').trim(); if (!msg) return { error: '發言不可為空', code: 400 };
       const mention = mentionsAi(msg);
       push(r, { kind: 'user', name: m.name, text: msg, by: memberId }); // by=發話者 → 別的 lane 的共享增量會據此排除（不把自己的話當「別人動態」）
+      // 決策/待辦即時沉澱：廉價正則命中（零 token）→ 交 app 層追加進「會議記錄.md」。失敗靜默，不影響發言。
+      if (onLedger) { const tag = classifyLedger(msg); if (tag) { try { onLedger({ room: r, kind: tag, name: m.name, text: msg }); } catch { /* 靜默 */ } } }
       const L = laneOf(r, memberId);
       L.pending.push({ name: m.name, text: msg, mention, writeAllowed: writeAllowed !== false });
       while (L.pending.length > maxPending) L.pending.shift(); // 上限保護（保留最近，含召喚）
@@ -964,6 +1009,9 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     persistDir: join(baseDir, 'rooms'),
     maxConcurrency: Number(process.env.XITTO_ROOM_CONCURRENCY || 3),
     autoMinutes: process.env.XITTO_ROOM_AUTO_MINUTES !== '0', // 散會（最後一人離開）自動整理紀要；設 0 關閉
+    // 決策/待辦即時沉澱：發言命中廉價正則 → 追加進該房工作區的「會議記錄.md」（零 token）；XITTO_ROOM_AUTO_LEDGER=0 關閉。
+    onLedger: process.env.XITTO_ROOM_AUTO_LEDGER === '0' ? undefined
+      : ({ room, kind, name, text }) => appendLedger(workspaceDir(baseDir, room.workspace, local), { kind, name, text }),
 
     runAiTurn: ({ room, input, emit, onAgent, readOnly, sessionId }) =>
       runKernel({ pack: room.pack, model: room.model || undefined, mode: 'turn', readOnly, input: expandFileRefs(input, workspaceDir(baseDir, room.workspace, local)), workspace: room.workspace, sessionId: sessionId || undefined },
