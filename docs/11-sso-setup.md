@@ -67,6 +67,21 @@ DELETE /v1/admins/<email>  撤銷
 
 （以上需 operator：admin 的 cookie session，或 `XITTO_SERVER_TOKEN`。SSO 未開時也能先用 master token 預先配置名冊。）
 
+### 破玻璃管理員後門 / Break-glass admin login
+
+SSO 開啟時，若 IdP 掛掉、或 operator 不在名冊，仍要能進去**管理 provider**（`/settings`）。隱藏入口：
+
+```
+GET  /admin/login      顯示登入表單（不從任何 UI 連結、標 noindex）
+POST /admin/login      { token: <XITTO_SERVER_TOKEN> } → 驗證後發簽章 admin cookie（xitto_admin）
+GET  /admin/logout     清除 admin cookie
+```
+
+- 憑證即 `XITTO_SERVER_TOKEN`（沿用 master token，不新增設定）；比對用定長比較防時序側信道。
+- 換得的是 **cookie session**（有別於 `?token=`）——token 不落網址列 / 瀏覽器歷史 / referer。TTL 同 `XITTO_SESSION_TTL`。
+- 登入後 `authedAdmin` 認此 cookie → 可開 `/settings`、改名冊、改 provider。**這是後門、非一般登入**：頁面不連結，僅供 operator 應急。
+- 設 `XITTO_SERVER_TOKEN=""`（關閉 break-glass）→ 後門整條停用（不服務表單、cookie 也不採信）。
+
 准入策略（查不到名冊的人怎麼辦）：
 
 - **封閉名冊（預設）**：不在名冊 → 拒絕。

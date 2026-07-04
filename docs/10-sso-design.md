@@ -62,7 +62,7 @@ Principal { sub, name, email, email_verified, raw }
 
 ## 5. admin 登入與成員管理 / Admin login & member management
 
-- **admin 沒有獨立登入**：同一個 `/auth/login`，差別只在 `roleOf` 命中 admin。
+- **admin 走一般 SSO 登入**：同一個 `/auth/login`，差別只在 `roleOf` 命中 admin（應急破玻璃後門見 §5.1）。
 - **成員管理後台（operator only）**：
 
 ```
@@ -73,6 +73,22 @@ GET    /v1/users           看誰登入過（profile 快取）→ 挑人提權
 ```
 
 `XITTO_ADMIN_EMAILS` 的人是 env 釘死、名冊不可刪（防自鎖）。
+
+### 5.1 破玻璃管理員後門 / Break-glass admin login
+
+正常路徑靠 IdP；但 **IdP 掛掉 / operator 不在名冊** 時，仍要能進去管 provider（`/settings`）。
+為此保留一條**隱藏後門**（`auth-oauth2.js` `handle`）：
+
+```
+GET  /admin/login    登入表單（不從任何 UI 連結、標 noindex）
+POST /admin/login    { token: XITTO_SERVER_TOKEN } → 定長比對 → 發簽章 admin cookie（xitto_admin）
+GET  /admin/logout   清 cookie
+```
+
+- **憑證沿用 master token**（`XITTO_SERVER_TOKEN`）：它本就代表 operator override（判定順序第 1 條），不新增設定。
+- 換得 **cookie session**（有別於 `?token=`）→ token 不落網址列 / 歷史 / referer；TTL 同 `XITTO_SESSION_TTL`。
+- 登入後 `authed` / `authedAdmin` 認此 cookie（HMAC 簽章，竄改即失效）；`returnTo` 只收本站相對路徑（擋開放轉址）。
+- `XITTO_SERVER_TOKEN=""`（關 break-glass）→ 後門整條停用（不服務表單、cookie 不採信）。
 
 ## 6. 設定面（部署者零改碼）/ Configuration (zero source edits)
 

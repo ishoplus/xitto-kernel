@@ -140,6 +140,78 @@ test('SSO 登入即放行：member（非 admin）能列房/建房/進房不被 4
   } finally { srv.close(); idp.close(); rmSync(base, { recursive: true, force: true }); }
 });
 
+test('破玻璃管理員後門（/admin/login）：對 master token → 發 admin cookie → 管 provider；錯 token 401；masterToken 空則後門停用', async () => {
+  const idp = await startMockIdp();
+  const base = mkdtempSync(join(tmpdir(), 'xk-bg-'));
+  const auth = oauth2Auth({
+    issuer: idp.ctl.issuer, clientId: 'test-client', clientSecret: 'secret',
+    redirectUri: 'http://localhost/auth/callback', cookieSecret: 'x'.repeat(32),
+    masterToken: 'master-tok', secureCookie: false,
+  });
+  const srv = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', auth, adminEmails: ['admin@corp.com'], baseDir: join(base, '.srv') });
+  const port = await listen(srv); const U = (p) => `http://localhost:${port}${p}`;
+  const form = (o) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(o).toString(), redirect: 'manual' });
+  try {
+    // 未登入 → 設定端點擋下（401）
+    assert.equal((await fetch(U('/settings'))).status, 401, '未登入不能開設定');
+
+    // 登入頁（GET）：隱藏路徑、不被索引、含表單
+    const loginPage = await fetch(U('/admin/login'));
+    assert.equal(loginPage.status, 200);
+    assert.equal(loginPage.headers.get('x-robots-tag'), 'noindex', '不被搜尋引擎索引');
+    assert.match(await loginPage.text(), /name="token"/, '含 token 表單');
+
+    // 錯 token → 401，不發 cookie
+    const bad = await fetch(U('/admin/login'), form({ token: 'wrong' }));
+    assert.equal(bad.status, 401, '錯 token 被拒');
+    assert.equal(getCookie(bad, 'xitto_admin'), null, '錯 token 不發 admin cookie');
+
+    // 對 master token → 302 到 returnTo，發簽章 admin cookie
+    const ok = await fetch(U('/admin/login'), form({ token: 'master-tok', returnTo: '/settings' }));
+    assert.equal(ok.status, 302);
+    assert.equal(ok.headers.get('location'), '/settings', '登入後導向 returnTo');
+    const adminCookie = getCookie(ok, 'xitto_admin');
+    assert.ok(adminCookie, '發出 xitto_admin cookie');
+
+    // 帶 admin cookie → 可開設定、可改 provider 名冊（authedAdmin 認 cookie），且沒 SSO 身份也行
+    const AH = { cookie: 'xitto_admin=' + adminCookie };
+    assert.equal((await fetch(U('/settings'), { headers: AH })).status, 200, 'admin cookie 可開設定頁');
+    assert.equal((await fetch(U('/v1/admins'), { headers: AH })).status, 200, 'admin cookie 可看名冊');
+
+    // returnTo 防開放轉址：外部 URL / 協定相對 → 收斂回 /settings
+    const evil = await fetch(U('/admin/login'), form({ token: 'master-tok', returnTo: 'https://evil.example/x' }));
+    assert.equal(evil.headers.get('location'), '/settings', '外部 returnTo 被擋');
+    const proto = await fetch(U('/admin/login'), form({ token: 'master-tok', returnTo: '//evil.example' }));
+    assert.equal(proto.headers.get('location'), '/settings', '協定相對 returnTo 被擋');
+
+    // 竄改 admin cookie → 不採信（401）
+    assert.equal((await fetch(U('/settings'), { headers: { cookie: 'xitto_admin=' + adminCookie + 'x' } })).status, 401, '竄改簽章被拒');
+
+    // 登出 → 清 cookie
+    const lo = await fetch(U('/admin/logout'), { redirect: 'manual' });
+    assert.equal(lo.status, 302);
+    assert.equal(getCookie(lo, 'xitto_admin'), '', 'logout 清 admin cookie');
+  } finally { srv.close(); idp.close(); rmSync(base, { recursive: true, force: true }); }
+
+  // masterToken 空（關閉 break-glass）→ 整條後門停用：不服務登入表單、POST 不發 cookie（落到預設 auth 守門，非 200）
+  const idp2 = await startMockIdp();
+  const base2 = mkdtempSync(join(tmpdir(), 'xk-bg2-'));
+  const auth2 = oauth2Auth({
+    issuer: idp2.ctl.issuer, clientId: 'test-client', clientSecret: 'secret',
+    redirectUri: 'http://localhost/auth/callback', cookieSecret: 'x'.repeat(32),
+    masterToken: '', secureCookie: false,
+  });
+  const srv2 = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', auth: auth2, adminEmails: ['admin@corp.com'], baseDir: join(base2, '.srv') });
+  const port2 = await listen(srv2); const U2 = (p) => `http://localhost:${port2}${p}`;
+  try {
+    const g = await fetch(U2('/admin/login'));
+    assert.notEqual(g.status, 200, 'masterToken 空 → 不服務登入表單');
+    assert.doesNotMatch(await g.text(), /name="token"/, 'masterToken 空 → 無 token 表單');
+    const p = await fetch(U2('/admin/login'), { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'token=whatever', redirect: 'manual' });
+    assert.equal(getCookie(p, 'xitto_admin'), null, 'masterToken 空 → POST 不發 admin cookie');
+  } finally { srv2.close(); idp2.close(); rmSync(base2, { recursive: true, force: true }); }
+});
+
 test('開放模式（ssoOpen）：任何 SSO 通過即得 member，不看名冊/網域；仍尊重釘死 admin', async () => {
   const idp = await startMockIdp();
   const base = mkdtempSync(join(tmpdir(), 'xk-open-'));

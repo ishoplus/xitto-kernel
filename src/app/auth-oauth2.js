@@ -20,6 +20,36 @@ export const parseTtl = (v) => {
   return Number(m[1]) * ({ s: 1, m: 60, h: 3600, d: 86400 }[m[2] || 's']);
 };
 
+// 破玻璃管理員登入頁（隱藏後門，不從任何 UI 連結）：純內聯、無外部依賴，殘缺環境也能顯示。
+const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const adminLoginHtml = ({ error = '', returnTo = '/settings' } = {}) => `<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理員登入</title><meta name="robots" content="noindex,nofollow"><style>
+:root{--bg:#0f1115;--card:#191c23;--inset:#12141a;--line:#2a2e37;--fg:#e6e8ee;--dim:#9aa0ad;--accent:#5b63e6;--err:#e5484d}
+@media (prefers-color-scheme: light){:root{--bg:#f5f6f8;--card:#fff;--inset:#f0f1f4;--line:#d9dce2;--fg:#1a1d24;--dim:#6b7280}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Noto Sans TC",sans-serif;display:flex;align-items:center;justify-content:center;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;width:min(400px,96vw);padding:26px}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:6px}.brand svg{width:28px;height:28px}.brand h1{font-size:19px;margin:0}
+.sub{color:var(--dim);font-size:13px;margin:0 0 18px}
+label{display:block;font-size:13px;color:var(--dim);margin:0 0 5px}
+input{width:100%;background:var(--inset);color:var(--fg);border:1px solid var(--line);border-radius:9px;padding:10px 11px;font:inherit}
+input:focus{outline:none;border-color:var(--accent)}
+button{background:var(--accent);color:#fff;border:0;border-radius:9px;padding:11px 16px;font:inherit;font-weight:600;cursor:pointer;width:100%;margin-top:18px}
+.err{margin-top:14px;font-size:13px;padding:9px 12px;border-radius:9px;color:var(--err);background:color-mix(in srgb,var(--err) 12%,transparent);border:1px solid color-mix(in srgb,var(--err) 35%,var(--line))}
+.hint{color:var(--dim);font-size:12px;margin-top:14px}
+</style></head><body><div class="card">
+<div class="brand"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/></g></svg><h1>管理員登入</h1></div>
+<p class="sub">破玻璃入口：以伺服器 token 登入，管理模型設定（provider）。</p>
+<form method="POST" action="/admin/login" autocomplete="off">
+<input type="hidden" name="returnTo" value="${escHtml(returnTo)}">
+<label>伺服器 Token</label>
+<input type="password" name="token" placeholder="XITTO_SERVER_TOKEN" autofocus>
+<button type="submit">登入</button>
+</form>
+${error ? `<div class="err">${escHtml(error)}</div>` : ''}
+<p class="hint">此頁不對外連結，僅供 operator 應急。登入後可前往 <code>/settings</code>。</p>
+</div></body></html>`;
+
 const parseCookies = (req) => Object.fromEntries(
   String(req.headers?.cookie || '').split(';').map((c) => c.trim()).filter(Boolean).map((c) => {
     const i = c.indexOf('='); return i < 0 ? [c, ''] : [c.slice(0, i), c.slice(i + 1)];
@@ -119,16 +149,33 @@ export function oauth2Auth(config = {}) {
   const api = { roleStore: initialRoleStore };
   const principal = (req) => verifyCookie(parseCookies(req).xitto_session);
 
+  // 破玻璃管理員 session（隱藏後門 /admin/login 發出）：以 master token 為憑證換得的簽章 cookie。
+  // 用途——IdP 掛掉／operator 不在 SSO 名冊時，仍能登入管 provider；憑證不落網址列（有別於 ?token=）。
+  // masterToken 為空（XITTO_SERVER_TOKEN=""）即關閉 break-glass → 後門一併停用（cookie 也不採信）。
+  const adminSession = (req) => {
+    if (!masterToken) return false;
+    const c = verifyCookie(parseCookies(req).xitto_admin);
+    return !!(c && c.admin);
+  };
+  // 定長比較 master token，避免時序側信道；長度不同即 false。
+  const tokenMatch = (a, b) => {
+    if (!a || !b) return false;
+    const ba = Buffer.from(String(a)), bb = Buffer.from(String(b));
+    return ba.length === bb.length && timingSafeEqual(ba, bb);
+  };
+
   // 登入即放行：只要 SSO 登入且在名冊有角色（admin/member/readonly）或持 master token，即算 authed。
   // → 一般使用者登入後進站／用會議室不再被 401（授權細分交給 roomAuth 與 authedAdmin）。
   const authed = (req) => {
     if (masterToken && bearerOf(req) === masterToken) return true; // break-glass
+    if (adminSession(req)) return true; // 破玻璃 admin cookie（也是 admin，當然 authed）
     const p = principal(req);
     return !!p && !!api.roleStore?.roleOf(p);
   };
   // 提權敏感操作（改名冊角色、改 provider/API Key 設定）仍限 admin，避免 member 自我提權或改壞服務。
   const authedAdmin = (req) => {
     if (masterToken && bearerOf(req) === masterToken) return true; // break-glass
+    if (adminSession(req)) return true; // 破玻璃 admin cookie
     const p = principal(req);
     return !!p && api.roleStore?.roleOf(p) === 'admin';
   };
@@ -157,6 +204,34 @@ export function oauth2Auth(config = {}) {
   const handle = async (req, res) => {
     let url; try { url = new URL(req.url, 'http://x'); } catch { return false; }
     const path = url.pathname;
+
+    // 破玻璃管理員後門（隱藏路徑，不從 UI 連結）：masterToken 為空即整條停用 → 回 false 讓它落到 404。
+    if (masterToken && path.startsWith('/admin/')) {
+      const safeReturn = (v) => (typeof v === 'string' && v.startsWith('/') && !v.startsWith('//')) ? v : '/settings';
+      if (path === '/admin/login' && req.method === 'GET') {
+        const returnTo = safeReturn(url.searchParams.get('returnTo'));
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' });
+        res.end(adminLoginHtml({ returnTo })); return true;
+      }
+      if (path === '/admin/login' && req.method === 'POST') {
+        // 讀表單（限縮長度、只吃 x-www-form-urlencoded）→ 定長比對 token → 發簽章 admin cookie。
+        const raw = await new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 65536) req.destroy(); }); req.on('end', () => resolve(b)); req.on('error', () => resolve('')); });
+        const form = new URLSearchParams(raw);
+        const returnTo = safeReturn(form.get('returnTo'));
+        if (!tokenMatch(form.get('token'), masterToken)) {
+          res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+          res.end(adminLoginHtml({ error: 'Token 不正確。', returnTo })); return true;
+        }
+        const ttl = sessionTtl;
+        appendCookie(res, cookieStr('xitto_admin', signCookie({ admin: true, exp: nowSec() + ttl }), { maxAge: ttl }));
+        res.writeHead(302, { location: returnTo }); res.end(); return true;
+      }
+      if (path === '/admin/logout') {
+        appendCookie(res, cookieStr('xitto_admin', '', { maxAge: 0 }));
+        res.writeHead(302, { location: '/admin/login' }); res.end(); return true;
+      }
+    }
+
     if (req.method !== 'GET' || !path.startsWith('/auth/')) return false;
 
     if (path === '/auth/login') {
