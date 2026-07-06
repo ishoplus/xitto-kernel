@@ -614,7 +614,13 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     const emit = (ev) => fanout(r, { type: 'ai', by: '__minutes__', ev });
     try {
       const res = await runMinutes({ room: r, transcript, filename, emit, onAgent: (a) => { L.agentRef = a; } });
-      push(r, { kind: 'system', name: 'system', text: `📋 已整理會議紀要《${filename}》，請看「工作台」的檔案（可下載）。` + (res?.text ? '\n' + String(res.text).slice(0, 300) : '') });
+      // 摘要按「行邊界」截斷（不切在行中間）→ 內含 markdown 表格不會被腰斬導致渲染失敗；超長才截並提示看檔案。
+      const clip = (t) => {
+        const s = String(t || '').trim(); if (s.length <= 1600) return s;
+        const c = s.slice(0, 1600); const nl = c.lastIndexOf('\n');
+        return (nl > 200 ? c.slice(0, nl) : c).trimEnd() + '\n\n…（完整內容見檔案）';
+      };
+      push(r, { kind: 'system', name: 'system', text: `📋 已整理會議紀要《${filename}》，請看「工作台」的檔案（可下載）。` + (res?.text ? '\n\n' + clip(res.text) : '') });
     } catch (e) {
       push(r, { kind: 'system', name: 'system', text: '生成會議紀要失敗：' + (e?.message || String(e)) });
     } finally {
