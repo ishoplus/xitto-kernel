@@ -77,3 +77,49 @@ export function drainFrames(buf) {
   }
   return { frames, rest: b };
 }
+
+// 把已握手的 socket 包成簡單 conn：send(text) / sendBinary / close + on('message',(data,isBinary))/on('close')。
+// 註：未做分片（continuation）重組——目前用途（瀏覽器每 chunk 一幀、mock 測試）皆為完整幀；日後如需再補。
+export function makeConn(socket) {
+  const listeners = { message: [], close: [] };
+  let buf = Buffer.alloc(0), closed = false;
+  const emit = (ev, ...a) => { for (const fn of listeners[ev] || []) { try { fn(...a); } catch { /* 監聽端錯不影響 */ } } };
+  const doClose = () => { if (closed) return; closed = true; try { socket.end(encodeClose()); } catch { /* 略 */ } emit('close'); };
+  socket.on('data', (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    let out; try { out = drainFrames(buf); } catch { doClose(); return; } // 幀過大等 → 收線
+    buf = out.rest;
+    for (const f of out.frames) {
+      if (f.opcode === OP.CLOSE) return doClose();
+      if (f.opcode === OP.PING) { try { socket.write(encodeFrame(OP.PONG, f.payload)); } catch { /* 略 */ } continue; }
+      if (f.opcode === OP.TEXT) emit('message', f.payload.toString('utf8'), false);
+      else if (f.opcode === OP.BINARY) emit('message', f.payload, true);
+    }
+  });
+  socket.on('close', () => { if (!closed) { closed = true; emit('close'); } });
+  socket.on('error', () => doClose());
+  return {
+    send: (s) => { if (!closed) try { socket.write(encodeText(s)); } catch { /* 略 */ } },
+    sendBinary: (b) => { if (!closed) try { socket.write(encodeFrame(OP.BINARY, b)); } catch { /* 略 */ } },
+    close: doClose,
+    on: (ev, fn) => { (listeners[ev] || (listeners[ev] = [])).push(fn); },
+    get closed() { return closed; },
+  };
+}
+
+// 接上 http.Server 的 'upgrade'：驗證是 WebSocket 升級、完成握手（101 + Accept），把 conn 交給 onConnect(req, conn)。
+// onConnect 回 falsy / 拋錯 → 收線（例如路由不符或鑑權失敗）。
+export function attachUpgrade(server, onConnect) {
+  server.on('upgrade', (req, socket) => {
+    const key = req.headers['sec-websocket-key'];
+    if (!key || String(req.headers.upgrade || '').toLowerCase() !== 'websocket') { socket.destroy(); return; }
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\n' +
+      'Upgrade: websocket\r\n' +
+      'Connection: Upgrade\r\n' +
+      'Sec-WebSocket-Accept: ' + acceptKey(key) + '\r\n\r\n',
+    );
+    const conn = makeConn(socket);
+    try { if (onConnect(req, conn) === false) conn.close(); } catch { conn.close(); }
+  });
+}
