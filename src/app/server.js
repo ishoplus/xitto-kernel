@@ -17,6 +17,7 @@ import { createPlaybook } from '../kernel/playbook.js';
 import { fileAllowStore } from '../kernel/security/allow-store.js';
 import { loadModel, buildModel, providersConfigPath, loadProvidersConfig } from './providers.js';
 import { oauth2Auth, parseTtl } from './auth-oauth2.js';
+import { attachUpgrade } from './ws.js';
 import { isMutating } from '../kernel/tool-registry.js';
 import { createCodingPack } from '../packs/coding/index.js';
 import { createDataQueryPack } from '../packs/data-query/index.js';
@@ -786,6 +787,14 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       fanout(r, { type: 'typing', name: m.name, on: !!on });
       return { ok: true };
     },
+    // 即時字幕（transient，不落地、不進 pending）：語音串流的 interim 文字廣播給全員 →
+    // 前端顯示成該成員名下的浮動灰字；final=true 表定稿（前端清掉字幕，最終文字另由 say() 進紀錄/觸發 @ai）。
+    caption(id, memberId, text, final) {
+      const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
+      const m = r.members.get(memberId); if (!m) return { error: '請先加入房間', code: 403 };
+      fanout(r, { type: 'caption', name: m.name, by: memberId, text: String(text || ''), final: !!final });
+      return { ok: true };
+    },
     stats: () => ({ roomCount: rooms.size }),
   };
 }
@@ -874,7 +883,7 @@ export function createRoleStore({ dir, adminEmails = [], allowedDomain = '', ope
   };
 }
 
-export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', ssoOpen = false, stt = null, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
+export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', ssoOpen = false, stt = null, sttStreamFactory = null, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
   // 可選 model 清單（跨 provider）：給 /v1/models 與「未知 model」錯誤訊息用；始終含當前預設 model。
   const modelList = (models && models.length) ? models : [{ id: model.id, name: model.name || model.id, provider: model.provider }];
   const knownModel = (id) => !id || id === model.id || modelList.some((m) => m.id === id);
@@ -1062,7 +1071,38 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         (ev) => { const m = mapEvent(ev); if (m) emit(m); }, undefined, onAgent),
   });
 
-  return createServer(async (req, res) => {
+  // P2 即時字幕：WebSocket 音訊串流端點處理器。瀏覽器串音訊幀 → STT adapter → interim 廣播成字幕、final 走 say（重用 P1 管線）。
+  // 未注入 sttStreamFactory（未啟用/未接串流後端）→ 回 false 收線。憑成員 token（query）鑑權，說話人＝該成員（各錄各麥）。
+  const handleAudioStream = (req, conn) => {
+    if (!sttStreamFactory) return false;
+    const u = new URL(req.url, 'http://x');
+    const m = u.pathname.match(/^\/v1\/rooms\/([^/]+)\/audio\/stream$/);
+    if (!m) return false;
+    const room = rooms.get(m[1]); if (!room) return false;
+    const a = roomAuth(req, room, 'member'); if (!a.ok) return false;
+    const memberId = a.memberId || u.searchParams.get('memberId') || '';
+    if (!memberId) return false;
+    const writeAllowed = !room.readonly || !!a.master;
+    let adapter;
+    try {
+      adapter = sttStreamFactory(stt, {
+        onInterim: (text) => { try { rooms.caption(m[1], memberId, text, false); } catch { /* 略 */ } },
+        onFinal: (text) => {
+          try { rooms.caption(m[1], memberId, '', true); } catch { /* 略 */ }               // 清字幕
+          if (text && /[\p{L}\p{N}]/u.test(text)) {                                          // 有實質內容才發言（濾靜音/雜訊）
+            const s = rooms.say(m[1], { memberId, text, writeAllowed, source: 'voice' });
+            if (!s.error) log({ room: m[1], action: 'voice-stream', chars: text.length, triggered: s.triggered });
+          }
+        },
+      });
+    } catch { return false; }
+    if (!adapter) return false;
+    conn.on('message', (data, isBinary) => { if (isBinary && data.length) { try { adapter.push(data); } catch { /* 略 */ } } });
+    conn.on('close', () => { try { adapter.end && adapter.end(); } catch { /* 略 */ } });
+    return true;
+  };
+
+  const app = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
     // SSO adapter 先攔（擁有 /auth/login|callback|logout 等）；defaultAuth 無 handle → 直接略過，零影響。
@@ -1680,6 +1720,9 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
 
     json(res, 404, { error: 'not found' });
   });
+  // P2 即時字幕：接上 WebSocket 音訊串流升級（handleAudioStream 未啟用/鑑權失敗會回 false 收線）。
+  attachUpgrade(app, handleAudioStream);
+  return app;
 }
 
 // 從設定引導頁送來的表單組出 providers.json 內容（單 provider + 單 model，足以啟動；之後可自行擴充檔案）。

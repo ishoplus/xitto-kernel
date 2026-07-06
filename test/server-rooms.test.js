@@ -2,6 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { connect } from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -747,6 +749,80 @@ test('HTTP：/v1/rooms/:id/stop 需成員 token；idle 時 409', async () => {
     assert.equal((await fetch(url(`/v1/rooms/${room.roomId}/stop`), { method: 'POST' })).status, 401, '無 token → 401');
     assert.equal((await fetch(url(`/v1/rooms/${room.roomId}/stop`), { method: 'POST', headers: MH })).status, 409, '無進行中回合 → 409');
   });
+});
+
+test('P2：WS /v1/rooms/:id/audio/stream → STT adapter → interim 廣播 caption / final 走 say（mock adapter）', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'xk-p2-'));
+  // mock 串流 STT adapter：收到一個音訊幀 → 連續 2 個 interim，再 1 個 final。
+  const sttStreamFactory = (cfg, { onInterim, onFinal }) => ({
+    push: () => { onInterim('方案'); onInterim('方案 A'); onFinal('就用方案 A'); },
+    end: () => {},
+  });
+  const app = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', baseDir: base, sttStreamFactory });
+  await new Promise((r) => app.listen(0, r));
+  const port = app.address().port;
+  const U = (p) => `http://localhost:${port}${p}`;
+  const H = { 'content-type': 'application/json', authorization: 'Bearer t' };
+  // client 遮罩二進位幀（音訊）
+  const maskBin = (payload) => {
+    const data = Buffer.from(payload); const mask = Buffer.from([9, 8, 7, 6]);
+    const mk = Buffer.allocUnsafe(data.length); for (let i = 0; i < data.length; i++) mk[i] = data[i] ^ mask[i & 3];
+    return Buffer.concat([Buffer.from([0x82, 0x80 | data.length]), mask, mk]); // FIN + BINARY(0x2)
+  };
+  let sock, reader; const ctrl = new AbortController();
+  try {
+    const room = await fetch(U('/v1/rooms'), { method: 'POST', headers: H, body: '{}' }).then((r) => r.json());
+    const j = await fetch(U(`/v1/rooms/${room.roomId}/join`), { method: 'POST', headers: H, body: JSON.stringify({ name: '小明' }) }).then((r) => r.json());
+
+    // 訂 SSE 收 caption 事件
+    const captions = [];
+    (async () => {
+      const res = await fetch(U(`/v1/rooms/${room.roomId}/events?token=${j.memberToken}`), { signal: ctrl.signal });
+      reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+      for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true });
+        let i; while ((i = buf.indexOf('\n\n')) >= 0) { const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+          if (chunk.startsWith('data: ')) { try { const ev = JSON.parse(chunk.slice(6)); if (ev.type === 'caption') captions.push(ev); } catch { /* 略 */ } } } }
+    })().catch(() => {});
+    await new Promise((r) => setTimeout(r, 60));
+
+    // WS 連 audio/stream + 送一個音訊幀
+    sock = connect(port, '127.0.0.1'); await new Promise((r) => sock.once('connect', r));
+    const key = randomBytes(16).toString('base64');
+    sock.write(`GET /v1/rooms/${room.roomId}/audio/stream?token=${j.memberToken} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+    await new Promise((r) => setTimeout(r, 50));
+    sock.write(maskBin(Buffer.from('....audio bytes....')));
+    await new Promise((r) => setTimeout(r, 120));
+
+    assert.ok(captions.some((c) => c.text === '方案 A' && c.final === false), 'interim 字幕有廣播');
+    assert.ok(captions.some((c) => c.final === true), 'final 清字幕事件');
+    const snap = await fetch(U(`/v1/rooms/${room.roomId}`), { headers: H }).then((r) => r.json());
+    const voice = snap.messages.find((mm) => mm.text === '就用方案 A');
+    assert.ok(voice, 'final 文字進了房間訊息（走 say 重用 P1）');
+    assert.equal(voice.name, '小明', '說話人＝該成員');
+  } finally {
+    try { ctrl.abort(); } catch { /* 略 */ }
+    try { await reader?.cancel(); } catch { /* 略 */ }
+    try { sock?.destroy(); } catch { /* 略 */ }
+    app.closeAllConnections?.(); app.close(); rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('P2：未注入 sttStreamFactory → /audio/stream 升級被拒（handler 回 false），不影響 server（後續 HTTP 仍正常）', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'xk-p2off-'));
+  const app = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', baseDir: base }); // 無 sttStreamFactory
+  await new Promise((r) => app.listen(0, r));
+  const port = app.address().port;
+  let sock;
+  try {
+    // 對 P2-off server 發 WS 升級 → handleAudioStream 回 false → attachUpgrade 收線（standalone 已驗客戶端斷線）
+    sock = connect(port, '127.0.0.1'); await new Promise((r) => sock.once('connect', r));
+    sock.on('error', () => { /* 吞掉 RST/end */ });
+    sock.write(`GET /v1/rooms/x/audio/stream HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${randomBytes(16).toString('base64')}\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+    await new Promise((r) => setTimeout(r, 150));
+    // 確定性斷言：被拒的升級嘗試不會弄壞 server —— 一般 HTTP 請求仍正常回應
+    const h = await fetch(`http://localhost:${port}/health`).then((r) => r.json()).catch(() => null);
+    assert.ok(h && typeof h === 'object', 'P2-off 的升級嘗試被拒後，server 仍健康（/health 正常）');
+  } finally { try { sock?.destroy(); } catch { /* 略 */ } app.closeAllConnections?.(); app.close(); rmSync(base, { recursive: true, force: true }); }
 });
 
 test('HTTP：/v1/stt 存語音設定到 <baseDir>/stt.json（apiKey 留空沿用、endpoint 空=停用、非 admin 擋、非法網址 400）', async () => {

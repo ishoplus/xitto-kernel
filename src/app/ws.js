@@ -120,6 +120,7 @@ export function attachUpgrade(server, onConnect) {
       'Sec-WebSocket-Accept: ' + acceptKey(key) + '\r\n\r\n',
     );
     const conn = makeConn(socket);
-    try { if (onConnect(req, conn) === false) conn.close(); } catch { conn.close(); }
+    // onConnect 回 false / 拋錯（路由不符、鑑權失敗）→ 直接 destroy（即時斷線），不走優雅 close 幀。
+    try { if (onConnect(req, conn) === false) socket.destroy(); } catch { socket.destroy(); }
   });
 }
