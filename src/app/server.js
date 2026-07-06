@@ -931,16 +931,17 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   const sseHead = (res) => res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
   // 語音轉文字（STT）：打 OpenAI 相容的 /v1/audio/transcriptions（本地 faster-whisper-server 等）。停用（未設 endpoint）回 null。
   const sttEnabled = !!(stt && stt.endpoint);
-  const transcribe = async (buffer, contentType) => {
-    if (!sttEnabled) return null;
+  // cfg 預設用啟用中的 stt；/v1/stt/test 傳入未儲存的表單設定來試連線。
+  const transcribe = async (buffer, contentType, cfg = stt) => {
+    if (!cfg || !cfg.endpoint) return null;
     const form = new FormData();
     form.append('file', new Blob([buffer], { type: contentType || 'audio/webm' }), 'audio.webm');
-    form.append('model', stt.model || 'Systran/faster-whisper-large-v3');
-    if (stt.language) form.append('language', stt.language);
+    form.append('model', cfg.model || 'Systran/faster-whisper-large-v3');
+    if (cfg.language) form.append('language', cfg.language);
     form.append('response_format', 'json');
-    const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), stt.timeoutMs || 30000);
+    const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), cfg.timeoutMs || 30000);
     try {
-      const r = await fetch(stt.endpoint, { method: 'POST', headers: stt.apiKey ? { authorization: 'Bearer ' + stt.apiKey } : {}, body: form, signal: ac.signal });
+      const r = await fetch(cfg.endpoint, { method: 'POST', headers: cfg.apiKey ? { authorization: 'Bearer ' + cfg.apiKey } : {}, body: form, signal: ac.signal });
       if (!r.ok) throw new Error('STT HTTP ' + r.status);
       const j = await r.json().catch(() => ({}));
       return String(j.text || '').trim();
@@ -1249,6 +1250,31 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       json(res, 200, { ok: true, enabled: !!next.endpoint, reload: !!onReconfigure });
       if (onReconfigure) setTimeout(() => { try { onReconfigure(); } catch (e) { console.error('熱重載失敗：', e.message); } }, 300);
       return;
+    }
+
+    // STT 端點連線測試（master only）：用未儲存的表單設定 + 一小段靜音 WAV 打一次，確認端點可連/模型可用（存前先驗，免盲存）。
+    if (req.method === 'POST' && path === '/v1/stt/test') {
+      if (adminOnly(req, res)) return;
+      const body = await readBody(req);
+      const endpoint = String(body.endpoint || '').trim();
+      if (!/^https?:\/\//.test(endpoint)) return json(res, 400, { error: 'endpoint 需為 http(s) 網址' });
+      let saved = {}; try { saved = JSON.parse(readFileSync(join(baseDir, 'stt.json'), 'utf8')); } catch { /* 尚無檔 */ }
+      const cfg = {
+        endpoint,
+        model: String(body.model || '').trim() || undefined,
+        language: String(body.language || '').trim() || undefined,
+        // apiKey 留空＝沿用已存的（避免在測試時要重填）
+        apiKey: (body.apiKey != null && body.apiKey !== '') ? String(body.apiKey) : (saved.apiKey || (stt && stt.apiKey) || ''),
+        timeoutMs: 15000,
+      };
+      // 0.2s / 16kHz / 單聲道 / 16-bit 靜音 WAV（44-byte header + 全 0 PCM）——只為驗端點可連、模型名可用。
+      const rate = 16000, n = Math.floor(0.2 * rate), dataSize = n * 2, wav = Buffer.alloc(44 + dataSize);
+      wav.write('RIFF', 0); wav.writeUInt32LE(36 + dataSize, 4); wav.write('WAVE', 8);
+      wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+      wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+      wav.write('data', 36); wav.writeUInt32LE(dataSize, 40);
+      try { const text = await transcribe(wav, 'audio/wav', cfg); return json(res, 200, { ok: true, sample: text || '' }); }
+      catch (e) { return json(res, 502, { ok: false, error: e.message }); }
     }
 
     // 測試對話（admin only）：真打一次極短 LLM 呼叫，確認某 model 的 provider/baseUrl/key 端到端可用。
@@ -1781,7 +1807,7 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
   </div>
   <label>API Key（本地通常不需要）</label><input id="sttKey" type="password" placeholder="留空 = 不變更" autocomplete="off">
   <div class="msg" id="sttMsg"></div>
-  <div class="grid2"><div></div><div><button id="sttSave" type="button">儲存語音設定</button></div></div>
+  <div class="grid2"><div><button id="sttTest" class="ghost" type="button" title="不儲存，先打一次確認 STT 端點可連線">🧪 測試語音端點</button></div><div><button id="sttSave" type="button">儲存語音設定</button></div></div>
 </div>
 <script>
 var $=function(s){return document.querySelector(s)};
@@ -1800,6 +1826,14 @@ if(STT){
   $("#sttEndpoint").value=STT.endpoint||"";$("#sttModel").value=STT.model||"";$("#sttLang").value=STT.language||"";
   if(STT.hasKey)$("#sttKey").placeholder="留空 = 沿用現有 API Key";
   $("#sttStatus").textContent=STT.enabled?"狀態：已啟用 — 會議室成員可錄音轉逐字稿。":"狀態：未啟用 — 填入 STT 端點即開啟。";
+  $("#sttTest").onclick=async function(){
+    var payload={endpoint:$("#sttEndpoint").value.trim(),model:$("#sttModel").value.trim(),language:$("#sttLang").value.trim(),apiKey:$("#sttKey").value};
+    var m=$("#sttMsg");if(!payload.endpoint){m.textContent="請先填 STT 端點";m.className="msg err";return}
+    m.textContent="測試連線中…";m.className="msg";
+    var r;try{r=await fetch("/v1/stt/test",{method:"POST",headers:AUTH,body:JSON.stringify(payload)}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}
+    if(!r||r.ok===false||r.error){m.textContent="✗ 端點測試失敗："+((r&&r.error)||"未知錯誤");m.className="msg err";return}
+    m.textContent="✓ 端點可連線"+(r.sample?"（樣本回應："+esc(r.sample)+"）":"（靜音樣本無輸出屬正常）");m.className="msg ok";
+  };
   $("#sttSave").onclick=async function(){
     var payload={endpoint:$("#sttEndpoint").value.trim(),model:$("#sttModel").value.trim(),language:$("#sttLang").value.trim(),apiKey:$("#sttKey").value};
     var m=$("#sttMsg");m.textContent="儲存中…";m.className="msg";

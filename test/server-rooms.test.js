@@ -786,6 +786,29 @@ test('HTTP：/v1/stt 存語音設定到 <baseDir>/stt.json（apiKey 留空沿用
   } finally { app.close(); rmSync(base, { recursive: true, force: true }); }
 });
 
+test('HTTP：/v1/stt/test 端點連線測試——可連→ok、不可連→502、非法網址→400、非 admin 擋', async () => {
+  // mock STT server：回 200 + {text:''}（靜音樣本無輸出屬正常）
+  const mock = createServer((req, res) => { req.on('data', () => {}); req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ text: '' })); }); });
+  await new Promise((r) => mock.listen(0, r));
+  const sttUrl = `http://localhost:${mock.address().port}/v1/audio/transcriptions`;
+  const base = mkdtempSync(join(tmpdir(), 'xk-stttest-'));
+  const app = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', baseDir: base });
+  await new Promise((r) => app.listen(0, r));
+  const U = (p) => `http://localhost:${app.address().port}${p}`;
+  const AD = { 'content-type': 'application/json', authorization: 'Bearer t' };
+  try {
+    const noauth = await fetch(U('/v1/stt/test'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.ok(noauth.status === 401 || noauth.status === 403, '非 admin 被擋');
+    const bad = await fetch(U('/v1/stt/test'), { method: 'POST', headers: AD, body: JSON.stringify({ endpoint: 'nope' }) }).then((r) => r.json());
+    assert.ok(bad.error, '非 http(s) → 錯誤');
+    const ok = await fetch(U('/v1/stt/test'), { method: 'POST', headers: AD, body: JSON.stringify({ endpoint: sttUrl, model: 'w' }) }).then((r) => r.json());
+    assert.equal(ok.ok, true, '端點可連 → ok');
+    mock.close(); // 關掉後再測 → 不可連
+    const down = await fetch(U('/v1/stt/test'), { method: 'POST', headers: AD, body: JSON.stringify({ endpoint: sttUrl }) }).then((r) => r.json());
+    assert.ok(down.ok === false || down.error, '端點不可連 → 失敗');
+  } finally { app.close(); try { mock.close(); } catch { /* 已關 */ } rmSync(base, { recursive: true, force: true }); }
+});
+
 test('HTTP：會議室錄音 /audio → STT → 以成員身份發言（source:voice）；未啟用→501；空/靜音→不發言', async () => {
   // mock STT server（OpenAI 相容 /v1/audio/transcriptions）：收到 multipart 就回固定文字。
   let sttHits = 0;

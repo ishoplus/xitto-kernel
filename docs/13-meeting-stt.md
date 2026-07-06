@@ -112,6 +112,6 @@ PORT=8787 XITTO_SERVER_TOKEN=secret node src/app/server.js
 |------|-------------|
 | 沒有錄音鈕 | 未設 `XITTO_STT_ENDPOINT`，或服務未重啟。 |
 | 點錄音提示「需要 HTTPS」 | `getUserMedia` 限安全上下文 → 用 https 或 localhost。 |
-| 錄了但沒出字 | STT 端點不可達 / 模型名不符 / 音訊全靜音。看服務端日誌 `voice` 與 STT server 日誌；用 §1 的 curl 直接驗證 STT。 |
+| 錄了但沒出字 | STT 端點不可達 / 模型名不符 / 音訊全靜音。**先在 `/settings` 的「🎙 語音轉文字」卡片按「🧪 測試語音端點」確認可連**；仍不行看服務端日誌 `voice` 與 STT server 日誌，或用 §1 的 curl 直接驗證。 |
 | 中文轉得差 | 換 `large-v3` 並設 `XITTO_STT_LANGUAGE=zh`。 |
 | 502 STT 失敗 | STT server 掛了或超時（預設 30s）；確認 §1 服務正常。 |

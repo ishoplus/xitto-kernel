@@ -5,9 +5,10 @@
 - **STT（語音會議）設定 UI 化**：原本語音轉文字只能靠環境變數（改設定要重進容器）。現在 master 可在 `/settings` 頁最下方的「🎙 語音轉文字」卡片直接填端點/模型/語言/API Key，儲存後存進 `<baseDir>/stt.json` 並**自動熱重載**（沿用 `/v1/setup` 的 close→同 opts 重起機制），不必改 env、不必重啟。
   - 優先序 **注入式 opts > `stt.json`（UI）> 環境變數**：一旦 UI 存過即以檔為準（端點留空＝停用錄音）；env 仍可用於宣告式部署。
   - 新增 `POST /v1/stt`（master only）：驗證端點為 http(s)、`apiKey` 留空＝沿用現有、寫檔後熱重載；`/settings` GET 注入現有 STT 設定（不含 apiKey，`hasKey` 標記）供 UI 預填。
+  - **STT 端點連線測試**：卡片加「🧪 測試語音端點」鈕（比照模型的「測試對話」）→ `POST /v1/stt/test` 用未儲存的表單值 + 一小段靜音 WAV 打一次 STT，存前先確認端點可連/模型可用，免盲存（正對 docs §8「錄了沒出字」的排錯）。`transcribe()` 加可選 `cfg` 參數以測未儲存設定。
   - `docs/13-meeting-stt.md` 對應更新（§2 UI 路徑、§7 roadmap 標記完成）。
-  - 新增 `test/server-rooms.test.js` 的 `/v1/stt` 端點測試（寫檔、apiKey 沿用、停用、非 admin 擋、非法網址 400）。
-- 測試 395/395。
+  - 新增 `test/server-rooms.test.js`：`/v1/stt`（寫檔、apiKey 沿用、停用、非 admin 擋、非法網址 400）+ `/v1/stt/test`（可連/不可連/非法網址/非 admin）。
+- 測試 396/396。
 
 ## 0.9.26
 
