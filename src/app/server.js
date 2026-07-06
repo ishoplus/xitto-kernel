@@ -750,12 +750,12 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     // 發言：立刻廣播給全員 + 進「發話者自己那條 lane」的佇列；點名 @ai 才觸發（同 lane 忙則排隊、回合末續跑）。
     // 每人一條 lane → 別人的複雜問題不會卡住你的 @ai；由 schedule 依房間並發上限拉起。
     // writeAllowed：此發言者能否觸發寫入/破壞性操作（唯讀房的非主持人 = false）；帶進 pending 供 runLane 決定該回合是否唯讀（L2）。
-    say(id, { memberId, text, writeAllowed = true }) {
+    say(id, { memberId, text, writeAllowed = true, source }) {
       const r = rooms.get(id); if (!r) return { error: 'room not found', code: 404 };
       const m = r.members.get(memberId); if (!m) return { error: '請先加入房間', code: 403 };
       const msg = String(text ?? '').trim(); if (!msg) return { error: '發言不可為空', code: 400 };
       const mention = mentionsAi(msg);
-      push(r, { kind: 'user', name: m.name, text: msg, by: memberId }); // by=發話者 → 別的 lane 的共享增量會據此排除（不把自己的話當「別人動態」）
+      push(r, { kind: 'user', name: m.name, text: msg, by: memberId, ...(source ? { source } : {}) }); // by=發話者；source='voice' 標記語音轉錄
       // 決策/待辦即時沉澱：廉價正則命中（零 token）→ 交 app 層追加進「會議記錄.md」。失敗靜默，不影響發言。
       if (onLedger) { const tag = classifyLedger(msg); if (tag) { try { onLedger({ room: r, kind: tag, name: m.name, text: msg }); } catch { /* 靜默 */ } } }
       const L = laneOf(r, memberId);
@@ -874,7 +874,7 @@ export function createRoleStore({ dir, adminEmails = [], allowedDomain = '', ope
   };
 }
 
-export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', ssoOpen = false, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
+export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', ssoOpen = false, stt = null, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
   // 可選 model 清單（跨 provider）：給 /v1/models 與「未知 model」錯誤訊息用；始終含當前預設 model。
   const modelList = (models && models.length) ? models : [{ id: model.id, name: model.name || model.id, provider: model.provider }];
   const knownModel = (id) => !id || id === model.id || modelList.some((m) => m.id === id);
@@ -929,6 +929,23 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     req.on('error', () => finish({ over }));
   });
   const sseHead = (res) => res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
+  // 語音轉文字（STT）：打 OpenAI 相容的 /v1/audio/transcriptions（本地 faster-whisper-server 等）。停用（未設 endpoint）回 null。
+  const sttEnabled = !!(stt && stt.endpoint);
+  const transcribe = async (buffer, contentType) => {
+    if (!sttEnabled) return null;
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: contentType || 'audio/webm' }), 'audio.webm');
+    form.append('model', stt.model || 'Systran/faster-whisper-large-v3');
+    if (stt.language) form.append('language', stt.language);
+    form.append('response_format', 'json');
+    const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), stt.timeoutMs || 30000);
+    try {
+      const r = await fetch(stt.endpoint, { method: 'POST', headers: stt.apiKey ? { authorization: 'Bearer ' + stt.apiKey } : {}, body: form, signal: ac.signal });
+      if (!r.ok) throw new Error('STT HTTP ' + r.status);
+      const j = await r.json().catch(() => ({}));
+      return String(j.text || '').trim();
+    } finally { clearTimeout(timer); }
+  };
   // 依副檔名給 content-type 回傳檔案（圖片顯示/md 渲染/下載皆走這）。
   const serveFile = (res, full, rel, download, asText) => {
     if (!existsSync(full)) return json(res, 404, { error: '檔案不存在' });
@@ -1104,7 +1121,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       let html; try { html = roomHtml(); } catch { return json(res, 500, { error: 'room UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       // __PUBLIC_ORIGIN__：伺服器建議的對外網址（區網 IP / 域名）→ host 在 localhost 開頁時，邀請連結改用它。
-      return res.end(html.replace(/__SERVER_TOKEN__/g, guest ? '' : pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__PUBLIC_ORIGIN__/g, () => publicOrigin || ''));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, guest ? '' : pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__STT__/g, sttEnabled ? 'true' : 'false').replace(/__PUBLIC_ORIGIN__/g, () => publicOrigin || ''));
     }
 
     // ── 專案會議室（房間層授權：建房/列房需 master；房內動作憑邀請碼/成員 token）──
@@ -1434,6 +1451,29 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         } catch { /* 靜默：簡報失敗不影響上傳 */ }
       }
       return json(res, 200, { ok: true, name: basename(full), size: r.buffer.length, sub: rel });
+    }
+
+    // 錄音轉文字（憑成員 token）：接一段音訊 → STT → 以「該成員身份」發言（各錄各麥 → 說話人天生正確，免 diarization）。
+    // 轉出的文字走與打字發言完全相同的路徑（廣播 / pending / 決策待辦 ledger / 散會紀要），零額外管線。
+    const mAudio = path.match(/^\/v1\/rooms\/([^/]+)\/audio$/);
+    if (req.method === 'POST' && mAudio) {
+      const room = rooms.get(mAudio[1]); if (!room) return json(res, 404, { error: 'room not found' });
+      const authA = roomAuth(req, room, 'member'); if (!authA.ok) return json(res, 401, { error: '需要成員 token' });
+      const memberId = authA.memberId || (url.searchParams.get('memberId') || '');
+      if (!memberId) return json(res, 403, { error: '請先加入房間' });
+      if (!sttEnabled) return json(res, 501, { error: '此部署未啟用語音轉文字（設 XITTO_STT_ENDPOINT）' });
+      const r = await readRaw(req, Number(process.env.XITTO_MAX_AUDIO || 25 * 1024 * 1024));
+      if (r.over) return json(res, 413, { error: '音訊過大' });
+      if (!r.buffer || !r.buffer.length) return json(res, 200, { ok: true, text: '' });
+      let text = '';
+      try { text = await transcribe(r.buffer, req.headers['content-type']); }
+      catch (e) { return json(res, 502, { error: 'STT 失敗：' + (e?.message || String(e)) }); }
+      // 只在轉出「有實質內容」時才發言（過濾靜音/雜訊的空轉錄）。
+      if (!text || !/[\p{L}\p{N}]/u.test(text)) return json(res, 200, { ok: true, text: '' });
+      const said = rooms.say(mAudio[1], { memberId, text, writeAllowed: !room.readonly || !!authA.master, source: 'voice' });
+      if (said.error) return json(res, said.code || 400, { error: said.error });
+      log({ room: mAudio[1], action: 'voice', chars: text.length, triggered: said.triggered });
+      return json(res, 200, { ok: true, text });
     }
 
     if (!authed(req)) return json(res, 401, { error: 'unauthorized（帶 Authorization: Bearer <token>）' });
@@ -1852,6 +1892,13 @@ export function startServer(opts = {}) {
   const allowedEmailDomain = opts.allowedEmailDomain ?? process.env.XITTO_ALLOWED_EMAIL_DOMAIN ?? '';
   // 開放模式（XITTO_SSO_OPEN=1 或 XITTO_ALLOWED_EMAIL_DOMAIN=*）：只要 SSO 通過即可用（給 member），不看名冊/網域。
   const ssoOpen = opts.ssoOpen ?? (process.env.XITTO_SSO_OPEN === '1' || allowedEmailDomain === '*');
+  // 語音轉文字（STT）：設 XITTO_STT_ENDPOINT（OpenAI 相容 /v1/audio/transcriptions，如本地 faster-whisper-server）即啟用會議室錄音。
+  const stt = opts.stt ?? (process.env.XITTO_STT_ENDPOINT ? {
+    endpoint: process.env.XITTO_STT_ENDPOINT,
+    model: process.env.XITTO_STT_MODEL || 'Systran/faster-whisper-large-v3',
+    apiKey: process.env.XITTO_STT_KEY || '',
+    language: process.env.XITTO_STT_LANGUAGE || '',
+  } : null);
   // SSO 認證（純 opt-in）：設了 issuer 或顯式授權端點才啟用 OAuth2/OIDC；否則 auth=undefined → createServerApp 走 defaultAuth（現況）。
   let auth = opts.auth;
   const oidcIssuer = process.env.XITTO_OAUTH_ISSUER;
@@ -1895,7 +1942,7 @@ export function startServer(opts = {}) {
   let server;
   // 熱重載：/v1/setup 存檔後關掉現有 server、用同 opts 重起（載入新設定），同 port 不需重進容器。
   const onReconfigure = () => { try { server.close(); } catch { /* 略 */ } startServer(opts); };
-  server = createServerApp({ model, getApiKey, resolveModel, models, token, auth, adminEmails, allowedEmailDomain, ssoOpen, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
+  server = createServerApp({ model, getApiKey, resolveModel, models, token, auth, adminEmails, allowedEmailDomain, ssoOpen, stt, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
   server.listen(port, () => {
     console.log(`🪄 許願台：http://localhost:${port}/  （本機瀏覽器打開即用）`);
     console.log(`👥 會議室：http://localhost:${port}/room  （多人 + AI 針對專案對談；點名 @ai 才回覆）`);
@@ -1911,6 +1958,7 @@ export function startServer(opts = {}) {
     console.log(`狀態目錄（rooms/sessions/tasks/ws）：${resolve(baseDir)}${process.env.XITTO_SERVER_DIR ? '' : '（相對路徑；容器部署請設 XITTO_SERVER_DIR 指到掛載卷）'}`);
     console.log('API：POST /v1/run · /v1/stream · /v1/tasks · /v1/tasks/:id/{answer,steer,cancel}｜GET /v1/tasks[/:id[/events|/file]] · /health');
     console.log('會議室：POST /v1/rooms · /v1/rooms/:id/{join,leave,say,invite,mkdir,upload,model} · DELETE /v1/rooms/:id｜GET /v1/rooms[/:id[/events|/files|/file]] · /v1/models');
+    if (sttEnabled) console.log(`🎙 語音轉文字：已啟用（STT ${stt.endpoint} · model ${stt.model || 'default'}）→ 會議室可錄音轉逐字稿`);
   });
   return server;
 }

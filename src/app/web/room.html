@@ -7,7 +7,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- 設計系統（與許願台／對話頁共用同一套 token、字體、明暗主題）-->
 <link rel="stylesheet" href="shared/style.css">
-<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, origin: "__PUBLIC_ORIGIN__" };</script>
+<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, stt: __STT__, origin: "__PUBLIC_ORIGIN__" };</script>
 <script src="shared/md.js"></script>
 <script src="shared/account.js"></script>
 <style>
@@ -29,6 +29,8 @@ body { display: flex; flex-direction: column; }
 .pill.live { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
 .side-actions { padding: var(--sp-3); border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .side-actions button { width: 100%; }
+.side-actions button.recording { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); animation: recpulse 1.6s ease-in-out infinite; }
+@keyframes recpulse { 50% { border-color: var(--warn); } }
 .invite-box { width: 100%; margin-top: var(--sp-2); font-size: 12px; }
 .invite-box[hidden] { display: none; }
 
@@ -178,6 +180,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
     <div class="side-actions">
       <button class="ghost" id="copyBtn" type="button" title="複製邀請連結">🔗 複製邀請連結</button>
       <input id="inviteBox" class="invite-box" readonly hidden onclick="this.select()" title="邀請連結（點一下全選）">
+      <button class="ghost" id="recBtn" type="button" title="開啟錄音：把你的發言即時轉成文字記錄（各錄各麥，說話人＝你）" style="margin-top:6px" hidden>🎙 開始錄音</button>
       <button class="ghost" id="minutesBtn" type="button" title="讓 AI 把整段對話整理成決策／待辦／摘要，產出可下載的檔案" style="margin-top:6px">📋 生成會議紀要</button>
       <button class="ghost" id="leaveBtn" type="button" title="離開此會議室，回到大廳（會議與其他成員不受影響，可隨時再進入）" style="margin-top:6px">🚪 離開會議室</button>
     </div>
@@ -290,7 +293,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
 </div>
 
 <script>
-const { token, packs, origin: PUBLIC_ORIGIN, local: LOCAL } = window.__XITTO__;   // token：主控台載入才有（master）；訪客頁為空
+const { token, packs, origin: PUBLIC_ORIGIN, local: LOCAL, stt: STT_ENABLED } = window.__XITTO__;   // token：主控台載入才有（master）；訪客頁為空
 const $ = (s) => document.querySelector(s);
 // 邀請連結的對外網址：本機從 localhost 開頁時改用伺服器建議的區網 IP，讓別台機器能連入；
 // 若經域名/反代連入（location 已是可分享網址）則尊重當前 origin。
@@ -422,6 +425,8 @@ $("#leaveBtn").onclick = async () => {
 };
 // 重置房間狀態並回到入口（operator → 大廳；訪客 → 首頁）。
 function returnToLobby() {
+  if (recording) { stopRec(); updateRecUI(); }   // 離開前收掉錄音
+  $("#recBtn").hidden = true;
   if (es) { es.close(); es = null; }
   // 復位憑證到「進房前」：SSO 下為空（改靠 cookie），非 SSO 下回退 master token。
   // 否則殘留的成員 token 會讓大廳操作（建房/關房/切模型，走 authed）被 401 unauthorized。
@@ -509,7 +514,58 @@ $("#enterBtn").onclick = async () => {
     // 一律把邀請連結顯示出來（即使剪貼簿不可用也能手動選取複製）
     const box = $("#inviteBox"); box.value = inviteLink; box.hidden = false;
     connect(); loadFiles();
+    if (STT_ENABLED) $("#recBtn").hidden = false;   // 本部署已啟用 STT → 顯示錄音鈕
   } catch (e) { alert(e.message); $("#enterBtn").disabled = false; }
+};
+
+/* ── 錄音轉文字（各錄各麥 → 說話人＝自己）：分段錄 → POST /audio → 後端 STT → 以你的身份發言（走 SSE 廣播回來，無需另渲染）。 */
+let micStream = null, mediaRec = null, recTimer = null, recording = false;
+function pickMime() {
+  const cands = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus", ""];
+  for (const t of cands) { try { if (!t || MediaRecorder.isTypeSupported(t)) return t; } catch { /* 略 */ } }
+  return "";
+}
+async function startRec() {
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  recording = true; recordWindow();
+}
+function recordWindow() {
+  if (!recording || !micStream) return;
+  const mime = pickMime();
+  const mr = mime ? new MediaRecorder(micStream, { mimeType: mime }) : new MediaRecorder(micStream);
+  const chunks = [];
+  mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  mr.onstop = () => {
+    if (chunks.length) { const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" }); if (blob.size > 1200) sendAudio(blob); } // 跳過近乎空的段（純靜音）
+    if (recording) recordWindow();   // 續錄下一段
+  };
+  mediaRec = mr; mr.start();
+  recTimer = setTimeout(() => { try { if (mr.state !== "inactive") mr.stop(); } catch { /* 略 */ } }, 7000); // 每段約 7 秒（完整可解碼檔）
+}
+function stopRec() {
+  recording = false; clearTimeout(recTimer);
+  try { if (mediaRec && mediaRec.state !== "inactive") mediaRec.stop(); } catch { /* 略 */ }
+  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  mediaRec = null;
+}
+async function sendAudio(blob) {
+  try {
+    await fetch(`/v1/rooms/${roomId}/audio` + (authTok ? "?token=" + encodeURIComponent(authTok) : ""),
+      { method: "POST", headers: { "content-type": blob.type || "audio/webm", ...(authTok ? { authorization: "Bearer " + authTok } : {}) }, body: blob });
+  } catch { /* 靜默：單段失敗不打斷錄音 */ }
+}
+function updateRecUI() {
+  const b = $("#recBtn"); if (!b) return;
+  b.textContent = recording ? "⏹ 停止錄音（錄音中…）" : "🎙 開始錄音";
+  b.classList.toggle("recording", recording);
+}
+$("#recBtn").onclick = async () => {
+  if (recording) { stopRec(); updateRecUI(); addSystem("🎙 已停止錄音"); return; }
+  if (!window.isSecureContext) { alert("錄音需要 HTTPS 或 localhost 環境（瀏覽器限制）。"); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) { alert("此瀏覽器不支援錄音。"); return; }
+  if (!confirm("開始錄音？你的發言會即時轉成文字記錄、供 AI 與會議紀要使用（其他成員會看到你的逐字內容）。")) return;
+  try { await startRec(); } catch (e) { alert("無法存取麥克風：" + (e.message || e) + "（請允許麥克風權限）"); return; }
+  updateRecUI(); addSystem("🎙 " + (myName || "你") + " 開啟了錄音，發言將轉為文字記錄");
 };
 
 // 健壯複製：安全上下文（HTTPS/localhost）走 Clipboard API；區網 HTTP 走 execCommand 兜底。
@@ -573,7 +629,7 @@ function handle(ev) {
     case "say": renderMessage(ev.message); return;
     case "room_model": setModelPill(ev.model); return;
     case "ai": handleAi(ev.by, ev.byName, ev.ev); return;
-    case "room_closed": addSystem("此會議室已被關閉，連線結束。"); if (es) { es.close(); es = null; } $("#input").disabled = true; $("#send").disabled = true; setStatus("已關閉"); return;
+    case "room_closed": addSystem("此會議室已被關閉，連線結束。"); if (recording) { stopRec(); updateRecUI(); } if (es) { es.close(); es = null; } $("#input").disabled = true; $("#send").disabled = true; setStatus("已關閉"); return;
   }
 }
 
@@ -608,7 +664,7 @@ function renderMessage(m) {
     ? `<div class="bubble md">${mdRender(m.text || "")}</div>`
     : m.kind === "ai"
     ? `<div class="who">${esc(m.name || "AI")}</div><div class="bubble md">${mdRender(m.text || "")}</div>`
-    : `<div class="who">${esc(m.name)}</div><div class="bubble">${renderText(m.text)}</div>`;
+    : `<div class="who">${esc(m.name)}${m.source === "voice" ? ' <span title="語音轉錄">🎙</span>' : ""}</div><div class="bubble">${renderText(m.text)}</div>`;
   appendLog(el);
 }
 const addSystem = (text) => renderMessage({ kind: "system", text });

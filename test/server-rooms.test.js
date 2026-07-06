@@ -1,6 +1,7 @@
 // 專案會議室：@ai 觸發判定、房間 store（多人發言/廣播/回合制/續跑）、HTTP 端點。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -746,6 +747,49 @@ test('HTTP：/v1/rooms/:id/stop 需成員 token；idle 時 409', async () => {
     assert.equal((await fetch(url(`/v1/rooms/${room.roomId}/stop`), { method: 'POST' })).status, 401, '無 token → 401');
     assert.equal((await fetch(url(`/v1/rooms/${room.roomId}/stop`), { method: 'POST', headers: MH })).status, 409, '無進行中回合 → 409');
   });
+});
+
+test('HTTP：會議室錄音 /audio → STT → 以成員身份發言（source:voice）；未啟用→501；空/靜音→不發言', async () => {
+  // mock STT server（OpenAI 相容 /v1/audio/transcriptions）：收到 multipart 就回固定文字。
+  let sttHits = 0;
+  const stt = createServer((req, res) => { sttHits++; req.on('data', () => {}); req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ text: '我們就用方案 A' })); }); });
+  await new Promise((r) => stt.listen(0, r));
+  const sttUrl = `http://localhost:${stt.address().port}/v1/audio/transcriptions`;
+  const base = mkdtempSync(join(tmpdir(), 'xk-stt-'));
+
+  // 1) 未啟用 STT → /audio 501
+  const off = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', baseDir: join(base, '.off') });
+  await new Promise((r) => off.listen(0, r));
+  const offU = (p) => `http://localhost:${off.address().port}${p}`;
+  const H = { 'content-type': 'application/json', authorization: 'Bearer t' };
+  const room0 = await fetch(offU('/v1/rooms'), { method: 'POST', headers: H, body: '{}' }).then((r) => r.json());
+  const j0 = await fetch(offU(`/v1/rooms/${room0.roomId}/join`), { method: 'POST', headers: H, body: JSON.stringify({ name: '小明' }) }).then((r) => r.json());
+  const r501 = await fetch(offU(`/v1/rooms/${room0.roomId}/audio`), { method: 'POST', headers: { 'content-type': 'audio/webm', authorization: 'Bearer ' + j0.memberToken }, body: Buffer.from('fake') });
+  assert.equal(r501.status, 501, '未設 STT → 501');
+  off.close();
+
+  // 2) 啟用 STT
+  const srv = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', stt: { endpoint: sttUrl, model: 'w' }, baseDir: join(base, '.on') });
+  await new Promise((r) => srv.listen(0, r));
+  const U = (p) => `http://localhost:${srv.address().port}${p}`;
+  try {
+    const room = await fetch(U('/v1/rooms'), { method: 'POST', headers: H, body: '{}' }).then((r) => r.json());
+    const j = await fetch(U(`/v1/rooms/${room.roomId}/join`), { method: 'POST', headers: H, body: JSON.stringify({ name: '小明' }) }).then((r) => r.json());
+    const MH = { 'content-type': 'audio/webm', authorization: 'Bearer ' + j.memberToken };
+    // 空 body → 不打 STT、不發言
+    const empty = await fetch(U(`/v1/rooms/${room.roomId}/audio`), { method: 'POST', headers: MH, body: Buffer.alloc(0) }).then((r) => r.json());
+    assert.deepEqual(empty, { ok: true, text: '' }, '空音訊 → 不發言');
+    // 有音訊 → STT → 發言
+    const ok = await fetch(U(`/v1/rooms/${room.roomId}/audio`), { method: 'POST', headers: MH, body: Buffer.from('....audio bytes....') }).then((r) => r.json());
+    assert.equal(ok.ok, true); assert.equal(ok.text, '我們就用方案 A', '回傳轉錄文字');
+    assert.ok(sttHits >= 1, 'STT 端點被呼叫');
+    // 房間快照裡出現「以小明身份、source:voice」的發言
+    const snap = await fetch(U(`/v1/rooms/${room.roomId}`), { headers: H }).then((r) => r.json());
+    const voice = snap.messages.find((m) => m.text === '我們就用方案 A');
+    assert.ok(voice, '轉錄文字進了房間訊息');
+    assert.equal(voice.name, '小明', '說話人＝該成員（各錄各麥）');
+    assert.equal(voice.source, 'voice', '標記為語音轉錄');
+  } finally { srv.close(); stt.close(); rmSync(base, { recursive: true, force: true }); }
 });
 
 async function withServer(fn) {
