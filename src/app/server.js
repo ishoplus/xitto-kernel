@@ -407,8 +407,9 @@ export const mentionsAi = (text) => /(^|[\s(（【「,，。、!！?？])@ai\b/i
  * @param {number} [o.maxConcurrency] 一房最多幾條 lane 同時跑 AI（預設 3；超出排隊）
  */
 // 會議紀要 goal：把整段對話 transcript 整理成三節（決策/待辦/摘要）並用 gen_doc 產出檔案。只依對話、不編造。
-export const minutesGoal = (transcript) => [
-  '把以下「會議對話」整理成一份專業會議紀要，用 gen_doc 產出檔案 會議紀要.pdf（缺工具會自動退回 HTML，沒關係）。',
+// filename 由呼叫端帶入（帶時間戳）→ 每次生成獨立成檔、不覆蓋既有紀要（避免資料丟失）。
+export const minutesGoal = (transcript, filename = '會議紀要.pdf') => [
+  `把以下「會議對話」整理成一份專業會議紀要，用 gen_doc 產出檔案 ${filename}（缺工具會自動退回 HTML，沒關係）。務必使用這個確切檔名，不要改名、不要覆蓋其他既有檔案。`,
   '內容分三節，用 markdown 標題：',
   '## 決策（會議達成的結論；沒有就寫「（無）」）',
   '## 待辦（可執行的行動項，盡量標出負責人與期限；沒有就寫「（無）」）',
@@ -607,10 +608,13 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
     const L = laneOf(r, '__minutes__');
     L.status = 'thinking'; emitStatus(r, '__minutes__'); persist(r);
     const transcript = fullTranscript(r).map((m) => `[${m.name || m.kind}] ${m.text}`).join('\n'); // 整場（含被 replay buffer 砍掉的前段）
+    // 帶時間戳的檔名 → 每次生成獨立成檔，不覆蓋既有紀要（散會自動重跑也不會吃掉先前那份）。
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-'); // 20260706-153045
+    const filename = `會議紀要-${stamp}.pdf`;
     const emit = (ev) => fanout(r, { type: 'ai', by: '__minutes__', ev });
     try {
-      const res = await runMinutes({ room: r, transcript, emit, onAgent: (a) => { L.agentRef = a; } });
-      push(r, { kind: 'system', name: 'system', text: '📋 已整理會議紀要，請看「工作台」的檔案（可下載）。' + (res?.text ? '\n' + String(res.text).slice(0, 300) : '') });
+      const res = await runMinutes({ room: r, transcript, filename, emit, onAgent: (a) => { L.agentRef = a; } });
+      push(r, { kind: 'system', name: 'system', text: `📋 已整理會議紀要《${filename}》，請看「工作台」的檔案（可下載）。` + (res?.text ? '\n' + String(res.text).slice(0, 300) : '') });
     } catch (e) {
       push(r, { kind: 'system', name: 'system', text: '生成會議紀要失敗：' + (e?.message || String(e)) });
     } finally {
@@ -1029,8 +1033,8 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       runKernel({ pack: room.pack, model: room.model || undefined, mode: 'turn', readOnly, input: expandFileRefs(input, workspaceDir(baseDir, room.workspace, local)), workspace: room.workspace, sessionId: sessionId || undefined },
         (ev) => { const m = mapEvent(ev); if (m) emit(m); }, undefined, onAgent),
     // 會議紀要：獨立 goal（docgen pack 拿 gen_doc、fresh session 不污染對話），把整段 transcript 整理成決策/待辦/摘要並產成檔。
-    runMinutes: ({ room, transcript, emit, onAgent }) =>
-      runKernel({ pack: 'docgen', model: room.model || undefined, mode: 'goal', workspace: room.workspace, goal: minutesGoal(transcript) },
+    runMinutes: ({ room, transcript, filename, emit, onAgent }) =>
+      runKernel({ pack: 'docgen', model: room.model || undefined, mode: 'goal', workspace: room.workspace, goal: minutesGoal(transcript, filename) },
         (ev) => { const m = mapEvent(ev); if (m) emit(m); }, undefined, onAgent),
   });
 
@@ -1145,7 +1149,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         const cfg = loadProvidersConfig(providersConfigPath(configPath));
         existing = Object.entries(cfg.providers || {}).map(([provider, p]) => ({
           provider, api: p.api || 'openai-completions', baseUrl: p.baseUrl || '', hasKey: !!p.apiKey,
-          models: (p.models || []).map((m) => ({ id: m.id, name: m.name || m.id, default: m.id === cfg.defaultModel })),
+          models: (p.models || []).map((m) => ({ id: m.id, name: m.name || m.id, default: m.id === cfg.defaultModel, image: Array.isArray(m.input) && m.input.includes('image') })),
         }));
       } catch { /* 尚無檔 → 空清單 */ }
       const html = SETUP_HTML
@@ -1591,6 +1595,8 @@ export function buildSetupConfig(body = {}) {
   const model = { id: modelId, name: String(body.modelName || '').trim() || modelId };
   if (Number(body.contextWindow) > 0) model.contextWindow = Number(body.contextWindow);
   if (Number(body.maxTokens) > 0) model.maxTokens = Number(body.maxTokens);
+  // 是否支援圖片（視覺輸入）：勾選 → input 宣告含 image（供未來多模態訊息與前端判斷）。
+  if (body.image) model.input = ['text', 'image'];
   return {
     defaultModel: modelId,
     providers: { [provider]: { api: String(body.api || 'openai-completions'), baseUrl, apiKey, models: [model] } },
@@ -1680,6 +1686,9 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
     <div><label>Model ID</label><input id="modelId" placeholder="gpt-4o" autocomplete="off"></div>
     <div><label>顯示名稱（可留白）</label><input id="modelName" placeholder="同 Model ID" autocomplete="off"></div>
   </div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;color:var(--fg)">
+    <input type="checkbox" id="image" style="width:auto;margin:0"> 🖼 支援圖片（視覺輸入）——此模型可接收圖片訊息
+  </label>
   <details><summary>進階（可留白用預設）</summary>
     <div class="grid2" style="margin-bottom:12px"><div><label>Context Window</label><input id="contextWindow" type="number" placeholder="128000"></div><div><label>Max Tokens</label><input id="maxTokens" type="number" placeholder="4096"></div></div>
   </details>
@@ -1710,7 +1719,7 @@ if(EXISTING){                              // 設定模式：顯示已配置的 
     html+='<div class="exist-p"><div class="exist-top"><b>'+esc(p.provider)+'</b> <span class="exist-m">'+esc(p.api||"")+'</span>'+
       '<span class="exist-act"><button class="mini" type="button" onclick="editProvider('+pi+')">編輯</button>'+
       '<button class="mini danger" type="button" onclick="delProvider('+pi+')">刪除</button></span></div><div class="exist-m">'+
-      p.models.map(function(m){var lbl=esc(m.name||m.id)+(m.name&&m.name!==m.id?' ('+esc(m.id)+')':'');var head=m.default?'<span class="def">★ '+lbl+'（預設）</span>':lbl+' <button class="mini" type="button" onclick="setDefault(\\''+esc(m.id)+'\\')">設為預設</button>';return head+' <button class="mini" type="button" title="真打一次對話測試連線" onclick="testModel(\\''+esc(m.id)+'\\')">測試</button> <button class="mini danger" type="button" title="刪除此模型" onclick="delModel(\\''+esc(m.id)+'\\')">✕</button>'}).join('<br>')+'</div></div>';
+      p.models.map(function(m){var lbl=esc(m.name||m.id)+(m.name&&m.name!==m.id?' ('+esc(m.id)+')':'')+(m.image?' 🖼':'');var head=m.default?'<span class="def">★ '+lbl+'（預設）</span>':lbl+' <button class="mini" type="button" onclick="setDefault(\\''+esc(m.id)+'\\')">設為預設</button>';return head+' <button class="mini" type="button" title="真打一次對話測試連線" onclick="testModel(\\''+esc(m.id)+'\\')">測試</button> <button class="mini danger" type="button" title="刪除此模型" onclick="delModel(\\''+esc(m.id)+'\\')">✕</button>'}).join('<br>')+'</div></div>';
   });
   $("#existing").innerHTML=html;
   $("#save").textContent="新增 / 更新模型";
@@ -1741,6 +1750,7 @@ function editProvider(pi){
   $("#provider").value=p.provider;$("#api").value=p.api||"openai-completions";$("#baseUrl").value=p.baseUrl||"";
   $("#apiKey").value="";$("#apiKey").placeholder=p.hasKey?"留空 = 沿用現有 API Key":"sk-…";
   var m0=(p.models&&p.models[0])||{};$("#modelId").value=m0.id||"";$("#modelName").value=(m0.name&&m0.name!==m0.id)?m0.name:"";
+  $("#image").checked=!!m0.image;
   showMsg("編輯「"+p.provider+"」：API Key 留空則不變更；Model ID 相同為更新、不同為新增一顆。","ok");
   try{$("#provider").scrollIntoView({behavior:"smooth",block:"center"})}catch(e){}$("#provider").focus();
 }
@@ -1772,7 +1782,7 @@ async function testForm(){
 }
 $("#test").onclick=testForm;
 $("#save").onclick=async function(){
-  var body={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim(),modelName:$("#modelName").value.trim(),contextWindow:Number($("#contextWindow").value)||undefined,maxTokens:Number($("#maxTokens").value)||undefined,makeDefault:$("#makeDefault").checked||undefined};
+  var body={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim(),modelName:$("#modelName").value.trim(),contextWindow:Number($("#contextWindow").value)||undefined,maxTokens:Number($("#maxTokens").value)||undefined,image:$("#image").checked||undefined,makeDefault:$("#makeDefault").checked||undefined};
   if(!body.provider||!body.baseUrl||!body.apiKey||!body.modelId)return showMsg("Provider 名稱、Base URL、API Key、Model ID 皆為必填。","err");
   $("#save").disabled=true;showMsg("儲存中…","ok");
   var r;try{r=await fetch("/v1/setup",{method:"POST",headers:AUTH,body:JSON.stringify(body)}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}

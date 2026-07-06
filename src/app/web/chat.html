@@ -1540,16 +1540,18 @@ function scrollDown() {
 
 /* ── 送出訊息 ──────────────────────────────────────────── */
 async function send(textOverride) {
-  const text = textOverride != null ? textOverride : $("#input").value.trim();
+  // 佇列回送才傳字串；其餘（含事件處理器誤傳的 Event）一律讀輸入框，避免變成「[object …]」。
+  const override = typeof textOverride === "string" ? textOverride : null;
+  const text = override != null ? override : $("#input").value.trim();
   if (!text) return;
-  // 回覆中仍可繼續輸入：手動送出時若本對話正在跑，排入佇列，回合結束後自動送出（textOverride 為佇列回送，不再入列）。
-  if (textOverride == null && currentRun()) {
+  // 回覆中仍可繼續輸入：手動送出時若本對話正在跑，排入佇列，回合結束後自動送出（override 為佇列回送，不再入列）。
+  if (override == null && currentRun()) {
     (messages._queue || (messages._queue = [])).push(text);
     $("#input").value = ""; autosize();
     const h = $("#status-hint"); if (h) h.textContent = "已排入佇列（" + messages._queue.length + " 則，本輪結束後自動送出）";
     return;
   }
-  if (textOverride == null) { $("#input").value = ""; autosize(); }
+  if (override == null) { $("#input").value = ""; autosize(); }
 
   messages.push({ role: "user", text });
   const asst = { role: "assistant", text: "", tools: [], _procOpen: false, phase: "thinking" };
@@ -1859,7 +1861,7 @@ inp.addEventListener("keydown", (e) => {
   }
 });
 
-$("#send-btn").onclick = send;
+$("#send-btn").onclick = () => send();
 $("#stop-btn").onclick = stopStream;
 
 /* ── 啟動 ──────────────────────────────────────────────── */

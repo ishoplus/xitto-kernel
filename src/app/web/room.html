@@ -603,9 +603,9 @@ function renderMessage(m) {
   if (m.kind === "system" && /失敗|錯誤|error/i.test(String(m.text || ""))) el.className += " err";
   // 被 @ 到自己 → 整條氣泡描邊（提及提醒）
   if (m.kind !== "system" && myName && String(m.text || "").includes("@" + myName)) el.className += " mentions-me";
-  // AI 發言用 markdown 渲染（.md 套 shared/style.css 排版）；人類發言保留 @提及／@檔案 解析。
+  // AI／系統訊息用 markdown 渲染（.md 套 shared/style.css 排版）；人類發言保留 @提及／@檔案 解析。
   el.innerHTML = m.kind === "system"
-    ? `<div class="bubble">${esc(m.text)}</div>`
+    ? `<div class="bubble md">${mdRender(m.text || "")}</div>`
     : m.kind === "ai"
     ? `<div class="who">${esc(m.name || "AI")}</div><div class="bubble md">${mdRender(m.text || "")}</div>`
     : `<div class="who">${esc(m.name)}</div><div class="bubble">${renderText(m.text)}</div>`;
