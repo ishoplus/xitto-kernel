@@ -1015,6 +1015,8 @@ body {
           <div class="composer-actions">
             <label for="pack" class="sr-only">選擇領域</label>
             <select id="pack" aria-label="選擇領域" style="max-width:170px"></select>
+            <label for="model" class="sr-only">選擇模型</label>
+            <select id="model" aria-label="選擇模型" title="這則訊息用哪個 AI 模型（回覆中也可切，下一則生效）" style="max-width:170px"><option value="">🧠 預設模型</option></select>
             <button class="primary send-btn" id="send-btn" aria-label="送出訊息">送出</button>
             <button class="stop-btn" id="stop-btn" type="button" style="display:none" data-tooltip="停止回覆（Esc）" aria-label="停止回覆（按 Esc）">■ 停止</button>
           </div>
@@ -1134,6 +1136,22 @@ mountProjectSwitcher(() => { newChat(); renderChats(); loadFiles(); });
 
 /* 領域選單 */
 renderPackSelect($("#pack"));
+
+/* 模型選單：拉 /v1/models 填入（第一項＝伺服器預設）。選擇記在 localStorage，回覆中也可切、下一則生效。 */
+const MODEL_KEY = "xk_model";
+async function loadModelSelect() {
+  const sel = $("#model"); if (!sel) return;
+  let data; try { data = await api("/v1/models").then((r) => (r.ok ? r.json() : null)); } catch { data = null; }
+  if (!data || !data.models) return;           // 訪客/無權 → 靜默保留「預設模型」單選
+  const saved = localStorage.getItem(MODEL_KEY) || "";
+  const defId = data.default;
+  sel.innerHTML = '<option value="">🧠 預設模型' + (defId ? "（" + esc(defId) + "）" : "") + "</option>" +
+    data.models.map((m) => '<option value="' + esc(m.id) + '">' + esc(m.name || m.id) + "</option>").join("");
+  if (saved && data.models.some((m) => m.id === saved)) sel.value = saved;
+}
+$("#model").addEventListener("change", () => { try { localStorage.setItem(MODEL_KEY, $("#model").value); } catch { /* 略 */ } });
+loadModelSelect();
+const chosenModel = () => ($("#model") && $("#model").value) || undefined;
 
 /* ── 對話持久化（localStorage）──────────────────────────── */
 const chatsKey = () => "xk_chats";
@@ -1521,11 +1539,17 @@ function scrollDown() {
 /* readSSE 已移至共用 app.js（許願台亦用） */
 
 /* ── 送出訊息 ──────────────────────────────────────────── */
-async function send() {
-  const text = $("#input").value.trim();
-  if (!text || currentRun()) return; // 同一對話一次一輪；其他對話可並行進行
-  $("#input").value = "";
-  autosize();
+async function send(textOverride) {
+  const text = textOverride != null ? textOverride : $("#input").value.trim();
+  if (!text) return;
+  // 回覆中仍可繼續輸入：手動送出時若本對話正在跑，排入佇列，回合結束後自動送出（textOverride 為佇列回送，不再入列）。
+  if (textOverride == null && currentRun()) {
+    (messages._queue || (messages._queue = [])).push(text);
+    $("#input").value = ""; autosize();
+    const h = $("#status-hint"); if (h) h.textContent = "已排入佇列（" + messages._queue.length + " 則，本輪結束後自動送出）";
+    return;
+  }
+  if (textOverride == null) { $("#input").value = ""; autosize(); }
 
   messages.push({ role: "user", text });
   const asst = { role: "assistant", text: "", tools: [], _procOpen: false, phase: "thinking" };
@@ -1533,15 +1557,17 @@ async function send() {
   render();
   scrollDown();
 
-  if (bgMode) { sendBackground(text, asst); return; } // 背景：不鎖輸入框，可連續派多個
+  const model = chosenModel(); // 此則用的模型（回覆中可切換，下一則生效）
+
+  if (bgMode) { sendBackground(text, asst, model); return; } // 背景：不鎖輸入框，可連續派多個
 
   // 前景串流：建一個綁定「此對話」的 run（切走不中斷）
-  const run = { chatMsgs: messages, sessionId, asst, abort: new AbortController(), startedAt: Date.now(), tokens: 0, firstUserText: text, space: curSpace, pack: $("#pack").value };
+  const run = { chatMsgs: messages, sessionId, asst, abort: new AbortController(), startedAt: Date.now(), tokens: 0, firstUserText: text, space: curSpace, pack: $("#pack").value, model };
   activeRuns.add(run);
   refreshStreamingUI();
   ensureTicker();
   if (run.sessionId) renderChats(); // 續接既有對話：側欄即時顯示進行中指示
-  const body = JSON.stringify({ pack: run.pack, mode: "turn", input: text, sessionId: run.sessionId || undefined, workspace: run.space });
+  const body = JSON.stringify({ pack: run.pack, mode: "turn", input: text, sessionId: run.sessionId || undefined, workspace: run.space, model: run.model || undefined });
   try {
     const resp = await api("/v1/stream", { method: "POST", body, signal: run.abort.signal });
     if (!resp.ok || !resp.body) {
@@ -1561,11 +1587,11 @@ async function send() {
 }
 
 /* ── 背景任務：派到 /v1/tasks，訂閱事件流，進度進 HUD ───────── */
-async function sendBackground(text, asst) {
+async function sendBackground(text, asst, model) {
   const pack = $("#pack").value;
   let resp, j;
   try {
-    resp = await api("/v1/tasks", { method: "POST", body: JSON.stringify({ pack, mode: "turn", input: text, sessionId: sessionId || undefined, workspace: curSpace }) });
+    resp = await api("/v1/tasks", { method: "POST", body: JSON.stringify({ pack, mode: "turn", input: text, sessionId: sessionId || undefined, workspace: curSpace, model: model || undefined }) });
     j = await resp.json().catch(() => ({}));
   } catch (e) {
     asst.phase = ""; asst.text = "⚠ 背景任務建立失敗：" + esc(e.message); render(); return;
@@ -1762,6 +1788,13 @@ function finalizeRun(run) {
   upsertChat({ id: sid, title, ts: Date.now(), space: run.space, pack: run.pack });
   saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, note: m.note })));
   renderChats();
+  // 佇列：本輪結束後，若仍在同一對話且非使用者中止 → 自動送出下一則排隊訊息。
+  const q = run.chatMsgs && run.chatMsgs._queue;
+  if (q && q.length && messages === run.chatMsgs && !run.userStopped) {
+    const next = q.shift();
+    const h = $("#status-hint"); if (h) h.textContent = q.length ? "佇列剩 " + q.length + " 則…" : "";
+    setTimeout(() => send(next), 30);
+  }
 }
 
 /* Esc / 停止鈕：只中止「目前所看對話」的 run（其他對話不受影響）。 */

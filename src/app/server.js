@@ -1138,12 +1138,13 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     // 設定入口（master only）：復用引導頁，改成「新增/更新一個 provider」語境。POST /v1/setup 合併進既有 providers.json 後熱重載。
     if (req.method === 'GET' && path === '/settings') {
       if (adminOnly(req, res)) return;
-      // 現有設定 → 注入頁面（不含 apiKey，避免外洩）：[{provider,api,models:[{id,name,default}]}]。
+      // 現有設定 → 注入頁面（含 baseUrl 供編輯預填，但不含 apiKey 避免外洩；hasKey 標記是否已設 key）：
+      // [{provider,api,baseUrl,hasKey,models:[{id,name,default}]}]。
       let existing = [];
       try {
         const cfg = loadProvidersConfig(providersConfigPath(configPath));
         existing = Object.entries(cfg.providers || {}).map(([provider, p]) => ({
-          provider, api: p.api || 'openai-completions',
+          provider, api: p.api || 'openai-completions', baseUrl: p.baseUrl || '', hasKey: !!p.apiKey,
           models: (p.models || []).map((m) => ({ id: m.id, name: m.name || m.id, default: m.id === cfg.defaultModel })),
         }));
       } catch { /* 尚無檔 → 空清單 */ }
@@ -1159,7 +1160,24 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const cfgPath = providersConfigPath(configPath);
       let base = null; try { base = loadProvidersConfig(cfgPath); } catch { /* 尚無檔 → 等同新建 */ }
       let cfg;
-      if (body.setDefault && !body.provider) {
+      if (body.deleteProvider || body.deleteModel) {
+        // 刪除：整個 provider，或某顆 model（其 provider 若因此空掉一併移除）。
+        if (!base || !base.providers) return json(res, 400, { error: '尚無任何模型設定' });
+        const providers = {};
+        for (const [name, p] of Object.entries(base.providers)) {
+          if (name === body.deleteProvider) continue;
+          let models = p.models || [];
+          if (body.deleteModel) models = models.filter((m) => m.id !== body.deleteModel);
+          if (body.deleteModel && models.length === 0) continue; // model 刪光 → 順手移除空 provider
+          providers[name] = { ...p, models };
+        }
+        const allIds = Object.values(providers).flatMap((p) => (p.models || []).map((m) => m.id));
+        if (!allIds.length) return json(res, 400, { error: '不能刪除最後一個模型（服務至少需保留一個可用模型）' });
+        // 預設被刪 → 回落到剩下的第一個，避免 providers.json 指向不存在的 defaultModel。
+        const defaultModel = allIds.includes(base.defaultModel) ? base.defaultModel : allIds[0];
+        cfg = { ...base, providers, defaultModel };
+        try { buildModel(cfg, cfg.defaultModel); } catch (e) { return json(res, 400, { error: e.message }); }
+      } else if (body.setDefault && !body.provider) {
         // 輕量操作：只把「已配置的某個 model」設為預設，不需重填 provider/baseUrl/apiKey。
         if (!base || !base.providers) return json(res, 400, { error: '尚無任何模型設定' });
         const exists = Object.values(base.providers).some((p) => (p.models || []).some((m) => m.id === body.setDefault));
@@ -1167,7 +1185,10 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         cfg = { ...base, defaultModel: body.setDefault };
         try { buildModel(cfg, cfg.defaultModel); } catch (e) { return json(res, 400, { error: e.message }); }
       } else {
-        try { cfg = mergeSetupConfig(base, body); buildModel(cfg, cfg.defaultModel); } catch (e) { return json(res, 400, { error: e.message }); }
+        // 編輯既有 provider 時 API Key 留空 = 沿用舊 key（頁面為安全不回顯舊 key，故留空代表「不變更」）。
+        const eff = (body.provider && !String(body.apiKey || '').trim() && base?.providers?.[body.provider]?.apiKey)
+          ? { ...body, apiKey: base.providers[body.provider].apiKey } : body;
+        try { cfg = mergeSetupConfig(base, eff); buildModel(cfg, cfg.defaultModel); } catch (e) { return json(res, 400, { error: e.message }); }
       }
       try { mkdirSync(dirname(cfgPath), { recursive: true }); writeFileSync(cfgPath, JSON.stringify(cfg, null, 2)); }
       catch (e) { return json(res, 500, { error: '寫入設定失敗：' + e.message }); }
@@ -1176,6 +1197,39 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       // 回應送達後熱重載（close 現有 server → 用同 opts 重起，載入新設定）。無 onReconfigure（如注入式啟動）則需手動重啟。
       if (onReconfigure) setTimeout(() => { try { onReconfigure(); } catch (e) { console.error('熱重載失敗：', e.message); } }, 300);
       return;
+    }
+
+    // 測試對話（admin only）：真打一次極短 LLM 呼叫，確認某 model 的 provider/baseUrl/key 端到端可用。
+    // body：{ modelId }（測已儲存的 model）或 { provider, api, baseUrl, apiKey, modelId }（測表單裡未儲存的設定；apiKey 留空=沿用既有）。
+    if (req.method === 'POST' && path === '/v1/setup/test') {
+      if (adminOnly(req, res)) return;
+      const body = await readBody(req);
+      let m, getKey;
+      try {
+        if (body.baseUrl && body.provider && body.modelId) {
+          let b = body;
+          if (!String(body.apiKey || '').trim()) {
+            try { const base = loadProvidersConfig(providersConfigPath(configPath)); const k = base?.providers?.[body.provider]?.apiKey; if (k) b = { ...body, apiKey: k }; } catch { /* 無檔略過 */ }
+          }
+          const built = buildModel(buildSetupConfig(b), b.modelId); m = built.model; getKey = built.getApiKey;
+        } else if (body.modelId) {
+          const built = buildModel(loadProvidersConfig(providersConfigPath(configPath)), body.modelId); m = built.model; getKey = built.getApiKey;
+        } else return json(res, 400, { error: '需指定 modelId（或完整 provider 設定）' });
+      } catch (e) { return json(res, 400, { error: e.message }); }
+      const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 20000);
+      try {
+        const apiKey = getKey ? await getKey(m.provider) : undefined;
+        if (!apiKey) return json(res, 200, { ok: false, model: m.id, error: '缺少 API Key（或 ${ENV_VAR} 未設）' });
+        const ctx = { systemPrompt: '你是連線測試助手。', messages: [{ role: 'user', content: [{ type: 'text', text: '請只回覆兩個字：OK' }], timestamp: Date.now() }] };
+        const r = await completeSimple(m, ctx, { maxTokens: 16, apiKey, signal: ac.signal, cacheRetention: cacheRetentionFor(m) });
+        const reply = (r?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim();
+        // 拿到非空回覆才算成功：completeSimple 對連線失敗常是「不拋錯、回空內容」，故以「有無實際回覆」判定連通。
+        if (!reply) return json(res, 200, { ok: false, model: m.id, error: '無回覆——連線可能失敗，請檢查 Base URL／API Key／網路' });
+        return json(res, 200, { ok: true, model: m.id, reply: reply.slice(0, 200) });
+      } catch (e) {
+        const msg = ac.signal.aborted ? '逾時（20s）——檢查 Base URL／網路／金鑰' : (e.message || String(e));
+        return json(res, 200, { ok: false, model: m.id, error: String(msg).slice(0, 300) });
+      } finally { clearTimeout(timer); }
     }
 
     // 換發邀請碼（撤銷舊連結；master only）
@@ -1409,11 +1463,12 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (!pack || pack === 'auto') { pack = await classifyPack(body.goal || body.input || '', { model, getApiKey }); routed = true; }
       if (!PACKS[pack]) return json(res, 400, { error: `未知 pack「${body.pack}」，可用：${Object.keys(PACKS).join(', ')}` });
       if (body.webhook && !/^https?:\/\//.test(body.webhook)) return json(res, 400, { error: 'webhook 需為 http(s) URL' });
+      if (body.model && !knownModel(body.model)) return json(res, 400, { error: `未知 model「${body.model}」，可用：${modelList.map((m) => m.id).join(', ')}` });
       // 本地絕對路徑：缺失自動建立（與 CLI 一致），指到既有檔案才 fail-fast 報錯。
       if (local && body.workspace && isAbsolute(body.workspace)) {
         try { ensureWorkdir(body.workspace); } catch (e) { return json(res, 400, { error: e.message }); }
       }
-      const t = tasks.enqueue({ pack, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook, workspace: body.workspace, auto: routed });
+      const t = tasks.enqueue({ pack, model: body.model || undefined, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook, workspace: body.workspace, auto: routed });
       log({ task: t.id, action: 'enqueue', pack, routed, mode: body.mode || 'turn' });
       return json(res, 202, { taskId: t.id, status: t.status, pack, routed, ...tasks.stats() });
     }
@@ -1585,6 +1640,8 @@ details{border:1px solid var(--line);border-radius:9px;padding:0 12px;margin-top
 summary{cursor:pointer;padding:9px 0;font-size:13px;color:var(--dim)}
 button{background:var(--accent);color:var(--btnfg);border:0;border-radius:9px;padding:11px 16px;font:inherit;font-weight:600;cursor:pointer;width:100%;margin-top:18px}
 button:disabled{opacity:.6;cursor:default}
+button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+button.ghost:hover{border-color:var(--accent)}
 .msg{margin-top:14px;font-size:13px;padding:9px 12px;border-radius:9px;display:none}
 .msg.err{display:block;color:var(--err);background:color-mix(in srgb,var(--err) 12%,transparent);border:1px solid color-mix(in srgb,var(--err) 35%,var(--line))}
 .msg.ok{display:block;color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,var(--line))}
@@ -1596,6 +1653,10 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
 .exist-p b{font-size:13px}
 .exist-m{font-size:12px;color:var(--dim);margin-top:3px}
 .exist-m .def{color:var(--accent);font-weight:600}
+.exist-top{display:flex;align-items:center;gap:6px}
+.exist-act{margin-left:auto;display:flex;gap:6px;flex-shrink:0}
+.mini.danger{color:var(--err);border-color:color-mix(in srgb,var(--err) 30%,var(--line))}
+.mini.danger:hover{border-color:var(--err)}
 </style></head><body>
 <div class="card">
   <div class="brand"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/></g></svg><h1>初始設定</h1><button id="closeBtn" class="close" type="button" title="關閉（不變更）" hidden>✕ 關閉</button></div>
@@ -1626,7 +1687,7 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
     <input type="checkbox" id="makeDefault" style="width:auto;margin:0"> 設為預設模型（新會議 / 未指定時用它）
   </label>
   <div class="msg" id="msg"></div>
-  <button id="save" type="button">儲存並啟動</button>
+  <div class="grid2"><div><button id="test" class="ghost" type="button" title="不儲存，先打一次對話確認可連線">🧪 測試對話</button></div><div><button id="save" type="button">儲存並啟動</button></div></div>
 </div>
 <script>
 var $=function(s){return document.querySelector(s)};
@@ -1644,10 +1705,12 @@ var showMsg=esch;
 if(EXISTING){                              // 設定模式：顯示已配置的 provider/model 清單 + 允許設預設
   $("#defWrap").style.display="flex";
   var n=EXISTING.reduce(function(a,p){return a+p.models.length},0);
-  var html='<div class="exist-h">目前已配置 '+EXISTING.length+' 個 provider · '+n+' 個模型（下方表單可新增或更新一個；不會覆蓋其他）：</div>';
-  EXISTING.forEach(function(p){
-    html+='<div class="exist-p"><b>'+esc(p.provider)+'</b> <span class="exist-m">'+esc(p.api||"")+'</span><div class="exist-m">'+
-      p.models.map(function(m){var lbl=esc(m.name||m.id)+(m.name&&m.name!==m.id?' ('+esc(m.id)+')':'');return m.default?'<span class="def">★ '+lbl+'（預設）</span>':lbl+' <button class="mini" type="button" onclick="setDefault(\\''+esc(m.id)+'\\')">設為預設</button>'}).join(' · ')+'</div></div>';
+  var html='<div class="exist-h">目前已配置 '+EXISTING.length+' 個 provider · '+n+' 個模型（可編輯／刪除，或用下方表單新增／更新）：</div>';
+  EXISTING.forEach(function(p,pi){
+    html+='<div class="exist-p"><div class="exist-top"><b>'+esc(p.provider)+'</b> <span class="exist-m">'+esc(p.api||"")+'</span>'+
+      '<span class="exist-act"><button class="mini" type="button" onclick="editProvider('+pi+')">編輯</button>'+
+      '<button class="mini danger" type="button" onclick="delProvider('+pi+')">刪除</button></span></div><div class="exist-m">'+
+      p.models.map(function(m){var lbl=esc(m.name||m.id)+(m.name&&m.name!==m.id?' ('+esc(m.id)+')':'');var head=m.default?'<span class="def">★ '+lbl+'（預設）</span>':lbl+' <button class="mini" type="button" onclick="setDefault(\\''+esc(m.id)+'\\')">設為預設</button>';return head+' <button class="mini" type="button" title="真打一次對話測試連線" onclick="testModel(\\''+esc(m.id)+'\\')">測試</button> <button class="mini danger" type="button" title="刪除此模型" onclick="delModel(\\''+esc(m.id)+'\\')">✕</button>'}).join('<br>')+'</div></div>';
   });
   $("#existing").innerHTML=html;
   $("#save").textContent="新增 / 更新模型";
@@ -1664,6 +1727,50 @@ async function setDefault(id){
   showMsg("已設為預設，服務重載中…","ok");
   var tries=0;var poll=async function(){tries++;try{var h=await fetch("/health",{cache:"no-store"}).then(function(x){return x.json()});if(h&&h.mode!=="setup"){location.reload();return}}catch(e){}if(tries>40)return showMsg("已設定，請手動重新整理。","ok");setTimeout(poll,800)};setTimeout(poll,1000);
 }
+// 通用 /v1/setup 動作（刪除等）：POST → 顯示訊息 → 輪詢 /health 重載完成後刷新頁面。
+async function doSetup(payload,okMsg){
+  var r;try{r=await fetch("/v1/setup",{method:"POST",headers:AUTH,body:JSON.stringify(payload)}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}
+  if(!r||r.error)return showMsg((r&&r.error)||"操作失敗","err");
+  showMsg(okMsg,"ok");
+  var tries=0;var poll=async function(){tries++;try{var h=await fetch("/health",{cache:"no-store"}).then(function(x){return x.json()});if(h&&h.mode!=="setup"){location.reload();return}}catch(e){}if(tries>40)return showMsg("已完成，請手動重新整理。","ok");setTimeout(poll,800)};setTimeout(poll,1000);
+}
+// 編輯既有 provider：把其欄位帶進下方表單（baseUrl 可改；API Key 留空=不變更；Model ID 同=更新、不同=新增）。
+function editProvider(pi){
+  var p=EXISTING&&EXISTING[pi];if(!p)return;
+  $("#preset").value="custom";
+  $("#provider").value=p.provider;$("#api").value=p.api||"openai-completions";$("#baseUrl").value=p.baseUrl||"";
+  $("#apiKey").value="";$("#apiKey").placeholder=p.hasKey?"留空 = 沿用現有 API Key":"sk-…";
+  var m0=(p.models&&p.models[0])||{};$("#modelId").value=m0.id||"";$("#modelName").value=(m0.name&&m0.name!==m0.id)?m0.name:"";
+  showMsg("編輯「"+p.provider+"」：API Key 留空則不變更；Model ID 相同為更新、不同為新增一顆。","ok");
+  try{$("#provider").scrollIntoView({behavior:"smooth",block:"center"})}catch(e){}$("#provider").focus();
+}
+async function delProvider(pi){
+  var p=EXISTING&&EXISTING[pi];if(!p)return;
+  if(!confirm("刪除 provider「"+p.provider+"」及其所有模型？會改寫 providers.json 並熱重載服務。"))return;
+  await doSetup({deleteProvider:p.provider},"已刪除 provider「"+p.provider+"」，服務重載中…");
+}
+async function delModel(id){
+  if(!confirm("刪除模型「"+id+"」？"))return;
+  await doSetup({deleteModel:id},"已刪除模型「"+id+"」，服務重載中…");
+}
+// 測試已儲存的某個 model：真打一次對話，回報成功/失敗（不改動設定）。
+async function testModel(id){
+  showMsg("測試「"+id+"」對話中…","ok");
+  var r;try{r=await fetch("/v1/setup/test",{method:"POST",headers:AUTH,body:JSON.stringify({modelId:id})}).then(function(x){return x.json()})}catch(e){r={ok:false,error:"無法連線到伺服器"}}
+  if(r&&r.ok)showMsg("✓ 「"+id+"」可對話 · 回覆："+esc(r.reply||"OK"),"ok");
+  else showMsg("✗ 「"+id+"」測試失敗："+esc((r&&r.error)||"未知錯誤"),"err");
+}
+// 測試「表單裡（未儲存）的設定」：API Key 留空則沿用既有 provider 的 key。
+async function testForm(){
+  var b={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim()};
+  if(!b.provider||!b.baseUrl||!b.modelId)return showMsg("測試需要 Provider、Base URL、Model ID（API Key 留空則沿用既有）。","err");
+  $("#test").disabled=true;showMsg("測試對話中…（最多 20 秒）","ok");
+  var r;try{r=await fetch("/v1/setup/test",{method:"POST",headers:AUTH,body:JSON.stringify(b)}).then(function(x){return x.json()})}catch(e){r={ok:false,error:"無法連線到伺服器"}}
+  $("#test").disabled=false;
+  if(r&&r.ok)showMsg("✓ 連線成功 · 回覆："+esc(r.reply||"OK"),"ok");
+  else showMsg("✗ 測試失敗："+esc((r&&r.error)||"未知錯誤"),"err");
+}
+$("#test").onclick=testForm;
 $("#save").onclick=async function(){
   var body={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim(),modelName:$("#modelName").value.trim(),contextWindow:Number($("#contextWindow").value)||undefined,maxTokens:Number($("#maxTokens").value)||undefined,makeDefault:$("#makeDefault").checked||undefined};
   if(!body.provider||!body.baseUrl||!body.apiKey||!body.modelId)return showMsg("Provider 名稱、Base URL、API Key、Model ID 皆為必填。","err");
