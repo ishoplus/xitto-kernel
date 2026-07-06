@@ -1175,10 +1175,13 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
           models: (p.models || []).map((m) => ({ id: m.id, name: m.name || m.id, default: m.id === cfg.defaultModel, image: Array.isArray(m.input) && m.input.includes('image') })),
         }));
       } catch { /* 尚無檔 → 空清單 */ }
+      // STT 現況注入頁面（不含 apiKey；hasKey 標記是否已設）→ UI 預填、可就地改。
+      const sttPage = { endpoint: stt?.endpoint || '', model: stt?.model || '', language: stt?.language || '', hasKey: !!stt?.apiKey, enabled: !!(stt && stt.endpoint) };
       const html = SETUP_HTML
         .replace('<h1>初始設定</h1>', '<h1>模型設定</h1>')
         .replace(/尚未偵測到 provider 設定（<code>providers.json<\/code>）。填入要用的模型服務，儲存後服務會自動啟動——不需要重進容器。/, '在此新增或更新模型服務（provider / model）。既有設定不會被覆蓋；儲存後服務自動重載，可繼續新增。')
-        .replace('/*EXISTING*/null', JSON.stringify(existing));
+        .replace('/*EXISTING*/null', JSON.stringify(existing))
+        .replace('/*STT*/null', JSON.stringify(sttPage));
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(html);
     }
     if (req.method === 'POST' && path === '/v1/setup') {
@@ -1222,6 +1225,28 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       log({ action: 'reconfigure', provider: Object.keys(body.provider ? { [body.provider]: 1 } : {})[0], model: body.modelId });
       json(res, 200, { ok: true, path: cfgPath, reload: !!onReconfigure });
       // 回應送達後熱重載（close 現有 server → 用同 opts 重起，載入新設定）。無 onReconfigure（如注入式啟動）則需手動重啟。
+      if (onReconfigure) setTimeout(() => { try { onReconfigure(); } catch (e) { console.error('熱重載失敗：', e.message); } }, 300);
+      return;
+    }
+
+    // STT 設定（master only）：存進 <baseDir>/stt.json → 熱重載。endpoint 留空＝停用錄音。
+    // apiKey 留空＝沿用現有（不必每次重填）。存過後即以此檔為準，不再看 env（見 startServer 的優先序）。
+    if (req.method === 'POST' && path === '/v1/stt') {
+      if (adminOnly(req, res)) return;
+      const body = await readBody(req);
+      const sttFile = join(baseDir, 'stt.json');
+      let cur = {}; try { cur = JSON.parse(readFileSync(sttFile, 'utf8')); } catch { /* 尚無檔 */ }
+      const next = {
+        endpoint: String(body.endpoint ?? cur.endpoint ?? '').trim(),
+        model: String(body.model ?? cur.model ?? '').trim(),
+        language: String(body.language ?? cur.language ?? '').trim(),
+        apiKey: (body.apiKey != null && body.apiKey !== '') ? String(body.apiKey) : (cur.apiKey || ''),
+      };
+      if (next.endpoint && !/^https?:\/\//.test(next.endpoint)) return json(res, 400, { error: 'endpoint 需為 http(s) 網址' });
+      try { mkdirSync(baseDir, { recursive: true }); writeFileSync(sttFile, JSON.stringify(next, null, 2)); }
+      catch (e) { return json(res, 500, { error: '寫入 STT 設定失敗：' + e.message }); }
+      log({ action: 'stt-config', enabled: !!next.endpoint, model: next.model || undefined });
+      json(res, 200, { ok: true, enabled: !!next.endpoint, reload: !!onReconfigure });
       if (onReconfigure) setTimeout(() => { try { onReconfigure(); } catch (e) { console.error('熱重載失敗：', e.message); } }, 300);
       return;
     }
@@ -1744,6 +1769,20 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
   <div class="msg" id="msg"></div>
   <div class="grid2"><div><button id="test" class="ghost" type="button" title="不儲存，先打一次對話確認可連線">🧪 測試對話</button></div><div><button id="save" type="button">儲存並啟動</button></div></div>
 </div>
+<div class="card" id="sttCard" style="display:none;margin-top:14px">
+  <div class="brand" style="margin-bottom:4px"><h1 style="font-size:18px">🎙 語音轉文字（會議室錄音）</h1></div>
+  <p class="sub" id="sttStatus"></p>
+  <label>STT 端點（OpenAI 相容 <code>/v1/audio/transcriptions</code>）</label>
+  <input id="sttEndpoint" placeholder="http://localhost:8000/v1/audio/transcriptions" autocomplete="off">
+  <div class="hint">留空 = 停用會議室錄音鈕。本地可用 faster-whisper-server（見 <code>docs/13</code>）。</div>
+  <div class="grid2">
+    <div><label>模型</label><input id="sttModel" placeholder="Systran/faster-whisper-large-v3" autocomplete="off"></div>
+    <div><label>語言碼（留白＝自動偵測）</label><input id="sttLang" placeholder="zh" autocomplete="off"></div>
+  </div>
+  <label>API Key（本地通常不需要）</label><input id="sttKey" type="password" placeholder="留空 = 不變更" autocomplete="off">
+  <div class="msg" id="sttMsg"></div>
+  <div class="grid2"><div></div><div><button id="sttSave" type="button">儲存語音設定</button></div></div>
+</div>
 <script>
 var $=function(s){return document.querySelector(s)};
 var PRESETS={custom:{provider:"",api:"openai-completions",baseUrl:"",model:""},openai:{provider:"openai",api:"openai-completions",baseUrl:"https://api.openai.com/v1",model:"gpt-4o"},deepseek:{provider:"deepseek",api:"openai-completions",baseUrl:"https://api.deepseek.com",model:"deepseek-chat"},minimax:{provider:"minimax",api:"openai-completions",baseUrl:"https://api.minimaxi.com/v1",model:"MiniMax-M2"},openrouter:{provider:"openrouter",api:"openai-completions",baseUrl:"https://openrouter.ai/api/v1",model:""},anthropic:{provider:"anthropic",api:"anthropic-messages",baseUrl:"https://api.anthropic.com",model:"claude-sonnet-4"}};
@@ -1754,6 +1793,22 @@ var TK=new URLSearchParams(location.search).get("token");
 var AUTH=TK?{"content-type":"application/json",authorization:"Bearer "+TK}:{"content-type":"application/json"};
 // EXISTING：/settings 進來時由後端注入現有設定（[{provider,api,models:[{id,name,default}]}]）；首次引導頁為 null。
 var EXISTING=/*EXISTING*/null;
+// STT：/settings 注入現有語音設定（不含 apiKey，hasKey 標記）；首次引導頁為 null → 不顯示語音卡。
+var STT=/*STT*/null;
+if(STT){
+  $("#sttCard").style.display="block";
+  $("#sttEndpoint").value=STT.endpoint||"";$("#sttModel").value=STT.model||"";$("#sttLang").value=STT.language||"";
+  if(STT.hasKey)$("#sttKey").placeholder="留空 = 沿用現有 API Key";
+  $("#sttStatus").textContent=STT.enabled?"狀態：已啟用 — 會議室成員可錄音轉逐字稿。":"狀態：未啟用 — 填入 STT 端點即開啟。";
+  $("#sttSave").onclick=async function(){
+    var payload={endpoint:$("#sttEndpoint").value.trim(),model:$("#sttModel").value.trim(),language:$("#sttLang").value.trim(),apiKey:$("#sttKey").value};
+    var m=$("#sttMsg");m.textContent="儲存中…";m.className="msg";
+    var r;try{r=await fetch("/v1/stt",{method:"POST",headers:AUTH,body:JSON.stringify(payload)}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}
+    if(!r||r.error){m.textContent=(r&&r.error)||"儲存失敗";m.className="msg err";return}
+    m.textContent=(r.enabled?"已儲存並啟用":"已儲存（停用）")+"，服務重載中…";m.className="msg ok";
+    var tries=0;var poll=async function(){tries++;try{var h=await fetch("/health",{cache:"no-store"}).then(function(x){return x.json()});if(h&&h.mode!=="setup"){location.reload();return}}catch(e){}if(tries>40){m.textContent="已儲存，請手動重新整理。";return}setTimeout(poll,800)};setTimeout(poll,1000);
+  };
+}
 var esc=function(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})};
 function esch(t,k){var e=$("#msg");e.textContent=t;e.className="msg "+k}
 var showMsg=esch;
@@ -1892,8 +1947,11 @@ export function startServer(opts = {}) {
   const allowedEmailDomain = opts.allowedEmailDomain ?? process.env.XITTO_ALLOWED_EMAIL_DOMAIN ?? '';
   // 開放模式（XITTO_SSO_OPEN=1 或 XITTO_ALLOWED_EMAIL_DOMAIN=*）：只要 SSO 通過即可用（給 member），不看名冊/網域。
   const ssoOpen = opts.ssoOpen ?? (process.env.XITTO_SSO_OPEN === '1' || allowedEmailDomain === '*');
-  // 語音轉文字（STT）：設 XITTO_STT_ENDPOINT（OpenAI 相容 /v1/audio/transcriptions，如本地 faster-whisper-server）即啟用會議室錄音。
-  const stt = opts.stt ?? (process.env.XITTO_STT_ENDPOINT ? {
+  // 語音轉文字（STT）：優先序 opts（注入式）> 持久化設定檔（/settings UI 存的）> 環境變數（部署者設的）。
+  // UI 一旦存過即以 <baseDir>/stt.json 為準（endpoint 留空＝停用），不必再靠 env、也不必重進容器。
+  let sttSaved = null;
+  try { const f = join(baseDir, 'stt.json'); if (existsSync(f)) sttSaved = JSON.parse(readFileSync(f, 'utf8')); } catch { /* 壞檔略，退回 env */ }
+  const stt = opts.stt ?? sttSaved ?? (process.env.XITTO_STT_ENDPOINT ? {
     endpoint: process.env.XITTO_STT_ENDPOINT,
     model: process.env.XITTO_STT_MODEL || 'Systran/faster-whisper-large-v3',
     apiKey: process.env.XITTO_STT_KEY || '',

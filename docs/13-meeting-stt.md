@@ -62,7 +62,9 @@ XITTO_STT_MODEL=Systran/faster-whisper-large-v3 \
 XITTO_STT_LANGUAGE=zh \
 PORT=8787 XITTO_SERVER_TOKEN=secret node src/app/server.js
 ```
-啟動日誌會出現 `🎙 語音轉文字：已啟用 …`。**改設定後必須重啟進程**（room.html 於啟動時快取）。
+啟動日誌會出現 `🎙 語音轉文字：已啟用 …`。
+
+> **也可用 UI 設定（免 env、免重啟）**：master 開 `/settings` → 最下方「🎙 語音轉文字」卡片填端點/模型/語言/Key，儲存後存進 `<baseDir>/stt.json` 並自動熱重載。優先序為 **注入式 opts > `stt.json`（UI 存的）> 環境變數**——一旦用 UI 存過即以該檔為準（端點留空＝停用）。env 適合宣告式部署，UI 適合臨場調整。
 
 ## 3. 使用者怎麼用
 
@@ -102,7 +104,7 @@ PORT=8787 XITTO_SERVER_TOKEN=secret node src/app/server.js
 
 - **P2 即時字幕**：串流 STT，邊說邊顯示 interim 文字（需串流式 STT 後端）。
 - **P3 共用麥 + diarization**（見 §6）。
-- **STT 設定搬進 `/settings`**：目前走環境變數；可比照模型設定頁做成 UI。
+- ~~STT 設定搬進 `/settings`~~ ✅ **已完成**（見 §2）：master 可在 `/settings` 頁的「🎙 語音轉文字」卡片填端點/模型/語言/Key，存進 `<baseDir>/stt.json` 並自動熱重載，不必改 env、不必重進容器。
 
 ## 8. 排錯 / Troubleshooting
 

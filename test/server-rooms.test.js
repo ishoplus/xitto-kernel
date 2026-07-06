@@ -749,6 +749,43 @@ test('HTTP：/v1/rooms/:id/stop 需成員 token；idle 時 409', async () => {
   });
 });
 
+test('HTTP：/v1/stt 存語音設定到 <baseDir>/stt.json（apiKey 留空沿用、endpoint 空=停用、非 admin 擋、非法網址 400）', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'xk-sttcfg-'));
+  const app = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', baseDir: base });
+  await new Promise((r) => app.listen(0, r));
+  const U = (p) => `http://localhost:${app.address().port}${p}`;
+  const AD = { 'content-type': 'application/json', authorization: 'Bearer t' };
+  const sttFile = join(base, 'stt.json');
+  try {
+    // 非 admin → 擋
+    const noauth = await fetch(U('/v1/stt'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.ok(noauth.status === 401 || noauth.status === 403, '非 admin 被擋（實際 ' + noauth.status + '）');
+
+    // 非法 endpoint（非 http）→ 400
+    const bad = await fetch(U('/v1/stt'), { method: 'POST', headers: AD, body: JSON.stringify({ endpoint: 'localhost:8000' }) }).then((r) => r.json());
+    assert.ok(bad.error, '非 http(s) 網址 → 錯誤');
+
+    // 存一份完整設定 → 寫檔、enabled
+    const r1 = await fetch(U('/v1/stt'), { method: 'POST', headers: AD, body: JSON.stringify({ endpoint: 'http://localhost:8000/v1/audio/transcriptions', model: 'w-large', language: 'zh', apiKey: 'sk-stt' }) }).then((r) => r.json());
+    assert.equal(r1.ok, true); assert.equal(r1.enabled, true);
+    let saved = JSON.parse(readFileSync(sttFile, 'utf8'));
+    assert.equal(saved.endpoint, 'http://localhost:8000/v1/audio/transcriptions');
+    assert.equal(saved.model, 'w-large'); assert.equal(saved.language, 'zh'); assert.equal(saved.apiKey, 'sk-stt');
+
+    // 再存、apiKey 留空 → 沿用現有；改語言
+    await fetch(U('/v1/stt'), { method: 'POST', headers: AD, body: JSON.stringify({ endpoint: saved.endpoint, language: 'en', apiKey: '' }) }).then((r) => r.json());
+    saved = JSON.parse(readFileSync(sttFile, 'utf8'));
+    assert.equal(saved.apiKey, 'sk-stt', 'apiKey 留空 → 沿用現有');
+    assert.equal(saved.language, 'en', '其他欄位更新');
+
+    // endpoint 留空 → 停用（仍保留 key 供再啟用）
+    const r3 = await fetch(U('/v1/stt'), { method: 'POST', headers: AD, body: JSON.stringify({ endpoint: '' }) }).then((r) => r.json());
+    assert.equal(r3.enabled, false, 'endpoint 空 → 停用');
+    saved = JSON.parse(readFileSync(sttFile, 'utf8'));
+    assert.equal(saved.endpoint, ''); assert.equal(saved.apiKey, 'sk-stt', '停用仍保留 key');
+  } finally { app.close(); rmSync(base, { recursive: true, force: true }); }
+});
+
 test('HTTP：會議室錄音 /audio → STT → 以成員身份發言（source:voice）；未啟用→501；空/靜音→不發言', async () => {
   // mock STT server（OpenAI 相容 /v1/audio/transcriptions）：收到 multipart 就回固定文字。
   let sttHits = 0;
