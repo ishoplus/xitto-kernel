@@ -150,6 +150,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
 /* 手機頂欄（漢堡 + 房名）與抽屜側欄：桌機隱藏 */
 .mobile-bar { display: none; }
 .side-backdrop { display: none; }
+@media (max-width: 1024px) { :root { --sidebar-w: 260px; } }  /* 與許願台/對話同寬，切頁不變寬 */
 @media (max-width: 720px) {
   .app { grid-template-columns: 1fr; }
   /* 側欄改成從左滑入的抽屜（不再整個消失 → 手機也能看成員/檔案/邀請/紀要/離開）*/
