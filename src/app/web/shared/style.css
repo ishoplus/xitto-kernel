@@ -52,6 +52,7 @@
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
+  --r-pill: 999px;   /* 狀態標籤/膠囊統一圓角 */
   
   /* 陰影（景深層次）*/
   --shadow-sm:   0 1px 2px rgba(0,0,0,.4);
@@ -250,8 +251,8 @@ a:focus-visible {
 .badge {
   display: inline-block;
   font-size: 12px;
-  padding: 2px var(--sp-2);
-  border-radius: 20px;
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--line);
   color: var(--dim);
   line-height: 1.5;
@@ -263,8 +264,8 @@ a:focus-visible {
 .badge.error    { color: var(--danger); border-color: var(--danger); }
 
 /* ── 模式切換器（三頁一致：許願台 / 對話 / 會議室）── */
-.mode-nav { display: inline-flex; gap: 2px; background: var(--inset); border: 1px solid var(--line); border-radius: 999px; padding: 2px; max-width: 100%; }
-.mode-nav a { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--dim); text-decoration: none; white-space: nowrap; transition: background .12s, color .12s; }
+.mode-nav { display: inline-flex; gap: 2px; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 2px; max-width: 100%; }
+.mode-nav a { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: var(--r-pill); font-size: 12px; font-weight: 500; color: var(--dim); text-decoration: none; white-space: nowrap; transition: background .12s, color .12s; }
 .mode-nav a:hover { color: var(--fg); }
 .mode-nav a.active { background: var(--accent); color: #fff; font-weight: 600; }
 
@@ -563,7 +564,7 @@ a:focus-visible {
 #xk-account {
   position: fixed; top: 10px; right: 12px; z-index: 60;
   display: flex; align-items: center; gap: 8px;
-  padding: 5px 10px; border-radius: 999px;
+  padding: 5px 10px; border-radius: var(--r-pill);
   background: var(--card); border: 1px solid var(--line);
   box-shadow: var(--shadow-sm); font-size: 13px; color: var(--fg);
   max-width: min(46vw, 360px);
@@ -571,7 +572,7 @@ a:focus-visible {
 #xk-account .xk-acc-ic { opacity: .8; }
 #xk-account .xk-acc-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #xk-account .xk-acc-role {
-  font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; padding: 1px 7px; border-radius: var(--r-pill);
   background: var(--accent-soft); color: var(--accent);
 }
 #xk-account .xk-acc-out {
