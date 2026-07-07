@@ -53,6 +53,20 @@ test('buildSetupConfig：進階數值 >0 才寫入；缺必填則拋錯', () => 
   assert.throws(() => buildSetupConfig({}), /必填/);
 });
 
+test('buildSetupConfig：reasoning + thinkingFormat 寫進 model（內網 vendor 思考可控）', () => {
+  const cfg = buildSetupConfig({ provider: 'internal', baseUrl: 'http://llm.corp/v1', apiKey: 'k', modelId: 'qwen3.5', reasoning: true, thinkingFormat: 'qwen' });
+  const m = cfg.providers.internal.models[0];
+  assert.equal(m.reasoning, true);
+  assert.deepEqual(m.compat, { thinkingFormat: 'qwen' });
+});
+
+test('buildSetupConfig：未勾 reasoning / thinkingFormat=auto → 不寫多餘欄位', () => {
+  const cfg = buildSetupConfig({ provider: 'p', baseUrl: 'u', apiKey: 'k', modelId: 'm', thinkingFormat: 'auto' });
+  const m = cfg.providers.p.models[0];
+  assert.ok(!('reasoning' in m));
+  assert.ok(!('compat' in m));
+});
+
 test('HTTP：設定引導 server 提供設定頁 + /health 標記 setup + 不完整表單 400', async () => {
   const srv = startSetupServer({ port: 0, configPath: '/tmp/__xk_setup_never_written.json' });
   await new Promise((r) => setTimeout(r, 150));   // startSetupServer 內部已 listen(0)，等它就緒

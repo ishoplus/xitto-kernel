@@ -1245,7 +1245,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         const cfg = loadProvidersConfig(providersConfigPath(configPath));
         existing = Object.entries(cfg.providers || {}).map(([provider, p]) => ({
           provider, api: p.api || 'openai-completions', baseUrl: p.baseUrl || '', hasKey: !!p.apiKey,
-          models: (p.models || []).map((m) => ({ id: m.id, name: m.name || m.id, default: m.id === cfg.defaultModel, image: Array.isArray(m.input) && m.input.includes('image') })),
+          models: (p.models || []).map((m) => ({ id: m.id, name: m.name || m.id, default: m.id === cfg.defaultModel, image: Array.isArray(m.input) && m.input.includes('image'), reasoning: !!m.reasoning, thinkingFormat: (m.compat && m.compat.thinkingFormat) || '' })),
         }));
       } catch { /* 尚無檔 → 空清單 */ }
       // STT 現況注入頁面（不含 apiKey；hasKey 標記是否已設）→ UI 預填、可就地改。
@@ -1822,6 +1822,11 @@ export function buildSetupConfig(body = {}) {
   if (Number(body.maxTokens) > 0) model.maxTokens = Number(body.maxTokens);
   // 是否支援圖片（視覺輸入）：勾選 → input 宣告含 image（供未來多模態訊息與前端判斷）。
   if (body.image) model.input = ['text', 'image'];
+  // 推理型 model：勾選才啟用思考模式（pi-ai 只在 reasoning:true 時送思考參數）。
+  if (body.reasoning) model.reasoning = true;
+  // 思考參數欄位格式：內網自建端點 pi-ai 猜不到 vendor，需明指 thinkingFormat 思考才送對欄位（見 docs/15）。
+  const tf = String(body.thinkingFormat || '').trim();
+  if (tf && tf !== 'auto') model.compat = { ...(model.compat || {}), thinkingFormat: tf };
   return {
     defaultModel: modelId,
     providers: { [provider]: { api: String(body.api || 'openai-completions'), baseUrl, apiKey, models: [model] } },
@@ -1916,6 +1921,19 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
   </label>
   <details><summary>進階（可留白用預設）</summary>
     <div class="grid2" style="margin-bottom:12px"><div><label>Context Window</label><input id="contextWindow" type="number" placeholder="128000"></div><div><label>Max Tokens</label><input id="maxTokens" type="number" placeholder="4096"></div></div>
+    <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;color:var(--fg)">
+      <input type="checkbox" id="reasoning" style="width:auto;margin:0"> 🧠 推理型模型（可啟用思考模式）
+    </label>
+    <div><label>思考參數格式 <span style="opacity:.6">（推理型必選；內網端點 pi-ai 猜不到 vendor）</span></label>
+      <select id="thinkingFormat">
+        <option value="auto">自動偵測（官方雲端端點適用）</option>
+        <option value="qwen">qwen — 送 enable_thinking</option>
+        <option value="qwen-chat-template">qwen（vLLM/SGLang）— chat_template_kwargs.enable_thinking</option>
+        <option value="zai">zai / GLM — 送 thinking:{type}</option>
+        <option value="deepseek">deepseek — thinking:{type} + reasoning_effort</option>
+        <option value="openai">openai 風格 — reasoning_effort</option>
+      </select>
+    </div>
   </details>
   <label id="defWrap" style="display:none;align-items:center;gap:8px;margin-top:14px;cursor:pointer;color:var(--fg)">
     <input type="checkbox" id="makeDefault" style="width:auto;margin:0"> 設為預設模型（新會議 / 未指定時用它）
@@ -2042,6 +2060,7 @@ function editProvider(pi){
   $("#apiKey").value="";$("#apiKey").placeholder=p.hasKey?"留空 = 沿用現有 API Key":"sk-…";
   var m0=(p.models&&p.models[0])||{};$("#modelId").value=m0.id||"";$("#modelName").value=(m0.name&&m0.name!==m0.id)?m0.name:"";
   $("#image").checked=!!m0.image;
+  $("#reasoning").checked=!!m0.reasoning;$("#thinkingFormat").value=m0.thinkingFormat||"auto";
   showMsg("編輯「"+p.provider+"」：API Key 留空則不變更；Model ID 相同為更新、不同為新增一顆。","ok");
   try{$("#provider").scrollIntoView({behavior:"smooth",block:"center"})}catch(e){}$("#provider").focus();
 }
@@ -2073,7 +2092,7 @@ async function testForm(){
 }
 $("#test").onclick=testForm;
 $("#save").onclick=async function(){
-  var body={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim(),modelName:$("#modelName").value.trim(),contextWindow:Number($("#contextWindow").value)||undefined,maxTokens:Number($("#maxTokens").value)||undefined,image:$("#image").checked||undefined,makeDefault:$("#makeDefault").checked||undefined};
+  var body={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim(),modelName:$("#modelName").value.trim(),contextWindow:Number($("#contextWindow").value)||undefined,maxTokens:Number($("#maxTokens").value)||undefined,image:$("#image").checked||undefined,reasoning:$("#reasoning").checked||undefined,thinkingFormat:$("#thinkingFormat").value,makeDefault:$("#makeDefault").checked||undefined};
   if(!body.provider||!body.baseUrl||!body.apiKey||!body.modelId)return showMsg("Provider 名稱、Base URL、API Key、Model ID 皆為必填。","err");
   $("#save").disabled=true;showMsg("儲存中…","ok");
   var r;try{r=await fetch("/v1/setup",{method:"POST",headers:AUTH,body:JSON.stringify(body)}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}
