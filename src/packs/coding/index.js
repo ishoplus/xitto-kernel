@@ -10,6 +10,7 @@ import { createBackgroundTools } from '../../kernel/bg.js';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
 import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
+import { scanCode, sortFindings } from '../shared/security-scan.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -162,9 +163,50 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     },
   };
 
+  // 安全審查（移植自 CC security-review）：對「當前變更」的程式碼檔做靜態高風險樣式檢查。
+  const CODE_EXT = /\.(js|jsx|ts|tsx|mjs|cjs|py|rb|go|java|kt|php|cs|c|cc|cpp|h|hpp|rs|swift|scala|sh|bash|sql|vue|svelte|astro)$/i;
+  const changedCodeFiles = () => {
+    try {
+      const r = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd, encoding: 'utf8' });
+      if (r.status !== 0) return [];
+      return r.stdout.split('\n')
+        .map((l) => l.slice(3).trim()).filter(Boolean)
+        .map((f) => (f.includes(' -> ') ? f.split(' -> ')[1] : f)) // 改名：取新路徑
+        .filter((f) => CODE_EXT.test(f));
+    } catch { return []; }
+  };
+  const securityReview = {
+    name: 'security_review', label: '安全審查', readOnly: true,
+    description: '對「當前變更」（git 未提交/未追蹤的程式碼檔）做靜態安全審查，找常見高風險樣式：硬編碼機密、命令/SQL 注入、XSS、停用 TLS 驗證、弱雜湊、不安全反序列化等。可傳 paths 指定檔案；純檢查不改檔。交付前跑一次，或使用者要求安全審查時用。',
+    parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' }, description: '要審查的檔案（相對路徑）；省略則自動取 git 變更的程式碼檔' } } },
+    execute: async (_id, { paths } = {}) => {
+      const files = (Array.isArray(paths) && paths.length) ? paths : changedCodeFiles();
+      if (!files.length) return txt({ scanned: 0, findings: [], note: '沒有可審查的變更程式碼檔（或非 git 專案）；可用 paths 明確指定檔案。' });
+      const findings = [];
+      let scanned = 0;
+      for (const rel of files.slice(0, 300)) {
+        const p = abs(rel);
+        if (!existsSync(p)) continue;
+        let text; try { text = readFileSync(p, 'utf8'); } catch { continue; }
+        if (text.length > 500000 || /\x00/.test(text)) continue; // 略過過大/二進位（null byte）
+        scanned++;
+        for (const f of scanCode(text)) findings.push({ file: rel, ...f });
+      }
+      const sorted = sortFindings(findings);
+      const bySeverity = sorted.reduce((m, f) => ((m[f.severity] = (m[f.severity] || 0) + 1), m), {});
+      return txt({
+        scanned, total: sorted.length, bySeverity,
+        findings: sorted.slice(0, 100),
+        note: sorted.length
+          ? '這些是靜態樣式提示，非全部即漏洞；請人工確認 high 項再交付。'
+          : '未發現常見高風險樣式（不代表絕對安全，僅覆蓋常見樣式）。',
+      });
+    },
+  };
+
   return {
     name: 'coding',
-    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit],
+    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）
