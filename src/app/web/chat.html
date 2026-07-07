@@ -917,6 +917,12 @@ body {
 .bg-cancel { flex: 0 0 auto; background: none; border: none; color: var(--faint); cursor: pointer; font-size: 12px; padding: 0 2px; line-height: 1; }
 .bg-cancel:hover { color: var(--danger); }
 .bg-task-meta { font-size: 11px; color: var(--dim); margin-top: 2px; padding-left: 18px; }
+/* 可展開卡片：點擊區域 + 展開箭頭 + 就地執行過程 */
+.bg-task-click { cursor: pointer; border-radius: var(--r-sm); }
+.bg-task-click:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.bg-caret { flex: 0 0 auto; width: 10px; color: var(--faint); font-size: 10px; }
+.bg-proc { margin: var(--sp-1) 0 var(--sp-1) 8px; padding-left: 10px; border-left: 1px solid var(--line); }
+.bg-proc-text { font-size: 11px; color: var(--dim); margin: var(--sp-1) 0 0 18px; white-space: pre-wrap; word-break: break-word; }
 
 /* 背景模式開啟時，按鈕高亮 */
 #bg-toggle.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
@@ -1476,17 +1482,27 @@ function renderBgTasks() {
     const live = t.status === "running" || t.status === "queued";
     const el = t.startedAt ? fmtElapsed((t.finishedAt || Date.now()) - t.startedAt) : "";
     const icon = t.status === "done" ? "✓" : t.status === "error" ? "✗" : t.status === "cancelled" ? "⊘" : '<span class="spin">◐</span>';
+    // 可展開：點卡片 → 顯示此任務的執行過程（複用主對話的 stepHtml；含子 agent 嵌套步驟）。
+    const nTools = (t.asst && t.asst.tools) ? t.asst.tools.length : 0;
+    const caret = nTools ? (t._open ? "▾" : "▸") : "·";
+    const reply = (t._open && t.asst && t.asst.text) ? `<div class="bg-proc-text">${esc(t.asst.text.slice(-800))}</div>` : "";
+    const proc = t._open && nTools ? `<div class="bg-proc proc-list">${t.asst.tools.map(stepHtml).join("")}</div>${reply}` : "";
     return `<div class="bg-task ${esc(t.status)}">
-      <div class="bg-task-top">
+      <div class="bg-task-top bg-task-click" onclick="toggleBgTask('${esc(t.id)}')" role="button" title="點擊展開/收合執行過程">
+        <span class="bg-caret">${caret}</span>
         <span class="bg-ic">${icon}</span>
         <span class="bg-goal" title="${esc(t.goal)}">${esc(t.goal.slice(0, 48))}</span>
-        ${live ? `<button class="bg-cancel" onclick="cancelBg('${esc(t.id)}')" title="中斷" aria-label="中斷任務">✕</button>` : ""}
+        ${live ? `<button class="bg-cancel" onclick="event.stopPropagation();cancelBg('${esc(t.id)}')" title="中斷" aria-label="中斷任務">✕</button>` : ""}
       </div>
       <div class="bg-task-meta">${esc(packLabel(t.pack))} · ${esc(bgPhaseText(t))} · ${t.steps} 步${el ? " · " + el : ""}</div>
+      ${proc}
     </div>`;
   }).join("");
   return `<div class="hud-divider"></div><div class="hud-files-head">背景任務（${bgTasks.length}）</div>${rows}`;
 }
+
+// 展開/收合某背景任務的執行過程（就地在軌道卡片內顯示，不必切回對話）。
+function toggleBgTask(id) { const t = bgTasks.find((x) => x.id === id); if (!t) return; t._open = !t._open; updateHud(); }
 
 /* 路徑縮短：超過兩層只留「…/上層/檔名」，保住檔名可見。 */
 function shortPath(p) {
