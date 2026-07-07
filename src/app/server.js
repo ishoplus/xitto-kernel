@@ -2157,7 +2157,9 @@ async function testForm(){
 $("#test").onclick=testForm;
 $("#save").onclick=async function(){
   var body={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim(),modelName:$("#modelName").value.trim(),contextWindow:Number($("#contextWindow").value)||undefined,maxTokens:Number($("#maxTokens").value)||undefined,image:$("#image").checked||undefined,reasoning:$("#reasoning").checked||undefined,thinkingFormat:$("#thinkingFormat").value,makeDefault:$("#makeDefault").checked||undefined};
-  if(!body.provider||!body.baseUrl||!body.apiKey||!body.modelId)return showMsg("Provider 名稱、Base URL、API Key、Model ID 皆為必填。","err");
+  // API Key 留空 = 沿用既有（編輯已配置的 provider 時免重填）；後端 /v1/setup 會從既有設定補上。
+  var keyReusable=EXISTING&&EXISTING.some(function(p){return p.provider===body.provider&&p.hasKey});
+  if(!body.provider||!body.baseUrl||!body.modelId||(!body.apiKey&&!keyReusable))return showMsg(keyReusable?"Provider 名稱、Base URL、Model ID 為必填。":"Provider 名稱、Base URL、API Key、Model ID 皆為必填（新 provider 需填 API Key）。","err");
   $("#save").disabled=true;showMsg("儲存中…","ok");
   var r;try{r=await fetch("/v1/setup",{method:"POST",headers:AUTH,body:JSON.stringify(body)}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}
   if(!r||r.error){$("#save").disabled=false;return showMsg((r&&r.error)||"儲存失敗","err")}
