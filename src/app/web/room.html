@@ -40,7 +40,7 @@ body { display: flex; flex-direction: column; }
 .members { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); flex-shrink: 0; max-height: 30vh; overflow-y: auto; }
 .members h3, .file-section h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 var(--sp-2); display: flex; align-items: center; gap: var(--sp-2); }
 .member { display: flex; align-items: center; gap: var(--sp-2); padding: 3px 0; font-size: 14px; }
-.member .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok, #3fb950); flex: none; }
+.member .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 .member.offline { color: var(--dim); }
 .member.offline .dot { background: var(--dim); opacity: .45; }
 .member .off-tag { margin-left: auto; font-size: 11px; color: var(--dim); }
@@ -102,7 +102,7 @@ body { display: flex; flex-direction: column; }
 .msg.me .ref { color: var(--btnfg); border-color: color-mix(in srgb, var(--btnfg) 40%, transparent); background: color-mix(in srgb, var(--btnfg) 12%, transparent); }
 
 /* @ 自動完成面板（浮在輸入框上方）*/
-.mention-pop { position: absolute; left: var(--sp-4); bottom: calc(100% - var(--sp-2)); z-index: 60; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: 0 8px 30px rgba(0,0,0,.28); max-height: 260px; overflow-y: auto; min-width: 240px; max-width: min(420px, 80vw); }
+.mention-pop { position: absolute; left: var(--sp-4); bottom: calc(100% - var(--sp-2)); z-index: 60; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow-pop); max-height: 260px; overflow-y: auto; min-width: 240px; max-width: min(420px, 80vw); }
 .mention-pop[hidden] { display: none; }
 .mention-item { display: flex; align-items: center; gap: var(--sp-2); padding: 7px 11px; cursor: pointer; font-size: 14px; }
 .mention-item.active, .mention-item:hover { background: var(--accent-soft); }
@@ -114,8 +114,8 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
 
 /* 檔案預覽浮層 */
 #file-preview:empty { display: none; }
-#file-preview { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 90; padding: var(--sp-4); }
-.preview-panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); width: min(860px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+#file-preview { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 90; padding: var(--sp-4); }
+.preview-panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); width: min(820px, 94vw); max-height: 85vh; display: flex; flex-direction: column; }
 .preview-bar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3); border-bottom: 1px solid var(--line); }
 .preview-name { font-weight: 600; }
 .preview-bar .spacer { flex: 1; }
@@ -126,7 +126,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
 /* 進場 Modal */
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.66); display: flex; align-items: center; justify-content: center; z-index: 100; padding: var(--sp-4); }
 .modal[hidden] { display: none; }
-.modal-box { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); width: min(440px, 94vw); padding: var(--sp-5); }
+.modal-box { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-card); width: min(560px, 92vw); padding: var(--sp-4); }
 .modal-box h2 { margin: 0 0 4px; font-size: 20px; }
 .modal-box .sub { color: var(--dim); font-size: 14px; margin: 0 0 var(--sp-4); }
 .modal-box label { display: block; font-size: 13px; color: var(--dim); margin: var(--sp-3) 0 5px; }
@@ -145,7 +145,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
 .room-card .rc-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--sp-2); }
 .room-card .rc-actions { display: flex; gap: var(--sp-2); }
 .room-card .rc-actions button { flex: 1; font-size: 13px; padding: 5px 8px; }
-.room-card .danger { color: var(--danger, #e5484d); border-color: color-mix(in srgb, var(--danger, #e5484d) 40%, var(--line)); }
+.room-card .danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
 
 /* 手機頂欄（漢堡 + 房名）與抽屜側欄：桌機隱藏 */
 .mobile-bar { display: none; }

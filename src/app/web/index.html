@@ -87,7 +87,7 @@
   align-items: center;
   gap: var(--sp-2);
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 .sidebar-foot a { color: var(--accent); }
 .sidebar-foot .app-ver { color: var(--dim); font-size: 11px; opacity: .8; }
@@ -181,8 +181,6 @@
   letter-spacing: .06em;
   color: var(--dim);
   margin: 0 0 var(--sp-2);
-  padding-bottom: var(--sp-2);
-  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -253,7 +251,7 @@
   display: flex;
   align-items: center;
   border-radius: var(--r-sm);
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
 .file-row:hover { background: var(--inset); }
@@ -318,7 +316,7 @@
 
 .file-breadcrumb {
   padding: var(--sp-2);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--dim);
   border-bottom: 1px solid var(--line);
 }
@@ -1193,12 +1191,14 @@ $("#goal").addEventListener("keydown", (e) => {
     $("#go-btn").click();
   }
 });
-// Esc 停止進行中的任務（與對話/會議室一致）；資料夾 modal 開著時交給 app.js 的 Esc 關閉，不停任務
+// Esc 逐層退出（與對話/會議室「關閉當前浮層」一致）：資料夾 modal → 檔案預覽 → 經驗面板 → 停止任務
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const fs = document.getElementById("fs-modal");
-  if (fs && !fs.hidden) return;
-  if (streamCtl && activeId) cancelTask(activeId);
+  if (fs && !fs.hidden) return;                                     // 資料夾 modal 交給 app.js 關
+  if (activeTab.startsWith("file:")) { closeActiveFile(); return; } // 檔案預覽 → 關閉（回任務）
+  if (activeTab === "exp") { closeExperience(); return; }           // 經驗面板 → 關閉
+  if (streamCtl && activeId) cancelTask(activeId);                  // 進行中任務 → 停止
 });
 
 /* IME 保護旗標 */
