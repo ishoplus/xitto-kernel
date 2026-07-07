@@ -8,7 +8,7 @@
 <!-- 設計系統 + 共享工具庫 -->
 <link rel="stylesheet" href="shared/style.css">
 <!-- 設定注入：server 會替換這些佔位符（HTML 才會被替換，靜態 app.js 不會），app.js 從 window.__XITTO__ 讀 -->
-<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__ };</script>
+<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, version: "__VERSION__" };</script>
 <script src="shared/md.js"></script>
 <script src="shared/app.js"></script>
 <script src="shared/account.js"></script>
@@ -270,6 +270,7 @@ body {
 .side-foot a {
   color: var(--accent);
 }
+.app-ver { float: right; color: var(--faint, var(--dim)); font-size: 11px; opacity: .8; }
 
 /* 檔案列表 */
 .file-section {
@@ -1013,6 +1014,7 @@ body {
     
     <div class="side-foot">
       🪄 <a href="/">許願台</a>（交辦明確任務、收成品）
+      <span class="app-ver" title="xitto-kernel 版本">v__VERSION__</span>
     </div>
   </aside>
 

@@ -220,6 +220,9 @@ let _chatHtml;
 const chatHtml = () => (_chatHtml ??= readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'web', 'chat.html'), 'utf8'));
 let _roomHtml;
 const roomHtml = () => (_roomHtml ??= readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'web', 'room.html'), 'utf8'));
+// 專案版本（讀 package.json，快取一次）→ 注入頁面 __VERSION__ 佔位符 + /health。
+let _pkgVer;
+const pkgVersion = () => (_pkgVer ??= (() => { try { return JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json'), 'utf8')).version || ''; } catch { return ''; } })());
 
 // 把原始 kernel 事件壓成精簡的對外事件（串流端與背景任務共用，避免重複映射）
 export const mapEvent = (ev) => {
@@ -1108,7 +1111,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     const path = url.pathname;
     // SSO adapter 先攔（擁有 /auth/login|callback|logout 等）；defaultAuth 無 handle → 直接略過，零影響。
     if (authAdapter.handle && await authAdapter.handle(req, res)) return;
-    if (req.method === 'GET' && path === '/health') return json(res, 200, { ok: true, packs: Object.keys(PACKS), model: model.id, tasks: tasks.stats() });
+    if (req.method === 'GET' && path === '/health') return json(res, 200, { ok: true, version: pkgVersion(), packs: Object.keys(PACKS), model: model.id, tasks: tasks.stats() });
 
     // 「我是誰」（公開，前端據此顯示帳號 chip / 登出）：非 SSO → ssoActive:false；SSO 未登入 → authenticated:false。
     if (req.method === 'GET' && path === '/v1/me') {
@@ -1141,7 +1144,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (needsLogin(req)) return loginRedirect(res, path);
       let html; try { html = webHtml(); } catch { return json(res, 500, { error: 'web UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false'));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__VERSION__/g, pkgVersion()));
     }
 
     // 「對話」網頁：同一 kernel 的另一個前端——對話式（mode:turn + 固定 sessionId 多輪、SSE 串流），
@@ -1150,7 +1153,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (needsLogin(req)) return loginRedirect(res, path);
       let html; try { html = chatHtml(); } catch { return json(res, 500, { error: 'chat UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false'));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__VERSION__/g, pkgVersion()));
     }
 
     // 「會議室」網頁：主控台 vs 訪客兩種載入。
@@ -1163,7 +1166,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       let html; try { html = roomHtml(); } catch { return json(res, 500, { error: 'room UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       // __PUBLIC_ORIGIN__：伺服器建議的對外網址（區網 IP / 域名）→ host 在 localhost 開頁時，邀請連結改用它。
-      return res.end(html.replace(/__SERVER_TOKEN__/g, guest ? '' : pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__STT__/g, sttEnabled ? 'true' : 'false').replace(/__PUBLIC_ORIGIN__/g, () => publicOrigin || ''));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, guest ? '' : pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__STT__/g, sttEnabled ? 'true' : 'false').replace(/__VERSION__/g, pkgVersion()).replace(/__PUBLIC_ORIGIN__/g, () => publicOrigin || ''));
     }
 
     // ── 專案會議室（房間層授權：建房/列房需 master；房內動作憑邀請碼/成員 token）──
