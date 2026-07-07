@@ -118,3 +118,67 @@
 `full` 等級會把**完整對話請求 body**寫進日誌（排查最有效，但含對話內容）。若環境敏感，設
 `XITTO_LOG_LEVEL=brief` 只留中繼資料（狀態/耗時/token/outcome，不含訊息文字），或用 `XITTO_LOG_DIR`
 指到受控目錄並納入既有日誌輪替（logrotate）。金鑰在任何等級都不會寫入。
+
+---
+
+## 附錄 · 思考模式（reasoning）是否生效 / Verifying thinking mode
+
+「思考模式沒開／一直開」和「沒回覆就中斷」常常糾纏在一起（空思考、超長思考逾時）。用同一份日誌可三層定位。
+
+### 控制在哪 / Controls
+
+| 層級 | 在哪設 | 效果 |
+|---|---|---|
+| 模型是否**具備**推理 | `providers.json` 的 model `reasoning: true` | 前提。false → pi-ai 完全不送思考參數 |
+| 送對**欄位** | model（或 provider）`compat.thinkingFormat` | 內網端點必設，見下 |
+| **預設**強度 | `/settings` 頁「💭 思考模式」卡 → 存 `<baseDir>/settings.json`（或 env `XITTO_THINKING`） | 即時生效免重啟 |
+| **逐則**覆蓋 | 對話頁輸入區「💭 思考」下拉 | 這則訊息的強度（下一則生效） |
+| 程式化 | `runTurn(input, { thinkingLevel })` / `createKernel(pack,{ thinkingLevel })` | `'off'\|'low'\|'medium'\|'high'` |
+
+優先序：**逐則 spec.thinking > 伺服器 defaultThinking > model.reasoning 預設**（reasoning 型預設 `medium`）。
+
+### 內網端點必讀：compat.thinkingFormat
+
+pi-ai 靠 baseUrl／provider 名「猜」vendor 來決定送哪個思考欄位。你的內網端點是私有 URL，猜不到 →
+一律 fallback 成 OpenAI 風格 `reasoning_effort`，而自建的 qwen／glm 常忽略它 → **思考靜默沒開**。
+在 `providers.json` 明確指定（app 會透傳給 pi-ai）：
+
+```jsonc
+{
+  "providers": {
+    "internal": {
+      "baseUrl": "http://llm.corp/v1", "api": "openai-completions", "apiKey": "${LLM_KEY}",
+      "models": [
+        { "id": "qwen3.5",       "reasoning": true, "compat": { "thinkingFormat": "qwen" } },
+        { "id": "glm5.2",        "reasoning": true, "compat": { "thinkingFormat": "zai" } },
+        { "id": "deepseek-v4pro","reasoning": true, "compat": { "thinkingFormat": "deepseek" } }
+      ]
+    }
+  }
+}
+```
+
+送出欄位對照：`qwen`→`enable_thinking`；`qwen-chat-template`→`chat_template_kwargs.enable_thinking`（vLLM/SGLang 常見）；
+`deepseek`→`thinking:{type}`＋`reasoning_effort`；`zai`(glm)→`thinking:{type}`；預設→`reasoning_effort`。
+若強度名稱該端點不同（如要對到 `enable_thinking`），可用 `thinkingLevelMap` 重映，例如 `{ "medium": "high" }`。
+
+### 三層檢查（`XITTO_LOG_LEVEL=full`）
+
+```bash
+cd .xitto-kernel/*/logs
+# 1. kernel 有沒有「要求」思考
+jq -c '{model:.model.id, requested:.request.reasoning}' model-calls.jsonl | tail -3
+# 2. pi-ai 有沒有把它「送到線上」（看實際 body 欄位）
+jq -c '.request.body | {reasoning_effort, enable_thinking, thinking, chat_template_kwargs}' model-calls.jsonl | tail -3
+# 3. 模型有沒有「真的思考」（回應端）
+jq -c '{thinkingChars:.result.thinkingChars, thinking_delta:(.stream.events.thinking_delta // 0)}' model-calls.jsonl | tail -3
+```
+
+| 第1層 requested | 第2層 body | 第3層 thinkingChars | 結論 |
+|---|---|---|---|
+| `null` | — | — | 沒開：`reasoning:false` 或 thinkingLevel `off` |
+| `"medium"` | 全 `null` | 0 | 參數被丟棄：compat 不符或 `reasoning:false` |
+| `"medium"` | 有 `reasoning_effort` | **0** | 端點忽略該欄位 → 換 `compat.thinkingFormat`（qwen/zai…） |
+| `"medium"` | 對應欄位有值 | **>0** | ✓ 思考真的生效 |
+
+> `result.thinkingChars` 特別大又常 `interrupted` → 思考太長超過中間層逾時；調小強度或加大 proxy 讀取逾時（見上文）。

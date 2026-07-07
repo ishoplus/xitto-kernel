@@ -28,3 +28,26 @@ test('buildModel：apiKey 從 ${ENV} 解析', () => {
 test('buildModel：找不到 model → 報錯', () => {
   assert.throws(() => buildModel(cfg, 'nope'), /找不到 model/);
 });
+
+test('buildModel：透傳 compat/thinkingLevelMap（內網 vendor 指定 thinkingFormat）', () => {
+  const c = {
+    defaultModel: 'qwen',
+    providers: {
+      internal: {
+        baseUrl: 'http://llm.corp/v1', api: 'openai-completions', apiKey: 'k',
+        compat: { supportsReasoningEffort: true }, // provider 級預設
+        models: [
+          { id: 'qwen', reasoning: true, compat: { thinkingFormat: 'qwen' }, thinkingLevelMap: { medium: 'high' } },
+          { id: 'plain' }, // 無 compat → 不應冒出 compat 欄位
+        ],
+      },
+    },
+  };
+  const { resolveModel } = buildModel(c);
+  const q = resolveModel('qwen');
+  assert.equal(q.reasoning, true);
+  assert.equal(q.compat.thinkingFormat, 'qwen');       // model 級
+  assert.equal(q.compat.supportsReasoningEffort, true); // provider 級合併進來
+  assert.deepEqual(q.thinkingLevelMap, { medium: 'high' });
+  assert.ok(!('thinkingLevelMap' in resolveModel('plain')));
+});

@@ -979,6 +979,15 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     } catch (e) { return json(res, 500, { error: e.message }); }
   };
 
+  // 思考模式預設強度：/settings 存到 <baseDir>/settings.json，執行期即時生效（runKernel 讀 live 值，免重啟）。
+  // 每則訊息可用 spec.thinking 覆蓋。值：'off'|'low'|'medium'|'high'（或布林）；undefined = 回落 model.reasoning 預設。
+  const settingsFile = join(baseDir, 'settings.json');
+  const THINK_LEVELS = new Set(['off', 'low', 'medium', 'high']);
+  const resolveThinking = (v) => (v === true ? 'medium' : v === false ? 'off' : (typeof v === 'string' && THINK_LEVELS.has(v) ? v : undefined));
+  let defaultThinking;
+  try { defaultThinking = resolveThinking(JSON.parse(readFileSync(settingsFile, 'utf8')).thinking); }
+  catch { defaultThinking = resolveThinking(process.env.XITTO_THINKING); }
+
   // 共用：跑一輪/一目標，回傳 { sessionId, text, usage, rounds, done }；onEvent 收原始 kernel 事件；
   // ask（可選）= 澄清通道,讓 agent 在背景任務中暫停問使用者。
   async function runKernel(spec, onEvent, ask, onAgent, drainSteer) {
@@ -1009,7 +1018,9 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     const envNote = local
       ? '你運行在使用者本機。可自由讀寫上面的工作目錄；經授權時亦可存取指定的本機絕對路徑。'
       : '你運行在雲端託管容器。上面的「工作目錄」是分配給你的專屬工作區——你可以自由讀取、瀏覽（list）、建立、修改其中及所有子目錄的檔案，放心操作。但你無法存取容器外的主機路徑、其他工作區，或 /tmp、/app 等系統絕對路徑；也不要嘗試瀏覽本機任意資料夾（此環境不支援）。所有成品一律寫在工作目錄內。';
-    const kernel = createKernel(pack, { cwd: workdir, model: runModel, getApiKey, resolveModel, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, env: local ? 'local' : 'cloud', caps, envNote, confirm: async () => 'yes', autoExtractMemory: true, ...(spec.readOnly ? { getPlanMode: () => true } : {}), ...(ask ? { askUser: ask } : {}) });
+    // 思考強度：本則 spec.thinking 覆蓋 > 伺服器預設 defaultThinking > model.reasoning 預設（undefined 時）。
+    const thinkingLevel = resolveThinking(spec.thinking) ?? defaultThinking;
+    const kernel = createKernel(pack, { cwd: workdir, model: runModel, getApiKey, resolveModel, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, env: local ? 'local' : 'cloud', caps, envNote, confirm: async () => 'yes', autoExtractMemory: true, ...(thinkingLevel ? { thinkingLevel } : {}), ...(spec.readOnly ? { getPlanMode: () => true } : {}), ...(ask ? { askUser: ask } : {}) });
     const usage = { input: 0, output: 0 };
     onEvent?.({ type: 'session_start', sessionId }); // 串流首事件：讓前端立刻知道此輪的 sessionId
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
@@ -1187,7 +1198,24 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     }
     if (req.method === 'GET' && path === '/v1/rooms') { if (!authed(req)) return json(res, 401, { error: 'unauthorized' }); return json(res, 200, { rooms: rooms.list(), ...rooms.stats() }); }
     // 可選 model 清單（給前端建房/切換選單）：需 master（模型配置屬 operator 範疇）。default 標記當前預設。
-    if (req.method === 'GET' && path === '/v1/models') { if (!authed(req)) return json(res, 401, { error: 'unauthorized' }); return json(res, 200, { models: modelList, default: model.id }); }
+    if (req.method === 'GET' && path === '/v1/models') {
+      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      // 帶上每個 model 是否為推理型（reasoning）與當前思考預設，供對話頁決定要不要顯示思考開關。
+      const withReasoning = modelList.map((m) => ({ ...m, reasoning: !!(typeof resolveModel === 'function' && resolveModel(m.id)?.reasoning) || (m.id === model.id && !!model.reasoning) }));
+      return json(res, 200, { models: withReasoning, default: model.id, thinking: defaultThinking || 'off' });
+    }
+    // 思考模式預設強度（master only）：存 <baseDir>/settings.json，即時生效免重啟。body.thinking ∈ off|low|medium|high。
+    if (req.method === 'POST' && path === '/v1/settings/thinking') {
+      if (adminOnly(req, res)) return;
+      const body = await readBody(req);
+      const lvl = resolveThinking(body.thinking) || 'off';
+      let cur = {}; try { cur = JSON.parse(readFileSync(settingsFile, 'utf8')); } catch { /* 尚無檔 */ }
+      try { mkdirSync(baseDir, { recursive: true }); writeFileSync(settingsFile, JSON.stringify({ ...cur, thinking: lvl }, null, 2)); }
+      catch (e) { return json(res, 500, { error: '寫入設定失敗：' + e.message }); }
+      defaultThinking = lvl === 'off' ? undefined : lvl; // live 生效：下一則訊息起套用
+      log({ action: 'thinking-config', level: lvl });
+      return json(res, 200, { ok: true, thinking: lvl });
+    }
 
     // ── SSO 角色名冊（operator only）：xitto 自管 admin/member/readonly，供 SSO 授權查詢（見 docs/10-sso-design.md §4/§5）──
     // SSO 未開時也能用（master token），供上線前預先配置名冊。env 釘死的 admin 標 pinned、不可改/刪。
@@ -1226,7 +1254,8 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         .replace('<h1>初始設定</h1>', '<h1>模型設定</h1>')
         .replace(/尚未偵測到 provider 設定（<code>providers.json<\/code>）。填入要用的模型服務，儲存後服務會自動啟動——不需要重進容器。/, '在此新增或更新模型服務（provider / model）。既有設定不會被覆蓋；儲存後服務自動重載，可繼續新增。')
         .replace('/*EXISTING*/null', JSON.stringify(existing))
-        .replace('/*STT*/null', JSON.stringify(sttPage));
+        .replace('/*STT*/null', JSON.stringify(sttPage))
+        .replace('/*THINK*/null', JSON.stringify({ level: defaultThinking || 'off' }));
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(html);
     }
     if (req.method === 'POST' && path === '/v1/setup') {
@@ -1613,7 +1642,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (local && body.workspace && isAbsolute(body.workspace)) {
         try { ensureWorkdir(body.workspace); } catch (e) { return json(res, 400, { error: e.message }); }
       }
-      const t = tasks.enqueue({ pack, model: body.model || undefined, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook, workspace: body.workspace, auto: routed });
+      const t = tasks.enqueue({ pack, model: body.model || undefined, mode: body.mode, input: body.input, goal: body.goal, sessionId: body.sessionId, webhook: body.webhook, workspace: body.workspace, thinking: body.thinking, auto: routed });
       log({ task: t.id, action: 'enqueue', pack, routed, mode: body.mode || 'turn' });
       return json(res, 202, { taskId: t.id, status: t.status, pack, routed, ...tasks.stats() });
     }
@@ -1908,6 +1937,20 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
   <div class="msg" id="sttMsg"></div>
   <div class="grid2"><div><button id="sttTest" class="ghost" type="button" title="不儲存，先打一次確認 STT 端點可連線">🧪 測試語音端點</button></div><div><button id="sttSave" type="button">儲存語音設定</button></div></div>
 </div>
+<div class="card" id="thinkCard" style="display:none;margin-top:14px">
+  <div class="brand" style="margin-bottom:4px"><h1 style="font-size:18px">💭 思考模式（預設強度）</h1></div>
+  <p class="sub" id="thinkStatus"></p>
+  <label>預設思考強度（對話頁可逐則覆蓋）</label>
+  <select id="thinkLevel">
+    <option value="off">關閉（不啟用思考）</option>
+    <option value="low">低</option>
+    <option value="medium">中</option>
+    <option value="high">高</option>
+  </select>
+  <p class="sub" style="margin-top:8px">僅對<strong>推理型模型</strong>有效（該 model 需 <code>reasoning:true</code>）。內網自建端點若思考沒生效，多半是 pi-ai 猜不到 vendor → 送錯欄位；請在該 model 的設定加 <code>compat.thinkingFormat</code>（qwen／zai／deepseek）。驗證方式見 <code>docs/15-model-logging.md</code>。</p>
+  <div class="msg" id="thinkMsg"></div>
+  <div class="grid2"><div></div><div><button id="thinkSave" type="button">儲存思考預設</button></div></div>
+</div>
 <script>
 var $=function(s){return document.querySelector(s)};
 var PRESETS={custom:{provider:"",api:"openai-completions",baseUrl:"",model:""},openai:{provider:"openai",api:"openai-completions",baseUrl:"https://api.openai.com/v1",model:"gpt-4o"},deepseek:{provider:"deepseek",api:"openai-completions",baseUrl:"https://api.deepseek.com",model:"deepseek-chat"},minimax:{provider:"minimax",api:"openai-completions",baseUrl:"https://api.minimaxi.com/v1",model:"MiniMax-M2"},openrouter:{provider:"openrouter",api:"openai-completions",baseUrl:"https://openrouter.ai/api/v1",model:""},anthropic:{provider:"anthropic",api:"anthropic-messages",baseUrl:"https://api.anthropic.com",model:"claude-sonnet-4"}};
@@ -1945,6 +1988,20 @@ if(STT){
 var esc=function(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})};
 function esch(t,k){var e=$("#msg");e.textContent=t;e.className="msg "+k}
 var showMsg=esch;
+// THINK：/settings 注入當前思考預設；首次引導頁為 null → 不顯示此卡。
+var THINK=/*THINK*/null;
+if(THINK){
+  $("#thinkCard").style.display="block";
+  $("#thinkLevel").value=THINK.level||"off";
+  $("#thinkStatus").textContent="目前預設："+(THINK.level&&THINK.level!=="off"?"思考強度「"+THINK.level+"」":"關閉");
+  $("#thinkSave").onclick=async function(){
+    var m=$("#thinkMsg");m.textContent="儲存中…";m.className="msg";
+    var r;try{r=await fetch("/v1/settings/thinking",{method:"POST",headers:AUTH,body:JSON.stringify({thinking:$("#thinkLevel").value})}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}
+    if(!r||r.error){m.textContent=(r&&r.error)||"儲存失敗";m.className="msg err";return}
+    m.textContent="✓ 已儲存，下一則訊息起套用（無須重啟）";m.className="msg ok";
+    $("#thinkStatus").textContent="目前預設："+(r.thinking&&r.thinking!=="off"?"思考強度「"+r.thinking+"」":"關閉");
+  };
+}
 if(EXISTING){                              // 設定模式：顯示已配置的 provider/model 清單 + 允許設預設
   $("#defWrap").style.display="flex";
   var n=EXISTING.reduce(function(a,p){return a+p.models.length},0);

@@ -1049,6 +1049,14 @@ body {
             <select id="pack" aria-label="選擇領域" style="max-width:170px"></select>
             <label for="model" class="sr-only">選擇模型</label>
             <select id="model" aria-label="選擇模型" title="這則訊息用哪個 AI 模型（回覆中也可切，下一則生效）" style="max-width:170px"><option value="">🧠 預設模型</option></select>
+            <label for="think" class="sr-only">思考模式</label>
+            <select id="think" aria-label="思考模式" title="這則訊息的思考強度（僅推理型模型有效；下一則生效）" style="max-width:150px">
+              <option value="">💭 思考：預設</option>
+              <option value="off">💭 關閉</option>
+              <option value="low">💭 低</option>
+              <option value="medium">💭 中</option>
+              <option value="high">💭 高</option>
+            </select>
             <button class="primary send-btn" id="send-btn" aria-label="送出訊息">送出</button>
             <button class="stop-btn" id="stop-btn" type="button" style="display:none" data-tooltip="停止回覆（Esc）" aria-label="停止回覆（按 Esc）">■ 停止</button>
           </div>
@@ -1192,6 +1200,8 @@ renderPackSelect($("#pack"));
 
 /* 模型選單：拉 /v1/models 填入（第一項＝伺服器預設）。選擇記在 localStorage，回覆中也可切、下一則生效。 */
 const MODEL_KEY = "xk_model";
+const THINK_KEY = "xk_thinking";
+let modelReasoning = {};   // id → 是否推理型（決定思考開關是否可用）
 async function loadModelSelect() {
   const sel = $("#model"); if (!sel) return;
   let data; try { data = await api("/v1/models").then((r) => (r.ok ? r.json() : null)); } catch { data = null; }
@@ -1201,10 +1211,30 @@ async function loadModelSelect() {
   sel.innerHTML = '<option value="">🧠 預設模型' + (defId ? "（" + esc(defId) + "）" : "") + "</option>" +
     data.models.map((m) => '<option value="' + esc(m.id) + '">' + esc(m.name || m.id) + "</option>").join("");
   if (saved && data.models.some((m) => m.id === saved)) sel.value = saved;
+  modelReasoning = Object.fromEntries(data.models.map((m) => [m.id, !!m.reasoning]));
+  // 思考開關：載入已存偏好；標題帶出伺服器目前預設強度；依所選模型是否推理型決定可用性。
+  const tsel = $("#think");
+  if (tsel) {
+    const savedT = localStorage.getItem(THINK_KEY) || "";
+    if ([...tsel.options].some((o) => o.value === savedT)) tsel.value = savedT;
+    tsel.options[0].textContent = "💭 思考：預設（" + esc(data.thinking || "off") + "）";
+    syncThinkAvail();
+  }
 }
-$("#model").addEventListener("change", () => { try { localStorage.setItem(MODEL_KEY, $("#model").value); } catch { /* 略 */ } });
+// 目前所選模型非推理型 → 思考開關無效（灰掉並提示），避免使用者以為有開卻被 pi-ai 靜默丟棄。
+function syncThinkAvail() {
+  const tsel = $("#think"); if (!tsel) return;
+  const id = ($("#model") && $("#model").value) || "";
+  const capable = id === "" ? true : !!modelReasoning[id]; // 預設模型：未知則不擋
+  tsel.disabled = !capable;
+  tsel.title = capable ? "這則訊息的思考強度（下一則生效）" : "此模型非推理型，思考模式無效（需在設定將該 model 設 reasoning:true 並配對 compat）";
+}
+$("#model").addEventListener("change", () => { try { localStorage.setItem(MODEL_KEY, $("#model").value); } catch { /* 略 */ } syncThinkAvail(); });
+$("#think") && $("#think").addEventListener("change", () => { try { localStorage.setItem(THINK_KEY, $("#think").value); } catch { /* 略 */ } });
 loadModelSelect();
 const chosenModel = () => ($("#model") && $("#model").value) || undefined;
+// 思考強度：空＝用伺服器預設（送 undefined）；否則送 off/low/medium/high。
+const chosenThinking = () => { const t = $("#think"); return (t && !t.disabled && t.value) || undefined; };
 
 /* ── 對話持久化（localStorage）──────────────────────────── */
 const chatsKey = () => "xk_chats";
@@ -1676,7 +1706,7 @@ async function send(textOverride) {
   refreshStreamingUI();
   ensureTicker();
   if (run.sessionId) renderChats(); // 續接既有對話：側欄即時顯示進行中指示
-  const body = JSON.stringify({ pack: run.pack, mode: "turn", input: text, sessionId: run.sessionId || undefined, workspace: run.space, model: run.model || undefined });
+  const body = JSON.stringify({ pack: run.pack, mode: "turn", input: text, sessionId: run.sessionId || undefined, workspace: run.space, model: run.model || undefined, thinking: chosenThinking() });
   try {
     const resp = await api("/v1/stream", { method: "POST", body, signal: run.abort.signal });
     if (!resp.ok || !resp.body) {
@@ -1700,7 +1730,7 @@ async function sendBackground(text, asst, model) {
   const pack = $("#pack").value;
   let resp, j;
   try {
-    resp = await api("/v1/tasks", { method: "POST", body: JSON.stringify({ pack, mode: "turn", input: text, sessionId: sessionId || undefined, workspace: curSpace, model: model || undefined }) });
+    resp = await api("/v1/tasks", { method: "POST", body: JSON.stringify({ pack, mode: "turn", input: text, sessionId: sessionId || undefined, workspace: curSpace, model: model || undefined, thinking: chosenThinking() }) });
     j = await resp.json().catch(() => ({}));
   } catch (e) {
     asst.phase = ""; asst.text = "⚠ 背景任務建立失敗：" + esc(e.message); render(); return;

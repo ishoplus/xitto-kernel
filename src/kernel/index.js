@@ -204,7 +204,7 @@ export function createKernel(pack, config = {}) {
   // 模型介面日誌 + 自動重試：包住 provider streamFn，記錄每次 LLM 呼叫（請求 body / HTTP 狀態 / 串流時序 /
   // stopReason / usage / 錯誤原文），並把結果分類成 outcome（empty=「沒回覆就中斷」的核心徵狀）；連線錯 /
   // 429 / 5xx 由 SDK 層自動重試。可用 XITTO_LOG*（日誌）與 XITTO_LLM_*（重試/逾時）環境變數調整或關閉。
-  const modelLogger = createModelLogger({ ...(config.logging || {}), dataDir });
+  const modelLogger = createModelLogger(config.logging === false ? { enabled: false } : { ...(config.logging || {}), dataDir });
   const retryCfg = resolveRetry(config.retry);
   const baseStreamFn = config.streamFn || defaultStreamFn();
   const mkStreamFn = (label, turnId) => withLogging(baseStreamFn, modelLogger, { ...retryCfg, label, turnId });
@@ -487,7 +487,9 @@ export function createKernel(pack, config = {}) {
           model,
           tools: turnTools,
           messages: opts.history || [],   // 多輪對話：延續歷史
-          thinkingLevel: config.thinkingLevel || (model.reasoning ? 'medium' : 'off'),
+          // 思考強度：本輪 opts > kernel config > model.reasoning 預設。'off' 可強制關閉推理型 model 的思考。
+          // 註：pi-ai 只在 model.reasoning=true 時才把思考參數送出線上，故對非推理 model 設 level 無效。
+          thinkingLevel: opts.thinkingLevel || config.thinkingLevel || (model.reasoning ? 'medium' : 'off'),
         },
         getApiKey: config.getApiKey,
         streamFn,

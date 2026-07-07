@@ -30,6 +30,11 @@ export function buildResolver(cfg) {
         cost: m.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: m.contextWindow || 32000, maxTokens: m.maxTokens || 4096,
         cache: m.cache ?? pcfg.cache,
+        // 思考模式相容性：內網自建端點（qwen/glm/deepseek）私有 baseUrl，pi-ai 猜不到 vendor →
+        // 會 fallback 成 OpenAI 風格 reasoning_effort，多半被那些 vendor 忽略。透傳 compat/thinkingLevelMap
+        // 讓部署者在 providers.json 明確指定 thinkingFormat（qwen/zai/deepseek…），思考參數才送對欄位。
+        ...(m.compat || pcfg.compat ? { compat: { ...pcfg.compat, ...m.compat } } : {}),
+        ...(m.thinkingLevelMap ? { thinkingLevelMap: m.thinkingLevelMap } : {}),
       };
     }
     return null;
