@@ -1,4 +1,4 @@
-// headless 截圖（browser.capturePage）+ uiux pack 的 ui_screenshot 工具。
+// headless 瀏覽器：截圖（capturePage / screenshot）+ 渲染抓取（renderPage / fetch_rendered）。
 // 用 fake 瀏覽器（依賴注入）測核心編排，不需真的裝 playwright；另測未裝時的優雅退場與工具 guard。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -96,4 +96,60 @@ test('screenshot 工具：playwright 未裝 → ok:false + 安裝提示（真實
     // 此環境沒裝 playwright → 應優雅回報；若剛好裝了則 ok:true 也可接受
     if (!r.ok) { assert.match(r.reason, /playwright/i); assert.match(r.hint, /playwright/i); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── 渲染抓取 renderPage / fetch_rendered ──
+import { renderPage } from '../src/packs/shared/browser.js';
+
+// fake：記錄互動序列，回 canned title/text/selected。
+function fakeRenderLaunch({ title = 'T', text = 'BODY', selected = ['a', 'b'], consoleError, calls } = {}) {
+  return async () => ({
+    async newPage() {
+      const h = {};
+      return {
+        on(ev, fn) { (h[ev] ||= []).push(fn); },
+        async goto() { if (consoleError) (h.console || []).forEach((f) => f({ type: () => 'error', text: () => consoleError })); },
+        async setContent() {},
+        async waitForSelector(s) { calls && calls.push(['wait', s]); },
+        async click(s) { calls && calls.push(['click', s]); },
+        async fill(s, v) { calls && calls.push(['fill', s, v]); },
+        async waitForTimeout(ms) { calls && calls.push(['waitMs', ms]); },
+        async title() { return title; },
+        async $$eval() { return selected; },
+        async evaluate() { return text; },
+        async content() { return '<html>full</html>'; },
+      };
+    },
+    async close() {},
+  });
+}
+
+test('renderPage（fake）：回 title/text/selected + 執行 actions 序列', async () => {
+  const calls = [];
+  const r = await renderPage({ url: 'http://x' }, {
+    selector: '.item', waitForSelector: '.ready',
+    actions: [{ click: '.more' }, { fill: '#q', value: 'hi' }, { waitFor: '.done' }, { waitMs: 500 }],
+    html: true,
+  }, { launch: fakeRenderLaunch({ calls }) });
+  assert.equal(r.ok, true);
+  assert.equal(r.title, 'T');
+  assert.equal(r.text, 'BODY');
+  assert.deepEqual(r.selected, ['a', 'b']);
+  assert.equal(r.html, '<html>full</html>');
+  assert.deepEqual(calls, [['wait', '.ready'], ['click', '.more'], ['fill', '#q', 'hi'], ['wait', '.done'], ['waitMs', 500]]);
+});
+
+test('renderPage：未裝 → 優雅回報 install', async () => {
+  const r = await renderPage({ url: 'http://x' }, {}, { launch: async () => { const e = new Error('未安裝 playwright'); e.install = 'npm i -D playwright'; throw e; } });
+  assert.equal(r.ok, false);
+  assert.equal(r.install, 'npm i -D playwright');
+});
+
+test('fetch_rendered 工具：coding/general 皆註冊 + guard', async () => {
+  for (const make of [createCodingPack, createGeneralPack]) {
+    assert.ok(make({ cwd: '/tmp' }).tools().map((t) => t.name).includes('fetch_rendered'), `${make.name} 應有 fetch_rendered`);
+  }
+  const tool = createGeneralPack({ cwd: '/tmp' }).tools().find((t) => t.name === 'fetch_rendered');
+  assert.match(JSON.parse((await tool.execute('1', {})).content[0].text).error, /需給 url 或 path/);
+  assert.match(JSON.parse((await tool.execute('2', { url: 'ws://x' })).content[0].text).error, /http/);
 });

@@ -13,7 +13,7 @@ import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract
 import { scanCode, sortFindings } from '../shared/security-scan.js';
 import { scanQuality, langOf } from '../shared/code-quality.js';
 import { lspDiagnostics, lspDefinition, lspHover, lspSymbols, lspReferences, lspRename, lspWorkspaceSymbols, applyTextEdits, serverFor, hasCommand } from '../shared/lsp.js';
-import { createScreenshotTool } from '../shared/browser.js';
+import { createScreenshotTool, createFetchRenderedTool } from '../shared/browser.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -350,7 +350,7 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
 
   return {
     name: 'coding',
-    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool, lspDefTool, lspHoverTool, lspSymbolsTool, lspRefTool, lspRenameTool, lspWsSymTool, createScreenshotTool(cwd)],
+    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool, lspDefTool, lspHoverTool, lspSymbolsTool, lspRefTool, lspRenameTool, lspWsSymTool, createScreenshotTool(cwd), createFetchRenderedTool(cwd)],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）

@@ -96,3 +96,70 @@ export function createScreenshotTool(cwd = process.cwd()) {
     },
   };
 }
+
+const CAP_TEXT = 20000, CAP_HTML = 120000;
+
+// 渲染抓取：導航 → 可選互動序列（click/fill/waitFor）→ 抽取「JS 執行後」的內容。
+// 一次性（launch→act→extract→close），不維持持久 session。回 { ok, title, text, selected?, html?, consoleErrors }。
+export async function renderPage(target, opts = {}, deps = {}) {
+  const { viewport = { width: 1280, height: 800 }, timeoutMs = 30000, waitForSelector, actions = [], selector, html: wantHtml = false } = opts;
+  const launch = deps.launch || defaultLaunch;
+  let browser;
+  try { browser = await launch(); }
+  catch (e) { return { ok: false, reason: e.message, install: e.install }; }
+  const consoleErrors = [];
+  try {
+    const page = await browser.newPage({ viewport });
+    page.on('console', (m) => { try { if (m.type() === 'error') consoleErrors.push(m.text()); } catch { /* 略 */ } });
+    page.on('pageerror', (err) => consoleErrors.push(String((err && err.message) || err)));
+    const nav = { waitUntil: 'networkidle', timeout: timeoutMs };
+    if (target.url) await page.goto(target.url, nav);
+    else if (target.file) await page.goto(pathToFileURL(target.file).href, nav);
+    else if (target.html != null) await page.setContent(target.html, nav);
+    else return { ok: false, reason: '沒有目標（url / file / html 三選一）' };
+    if (waitForSelector) await page.waitForSelector(waitForSelector, { timeout: timeoutMs });
+    for (const a of (actions || [])) {
+      if (!a || typeof a !== 'object') continue;
+      if (a.click) await page.click(a.click, { timeout: timeoutMs });
+      else if (a.fill) await page.fill(a.fill, String(a.value ?? ''), { timeout: timeoutMs });
+      else if (a.waitFor) await page.waitForSelector(a.waitFor, { timeout: timeoutMs });
+      else if (a.waitMs) await page.waitForTimeout(Math.min(10000, Number(a.waitMs) || 0));
+    }
+    const title = await page.title();
+    let selected;
+    if (selector) selected = await page.$$eval(selector, (els) => els.slice(0, 200).map((e) => (e.innerText || e.textContent || '').trim()).filter(Boolean));
+    const text = (await page.evaluate(() => (document.body ? document.body.innerText : ''))) || '';
+    const outHtml = wantHtml ? await page.content() : undefined;
+    return {
+      ok: true, title, text: text.slice(0, CAP_TEXT), truncated: text.length > CAP_TEXT,
+      ...(selected ? { selected } : {}), ...(outHtml != null ? { html: outHtml.slice(0, CAP_HTML) } : {}), consoleErrors,
+    };
+  } catch (e) { return { ok: false, reason: '瀏覽器渲染失敗：' + (e.message || String(e)) }; }
+  finally { try { await browser.close(); } catch { /* 略 */ } }
+}
+
+// 共用「渲染抓取」工具工廠——coding / general 抓 SPA、互動後抽取。
+export function createFetchRenderedTool(cwd = process.cwd()) {
+  const abs = (p) => (isAbsolute(p) ? p : join(cwd, p));
+  return {
+    name: 'fetch_rendered', label: '渲染抓取', readOnly: true,
+    description: '用 headless 瀏覽器開啟 URL（或本機 HTML 檔），等 JS 執行完抓「渲染後」的內容——web_fetch 抓不到的 SPA/動態頁用它。可先做 actions（click/fill/waitFor 互動，如展開、載更多），再用 selector 抽出指定元素文字，或回整頁可見文字。需安裝 playwright（未裝會提示）。',
+    parameters: { type: 'object', properties: {
+      url: { type: 'string', description: 'http(s) 網址；與 path 二選一' },
+      path: { type: 'string', description: '本機 HTML 檔（相對 cwd）；與 url 二選一' },
+      selector: { type: 'string', description: 'CSS 選擇器：抽出所有符合元素的文字（省略則回整頁可見文字）' },
+      waitFor: { type: 'string', description: '先等這個 CSS 選擇器出現再抓（等 SPA 內容載入）' },
+      actions: { type: 'array', description: '抓取前的互動序列，每項一種：{"click":"選擇器"} / {"fill":"選擇器","value":"文字"} / {"waitFor":"選擇器"} / {"waitMs":毫秒}', items: { type: 'object' } },
+      html: { type: 'boolean', description: 'true 則同時回完整渲染後 HTML（預設只回文字）' },
+    } },
+    execute: async (_id, { url, path, selector, waitFor, actions, html } = {}) => {
+      let target;
+      if (url) { if (!/^https?:\/\//i.test(url)) return txt({ error: 'url 需為 http(s)' }); target = { url }; }
+      else if (path) { const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path }); target = { file: p }; }
+      else return txt({ error: '需給 url 或 path' });
+      const r = await renderPage(target, { selector, waitForSelector: waitFor, actions: Array.isArray(actions) ? actions : [], html: !!html });
+      if (!r.ok) return txt({ ok: false, reason: r.reason, ...(r.install ? { hint: `安裝後即可使用：${r.install}` } : {}) });
+      return txt({ ok: true, title: r.title, ...(r.selected ? { selected: r.selected } : {}), text: r.text, ...(r.truncated ? { truncated: true } : {}), ...(r.html != null ? { html: r.html } : {}), ...(r.consoleErrors.length ? { consoleErrors: r.consoleErrors.slice(0, 10) } : {}) });
+    },
+  };
+}
