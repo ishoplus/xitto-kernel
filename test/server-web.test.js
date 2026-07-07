@@ -184,7 +184,7 @@ test('GET / 服務許願台網頁，token 注入、公開可載入（免 auth）
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-type') || '', /text\/html/);
     const html = await res.text();
-    assert.match(html, /許願台/);
+    assert.match(html, /任務台/);
     assert.match(html, /webtok-123/);                 // token 已注入供同源呼叫
     assert.doesNotMatch(html, /__SERVER_TOKEN__/);    // 佔位符已替換
     assert.match(html, /general/);                    // packs 已注入
