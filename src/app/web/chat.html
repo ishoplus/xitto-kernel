@@ -271,6 +271,25 @@ body {
   color: var(--accent);
 }
 .app-ver { float: right; color: var(--faint, var(--dim)); font-size: 11px; opacity: .8; }
+.foot-link { background: none; border: 0; padding: 0; margin: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.foot-link:hover { text-decoration: underline; }
+
+/* 技能管理 modal */
+.sk-sub { font-size: 12.5px; color: var(--dim); margin-bottom: var(--sp-3); }
+.sk-list { display: flex; flex-direction: column; gap: var(--sp-2); max-height: 60vh; overflow: auto; }
+.sk-empty { font-size: 13px; color: var(--dim); line-height: 1.6; padding: var(--sp-4) 0; text-align: center; }
+.sk-item { padding: var(--sp-2) var(--sp-3); background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); }
+.sk-item-h { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; font-weight: 600; }
+.sk-name { min-width: 0; }
+.sk-tag { font-size: 10.5px; font-weight: 500; color: var(--dim); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.sk-tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.sk-pack { font-size: 10.5px; color: var(--dim); }
+.sk-desc { font-size: 12.5px; color: var(--dim); line-height: 1.5; margin-top: 2px; }
+.sk-btn { font-size: 11px; font-weight: 500; padding: 2px 8px; background: transparent; color: var(--accent); border: 1px solid var(--line); border-radius: 5px; cursor: pointer; }
+.sk-btn:hover { border-color: var(--accent); }
+.sk-btn.danger { color: var(--danger); }
+.sk-btn.danger:hover { border-color: var(--danger); }
+.sk-body { margin: 8px 0 0; padding: 8px 10px; background: var(--code); border: 1px solid var(--line); border-radius: var(--r-sm); font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow: auto; }
 
 /* 檔案列表 */
 .file-section {
@@ -1072,7 +1091,7 @@ body {
     </section>
     
     <div class="side-foot">
-      🪄 <a href="/">許願台</a>（交辦明確任務、收成品）
+      🪄 <a href="/">許願台</a> · <button class="foot-link" type="button" onclick="openSkills()" title="查看/管理此工作區的技能">🧠 技能</button>
       <span class="app-ver" title="xitto-kernel 版本">v__VERSION__</span>
     </div>
   </aside>
@@ -1163,6 +1182,19 @@ body {
   </div>
 </div>
 
+<!-- 技能管理：查看/刪除此工作區結晶的技能 -->
+<div id="sk-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="sk-modal-title" onclick="if(event.target===this)closeSkills()">
+  <div class="modal-box">
+    <div class="modal-title" id="sk-modal-title">🧠 技能管理</div>
+    <div class="sk-sub" id="sk-sub"></div>
+    <div class="sk-list" id="sk-list" aria-live="polite"></div>
+    <div class="fs-bar">
+      <span class="spacer" aria-hidden="true"></span>
+      <button class="ghost" onclick="closeSkills()">關閉</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ── Chat 應用邏輯 ───────────────────────────────────────── */
 
@@ -1246,8 +1278,9 @@ applyBgMode();
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const preview = document.getElementById("file-preview");
-  const modalOpen = (preview && preview.innerHTML.trim()) || !$("#fs-modal").hidden;
-  if (modalOpen) { closeFilePreview(); closeFs(); return; }
+  const skOpen = $("#sk-modal") && !$("#sk-modal").hidden;
+  const modalOpen = (preview && preview.innerHTML.trim()) || !$("#fs-modal").hidden || skOpen;
+  if (modalOpen) { closeFilePreview(); closeFs(); closeSkills(); return; }
   if (streaming) stopStream();
 });
 
@@ -1300,6 +1333,43 @@ loadModelSelect();
 const chosenModel = () => ($("#model") && $("#model").value) || undefined;
 // 思考強度：空＝用伺服器預設（送 undefined）；否則送 off/low/medium/high。
 const chosenThinking = () => { const t = $("#think"); return (t && !t.disabled && t.value) || undefined; };
+
+/* ── 技能管理（此工作區）：查看/刪除 agent 結晶的技能 ─────────── */
+function openSkills() { const m = $("#sk-modal"); if (m) { m.hidden = false; loadSkills(); } }
+function closeSkills() { const m = $("#sk-modal"); if (m) m.hidden = true; }
+async function loadSkills() {
+  const list = $("#sk-list"), sub = $("#sk-sub");
+  if (!list) return;
+  list.innerHTML = "載入中…";
+  const e = await api("/v1/workspaces/experience?ws=" + encodeURIComponent(curSpace)).then((r) => r.json()).catch(() => null);
+  const skills = (e && e.skills) || [];
+  if (sub) sub.textContent = "工作區「" + curSpace + "」· " + skills.length + " 個技能";
+  if (!skills.length) { list.innerHTML = '<div class="sk-empty">這個工作區還沒有技能。<br>agent 摸出可重複流程時，會用 skill_save 結晶成技能，之後即可複用。</div>'; return; }
+  list.innerHTML = skills.map((s, i) => {
+    const sid = "skb-" + i;
+    return '<div class="sk-item"><div class="sk-item-h"><span class="sk-name">⚡ ' + esc(s.name) + "</span>" +
+      (s.used ? '<span class="sk-tag">用過 ' + s.used + " 次</span>" : "") +
+      (s.stale ? '<span class="sk-tag warn">⚠ 待修</span>' : "") +
+      '<span class="sk-pack">' + esc(s.pack || "") + '</span><span class="spacer"></span>' +
+      '<button class="sk-btn" type="button" onclick="skillView(\'' + esc(s.pack) + "','" + esc(s.name) + "','" + sid + '\')">查看</button>' +
+      '<button class="sk-btn danger" type="button" onclick="skillDel(\'' + esc(s.pack) + "','" + esc(s.name) + '\')">刪除</button></div>' +
+      (s.desc ? '<div class="sk-desc">' + esc(s.desc) + "</div>" : "") +
+      '<pre class="sk-body" id="' + sid + '" hidden></pre></div>';
+  }).join("");
+}
+async function skillView(pack, name, sid) {
+  const el = document.getElementById(sid);
+  if (!el) return;
+  if (!el.hidden) { el.hidden = true; return; }
+  el.textContent = "載入中…"; el.hidden = false;
+  const r = await api("/v1/skills/body?ws=" + encodeURIComponent(curSpace) + "&pack=" + encodeURIComponent(pack) + "&name=" + encodeURIComponent(name)).then((x) => x.json()).catch(() => null);
+  el.textContent = r && r.body ? r.body : "✗ " + ((r && r.error) || "載入失敗");
+}
+async function skillDel(pack, name) {
+  if (!confirm("刪除技能「" + name + "」？\nagent 之後仍可在需要時重新結晶。")) return;
+  const r = await api("/v1/skills/remove", { method: "POST", body: JSON.stringify({ ws: curSpace, pack, name }) }).then((x) => x.json()).catch(() => ({ error: "連線失敗" }));
+  if (r && r.ok) loadSkills(); else alert("刪除失敗：" + ((r && r.error) || "未知錯誤"));
+}
 
 /* ── 對話持久化（localStorage）──────────────────────────── */
 const chatsKey = () => "xk_chats";
