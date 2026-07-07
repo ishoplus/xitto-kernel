@@ -1722,11 +1722,28 @@ async function send(textOverride) {
   const override = typeof textOverride === "string" ? textOverride : null;
   const text = override != null ? override : $("#input").value.trim();
   if (!text) return;
-  // 回覆中仍可繼續輸入：手動送出時若本對話正在跑，排入佇列，回合結束後自動送出（override 為佇列回送，不再入列）。
+  // 回覆中仍可繼續輸入（override 為佇列回送，不再處理）：
+  //   優先「插入當前回合」(CC 式 steering)——agent 於下個步驟邊界接手，不中斷當前工具、不重啟；
+  //   若 agent 不在 live（回合剛結束/之間）→ 退回排隊，本輪結束後自動送出。
   if (override == null && currentRun()) {
-    (messages._queue || (messages._queue = [])).push(text);
+    const run = currentRun();
     $("#input").value = ""; autosize();
-    const h = $("#status-hint"); if (h) h.textContent = "已排入佇列（" + messages._queue.length + " 則，本輪結束後自動送出）";
+    let injected = false;
+    if (run.steerKey) {
+      try {
+        const r = await api("/v1/stream/steer", { method: "POST", body: JSON.stringify({ key: run.steerKey, text }) }).then((x) => x.json());
+        injected = !!(r && r.injected);
+      } catch (e) { injected = false; }
+    }
+    const h = $("#status-hint");
+    if (injected) {
+      messages.push({ role: "user", text, _steer: true });   // 立即在對話串顯示插話
+      render(); scrollDown();
+      if (h) h.textContent = "已插入本輪 · agent 會在下一步接手";
+    } else {
+      (messages._queue || (messages._queue = [])).push(text);
+      if (h) h.textContent = "已排入佇列（" + messages._queue.length + " 則，本輪結束後自動送出）";
+    }
     return;
   }
   if (override == null) { $("#input").value = ""; autosize(); }
@@ -1742,12 +1759,13 @@ async function send(textOverride) {
   if (bgMode) { sendBackground(text, asst, model); return; } // 背景：不鎖輸入框，可連續派多個
 
   // 前景串流：建一個綁定「此對話」的 run（切走不中斷）
-  const run = { chatMsgs: messages, sessionId, asst, abort: new AbortController(), startedAt: Date.now(), tokens: 0, firstUserText: text, space: curSpace, pack: $("#pack").value, model };
+  const steerKey = Date.now().toString(36) + Math.random().toString(36).slice(2, 8); // 供回覆中「即時插話」定位這條串流
+  const run = { chatMsgs: messages, sessionId, asst, abort: new AbortController(), startedAt: Date.now(), tokens: 0, firstUserText: text, space: curSpace, pack: $("#pack").value, model, steerKey };
   activeRuns.add(run);
   refreshStreamingUI();
   ensureTicker();
   if (run.sessionId) renderChats(); // 續接既有對話：側欄即時顯示進行中指示
-  const body = JSON.stringify({ pack: run.pack, mode: "turn", input: text, sessionId: run.sessionId || undefined, workspace: run.space, model: run.model || undefined, thinking: chosenThinking() });
+  const body = JSON.stringify({ pack: run.pack, mode: "turn", input: text, sessionId: run.sessionId || undefined, workspace: run.space, model: run.model || undefined, thinking: chosenThinking(), steerKey: run.steerKey });
   try {
     const resp = await api("/v1/stream", { method: "POST", body, signal: run.abort.signal });
     if (!resp.ok || !resp.body) {
@@ -1921,6 +1939,14 @@ function onRunEvent(run, ev) {
       upsertChat({ id: ev.sessionId, title: run.firstUserText.slice(0, 40), ts: Date.now(), space: run.space, pack: run.pack });
       renderChats();
     }
+    return;
+  }
+  // 插話已被 agent 套用 → 當前回合已收尾，為插話後的回覆開一個新的 assistant 泡泡（避免和前一輪的字混在一起）
+  if (ev.type === "steered") {
+    const asst2 = { role: "assistant", text: "", tools: [], _procOpen: false, phase: "thinking" };
+    run.chatMsgs.push(asst2);
+    run.asst = asst2;
+    if (run.chatMsgs === messages) { render(); scrollDown(); }
     return;
   }
   handleEvent(ev, run.asst);

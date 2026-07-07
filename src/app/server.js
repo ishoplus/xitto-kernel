@@ -246,6 +246,14 @@ export const mapEvent = (ev) => {
       : { type: 'sub_tool', name, args: { task: p.task } };
   }
   if (ev.type === 'message_update' && ev.assistantMessageEvent?.type === 'text_delta') return { type: 'text', delta: ev.assistantMessageEvent.delta };
+  // 中途插話已套用（steering）：把插話文字轉給前端，讓它為插話後的回覆開新的 assistant 泡泡
+  if (ev.type === 'steered_applied') {
+    const texts = (ev.messages || [])
+      .filter((m) => m.role === 'user')
+      .map((m) => (Array.isArray(m.content) ? m.content.filter((c) => c.type === 'text').map((c) => c.text).join('') : String(m.content || '')))
+      .filter(Boolean);
+    return { type: 'steered', texts };
+  }
   if (ev.type === 'round') return { type: 'round', round: ev.round, maxRounds: ev.maxRounds };
   if (ev.type === 'verify_start') return { type: 'phase', phase: 'verifying' };
   if (ev.type === 'verify_end') return { type: 'phase', phase: ev.ok ? 'verified' : 'fixing' };
@@ -988,6 +996,10 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   try { defaultThinking = resolveThinking(JSON.parse(readFileSync(settingsFile, 'utf8')).thinking); }
   catch { defaultThinking = resolveThinking(process.env.XITTO_THINKING); }
 
+  // 前景串流的 live agent 註冊表（steerKey → agent）：讓對話模式在回覆中被「即時插話」（CC 式 steering）。
+  // 背景任務走 tasks.steer（by taskId）；前景串流沒有 taskId，改用 client 產生的 steerKey。
+  const liveStreams = new Map();
+
   // 共用：跑一輪/一目標，回傳 { sessionId, text, usage, rounds, done }；onEvent 收原始 kernel 事件；
   // ask（可選）= 澄清通道,讓 agent 在背景任務中暫停問使用者。
   async function runKernel(spec, onEvent, ask, onAgent, drainSteer) {
@@ -1612,9 +1624,12 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       // 串流「停止」：client 按停止 → abort fetch → 連線關閉 → 中止 kernel 回合,不再空跑伺服器資源。
       // 經 onAgent 取得執行中的 agent（同背景任務 /cancel 的 agent.abort() 機制）。
       let agentRef = null, clientGone = false;
-      const onAgent = streaming ? (a) => { agentRef = a; if (clientGone && a?.abort) { try { a.abort(); } catch { /* 略 */ } } } : undefined;
+      // steerKey：client 產生、隨串流帶上；用它把 live agent 登記進 liveStreams，供中途插話。
+      const steerKey = streaming && body.steerKey ? String(body.steerKey) : null;
+      const dropLive = () => { if (steerKey) liveStreams.delete(steerKey); };
+      const onAgent = streaming ? (a) => { agentRef = a; if (steerKey && a) liveStreams.set(steerKey, a); if (clientGone && a?.abort) { try { a.abort(); } catch { /* 略 */ } } } : undefined;
       // 偵測 client 斷線（按「停止」）用 res 'close'（串流回應的斷線在 res 上才可靠，req 'close' 不會觸發）
-      if (streaming) res.on('close', () => { clientGone = true; if (agentRef?.abort) { try { agentRef.abort(); } catch { /* 略 */ } } });
+      if (streaming) res.on('close', () => { clientGone = true; dropLive(); if (agentRef?.abort) { try { agentRef.abort(); } catch { /* 略 */ } } });
       try {
         const r = await runKernel(body, streaming ? (ev) => { const m = mapEvent(ev); if (m) sse(m); } : undefined, undefined, onAgent);
         if (clientGone) return; // 已斷線：history 已在 runKernel 內落地,這裡不再寫回應
@@ -1624,8 +1639,23 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         if (clientGone) return;
         log({ pack: body.pack, error: e.message });
         if (streaming) { sse({ type: 'error', error: e.message }); res.end(); } else json(res, /^未知 pack|^未知 model|工作目錄/.test(e.message || '') ? 400 : 500, { error: e.message });
-      }
+      } finally { dropLive(); }
       return;
+    }
+
+    // 前景串流中途插話（CC 式 steering）：注入正在跑的當前回合，agent 於下個步驟邊界接手（不中斷當前工具、不重啟）。
+    // 找不到 live agent（回合剛好結束/之間）→ 回 injected:false，讓前端退回「排隊成下一輪」。
+    if (req.method === 'POST' && path === '/v1/stream/steer') {
+      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      const body = await readBody(req);
+      const text = String(body.text || '').trim();
+      if (!text) return json(res, 400, { error: 'text 不可為空' });
+      const a = body.key && liveStreams.get(String(body.key));
+      if (!a || typeof a.steer !== 'function') return json(res, 200, { injected: false });
+      try { a.steer({ role: 'user', content: [{ type: 'text', text }] }); }
+      catch { return json(res, 200, { injected: false }); }
+      log({ action: 'stream-steer' });
+      return json(res, 200, { injected: true });
     }
 
     // 背景任務：立刻回 taskId，後台跑，完成發 webhook

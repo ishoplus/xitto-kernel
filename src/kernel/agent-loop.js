@@ -172,6 +172,8 @@ export class Agent {
         }
         await this.emit({ type: 'turn_end', message, toolResults });
         pending = this.steeringQueue.drain();
+        // 回合邊界套用了使用者中途插話（steering）→ 發事件，讓前端把插話後的回覆分到新泡泡（CC 式體驗）
+        if (pending.length) await this.emit({ type: 'steered_applied', messages: pending });
       }
       const followUps = this.followUpQueue.drain();
       if (followUps.length) { pending = followUps; continue; }
