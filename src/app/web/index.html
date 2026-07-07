@@ -42,10 +42,13 @@
 }
 
 .brand h1 {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
   margin: 0;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  min-height: 28px;   /* 與對話/會議室標題列同高，切頁不跳 */
 }
 
 .brand-tagline {
@@ -1006,7 +1009,7 @@
         <h1>🪄 xitto 許願台</h1>
         <p class="brand-tagline">說出你想完成的事，做完給你成品</p>
       </div>
-      <nav class="mode-nav" aria-label="切換模式">
+      <nav class="mode-nav" aria-label="切換模式" style="margin-top:10px">
         <a href="/" class="active" aria-current="page">🪄 許願台</a>
         <a href="/chat">💬 對話</a>
         <a href="/room">🏛 會議室</a>
