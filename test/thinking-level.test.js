@@ -16,13 +16,14 @@ const streamOf = () => { const s = new AssistantMessageEventStream(); s.push({ t
 function capturingKernel(modelOverrides, kernelCfg = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'think-'));
   const seen = [];
+  const seenBudgets = [];
   const model = { id: 'fake', provider: 'fake', api: 'openai-completions', baseUrl: '', input: ['text'], output: ['text'], contextWindow: 32000, maxTokens: 4096, cost: {}, ...modelOverrides };
   const k = createKernel(createCodingPack({ cwd: dir }), {
     cwd: dir, model, getApiKey: () => 'k', logging: false,
-    streamFn: async (_m, _c, opts) => { seen.push(opts.reasoning); return streamOf(); },
+    streamFn: async (_m, _c, opts) => { seen.push(opts.reasoning); seenBudgets.push(opts.thinkingBudgets); return streamOf(); },
     ...kernelCfg,
   });
-  return { k, seen, dir };
+  return { k, seen, seenBudgets, dir };
 }
 
 test('reasoning model 預設 → reasoning=medium', async () => {
@@ -52,5 +53,25 @@ test('opts.thinkingLevel=off 強制關閉推理型 model → reasoning=undefined
 test('config.thinkingLevel 生效 → reasoning=low', async () => {
   const { k, seen, dir } = capturingKernel({ reasoning: true }, { thinkingLevel: 'low' });
   try { await k.runTurn('hi'); assert.equal(seen[0], 'low'); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('config.thinkingBudgets 透傳到 provider opts（anthropic 端點才用；小 maxTokens 會被夾）', async () => {
+  const budgets = { minimal: 1024, low: 4096, medium: 12288, high: 24576 };
+  const { k, seenBudgets, dir } = capturingKernel({ reasoning: true }, { thinkingBudgets: budgets });
+  try { await k.runTurn('hi'); assert.deepEqual(seenBudgets[0], budgets); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('未設 config.thinkingBudgets → opts.thinkingBudgets 為 undefined（用 pi-ai 預設分級）', async () => {
+  const { k, seenBudgets, dir } = capturingKernel({ reasoning: true });
+  try { await k.runTurn('hi'); assert.equal(seenBudgets[0], undefined); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('model.thinkingBudgets（來自 providers.json）也透傳 → 各入口零改動生效', async () => {
+  const budgets = { minimal: 1024, low: 4096, medium: 12288, high: 24576 };
+  const { k, seenBudgets, dir } = capturingKernel({ reasoning: true, thinkingBudgets: budgets });
+  try { await k.runTurn('hi'); assert.deepEqual(seenBudgets[0], budgets); }
   finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -493,6 +493,7 @@ export function createKernel(pack, config = {}) {
         },
         getApiKey: config.getApiKey,
         streamFn,
+        thinkingBudgets: config.thinkingBudgets || model.thinkingBudgets, // 每級思考 token 預算（anthropic 端點如 MiniMax 才生效；可在 config 或 providers.json 的 model 設定）
         // 守衛鏈接線：Agent 的 ctx 形狀 → kernel guard 的 { name, args }
         beforeToolCall: async (ctx) => guard({
           name: ctx.toolCall?.name,

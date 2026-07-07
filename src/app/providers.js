@@ -35,6 +35,9 @@ export function buildResolver(cfg) {
         // 讓部署者在 providers.json 明確指定 thinkingFormat（qwen/zai/deepseek…），思考參數才送對欄位。
         ...(m.compat || pcfg.compat ? { compat: { ...pcfg.compat, ...m.compat } } : {}),
         ...(m.thinkingLevelMap ? { thinkingLevelMap: m.thinkingLevelMap } : {}),
+        // 每級思考 token 預算（anthropic 端點如 MiniMax 才生效）。注意：會被 maxTokens 夾住——
+        // 推理模型的 maxTokens 太小（如預設 4096），medium/high 都會被夾到 maxTokens-1024，看起來一樣。
+        ...(m.thinkingBudgets ? { thinkingBudgets: m.thinkingBudgets } : {}),
       };
     }
     return null;

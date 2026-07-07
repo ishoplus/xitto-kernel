@@ -55,6 +55,7 @@ export class Agent {
     this.beforeToolCall = options.beforeToolCall;
     this.afterToolCall = options.afterToolCall;
     this.onPayload = options.onPayload;
+    this.thinkingBudgets = options.thinkingBudgets; // 可選：{minimal,low,medium,high}→思考 token 預算（anthropic 端點才生效）
     this.convertToLlm = options.convertToLlm || defaultConvertToLlm;
     // 回合內真壓縮鉤子(可選)：async () => info|null。每次串流前呼叫，可就地改寫 this._state.messages。
     // pi-agent-core 因 snapshot 做不到回合中途壓縮；自寫 loop 直接操作 live messages，故此鉤子有效。
@@ -195,6 +196,7 @@ export class Agent {
     const opts = {
       model: this._state.model,
       reasoning: this._state.thinkingLevel === 'off' ? undefined : this._state.thinkingLevel,
+      ...(this.thinkingBudgets ? { thinkingBudgets: this.thinkingBudgets } : {}), // 每級思考預算（anthropic 端點）
       transport: 'sse',
       onPayload: this.onPayload,
       toolExecution: this.toolExecution,
