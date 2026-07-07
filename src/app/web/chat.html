@@ -475,6 +475,22 @@ body {
 
 .msg.user .who { text-align: right; }
 
+/* 回覆中插話的訊息：who 列標「↳ 插話」+ 泡泡左側細強調條 */
+.steer-tag {
+  display: inline-block;
+  margin-left: var(--sp-1);
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  vertical-align: 1px;
+}
+.msg.steered .bubble { box-shadow: inset 2px 0 0 var(--accent); padding-left: var(--sp-2); }
+/* 終端機模式：who 列被隱藏，改用 body 前綴標插話（比 .msg.user 的「›」更具體，確保覆蓋）*/
+.thread.tui .msg.user.steered .body::before { content: "↳ "; color: var(--accent); font-weight: 700; }
+
 .body {
   white-space: pre-wrap;
   word-wrap: break-word;
@@ -1661,11 +1677,13 @@ function msgHtml(m, idx) {
   const phase =
     !isUser && m.phase ? `<div class="phase ${m.phase === "thinking" || m.phase === "verifying" ? "dots" : ""}">${esc(PHASE_TEXT[m.phase] || m.phase)}</div>` : "";
   const note = !isUser && m.note ? `<div class="turn-note">⚠ ${esc(m.note)}</div>` : ""; // 保底提示（截斷/中斷/空回應）
+  const steered = isUser && m._steer; // 回覆中插話的訊息
+  const steerTag = steered ? ` <span class="steer-tag" title="回覆進行中插入，agent 於下一步接手">↳ 插話</span>` : "";
 
-  return `<div class="msg ${isUser ? "user" : "asst"}" role="article" aria-label="${isUser ? "你的訊息" : "xitto 的回覆"}">
+  return `<div class="msg ${isUser ? "user" : "asst"}${steered ? " steered" : ""}" role="article" aria-label="${steered ? "你的插話" : isUser ? "你的訊息" : "xitto 的回覆"}">
     <div class="avatar" aria-hidden="true">${isUser ? "🙂" : "🤖"}</div>
     <div class="bubble">
-      <div class="who" aria-hidden="true">${isUser ? "你" : "xitto"}</div>
+      <div class="who" aria-hidden="true">${isUser ? "你" : "xitto"}${steerTag}</div>
       ${!isUser && !procInRail() ? procHtml(m, idx) : ""}
       ${phase}
       <div class="body ${isUser ? "" : "md"}">${bodyHtml}${cursor}</div>
@@ -1969,7 +1987,7 @@ function finalize(asst, firstUserText) {
   if (!sessionId) return; // 沒拿到 sessionId → 不落地
   const title = (allChats().find((c) => c.id === sessionId)?.title) || firstUserText.slice(0, 40);
   upsertChat({ id: sessionId, title, ts: Date.now(), space: curSpace, pack: $("#pack").value });
-  saveTranscript(sessionId, messages.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify })));
+  saveTranscript(sessionId, messages.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, _steer: m._steer })));
   renderChats();
 }
 
@@ -1995,7 +2013,7 @@ function finalizeRun(run) {
   if (!sid) { renderChats(); return; }                          // 沒拿到 sessionId → 不落地（僅刷新列表）
   const title = (allChats().find((c) => c.id === sid)?.title) || run.firstUserText.slice(0, 40);
   upsertChat({ id: sid, title, ts: Date.now(), space: run.space, pack: run.pack });
-  saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, note: m.note })));
+  saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, note: m.note, _steer: m._steer })));
   renderChats();
   // 佇列：本輪結束後，若仍在同一對話且非使用者中止 → 自動送出下一則排隊訊息。
   const q = run.chatMsgs && run.chatMsgs._queue;
