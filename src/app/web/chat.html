@@ -1130,6 +1130,27 @@ $("#view-toggle").onclick = () => {
 /* ── 背景任務（丟後台跑，進度顯示在 HUD/工作日誌軌道）──────── */
 let bgMode = localStorage.getItem("xk_bgmode") === "1"; // 送出時走背景任務而非前景串流
 const bgTasks = []; // [{id, pack, goal, status, phase, steps, startedAt, finishedAt, asst, session}]
+const BG_KEY = "xk_bgtasks";
+// 持久化背景任務精簡態（供刷新後重連；不存 asst/tools 那些 live 物件，靠服務端 replay 重建）。
+function saveBgTasks() {
+  try { localStorage.setItem(BG_KEY, JSON.stringify(bgTasks.slice(0, 20).map((t) => ({ id: t.id, pack: t.pack, goal: t.goal, session: t.session, startedAt: t.startedAt, status: t.status })))); } catch { /* 略 */ }
+}
+// 刷新後自動重連仍在跑的背景任務：對 running/queued 重新訂閱 /v1/tasks/:id/events（服務端有 replay 緩衝
+// → 回放重建過程；期間已結束則回放完即收尾；任務已不存在 → pumpBgEvents 標記 error）。
+function restoreBgTasks() {
+  let saved = []; try { saved = JSON.parse(localStorage.getItem(BG_KEY) || "[]"); } catch { saved = []; }
+  const live = (saved || []).filter((s) => s && s.id && (s.status === "running" || s.status === "queued"));
+  if (!live.length) return;
+  for (const s of live) {
+    if (bgTasks.some((t) => t.id === s.id)) continue;
+    const asst = { role: "assistant", text: "", tools: [], _procOpen: false, phase: "thinking" };
+    const task = { id: s.id, pack: s.pack || "general", goal: s.goal || "背景任務", status: "running", phase: "reconnecting", steps: 0, startedAt: s.startedAt || Date.now(), finishedAt: null, asst, session: s.session, _reconnect: true };
+    if (s.session && s.session === sessionId) messages.push(asst); // 屬當前對話 → 也插回訊息串
+    bgTasks.push(task);
+    pumpBgEvents(task); // 重連
+  }
+  startBgTicker(); render();
+}
 let bgTimer = null; // 每秒刷新 HUD 的經過時間
 
 /* 背景模式切換 */
@@ -1687,6 +1708,8 @@ async function sendBackground(text, asst, model) {
   }
   const task = { id: j.taskId, pack: j.pack || pack, goal: text, status: "running", phase: "starting", steps: 0, startedAt: Date.now(), finishedAt: null, asst, session: sessionId };
   bgTasks.unshift(task);
+  while (bgTasks.length > 20) bgTasks.pop();
+  saveBgTasks();
   render();
   startBgTicker();
   pumpBgEvents(task); // 不 await：讓輸入框立刻可用
@@ -1708,6 +1731,7 @@ async function pumpBgEvents(task) {
     if (task.session) sessionId = task.session;
     finalize(task.asst, task.goal);
   }
+  saveBgTasks(); // 落地最新狀態（done/error/cancelled）→ 下次刷新不再嘗試重連此任務
   updateHud();
 }
 
@@ -1953,6 +1977,7 @@ renderChats();
 render();
 inp.focus();
 loadFiles();
+restoreBgTasks(); // 刷新後自動重連仍在跑的背景任務（重建卡片 + 過程）
 
 /* 手機上顯示側邊欄 */
 function showSide() {
