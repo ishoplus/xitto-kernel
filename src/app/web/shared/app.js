@@ -131,7 +131,11 @@ function mountProjectSwitcher(onChange) {
   const btn = $("#proj-btn");
   if (btn) btn.onclick = (e) => { e.stopPropagation(); toggleProjMenu(); };
   document.addEventListener("click", (e) => { if (!$("#proj-switch")?.contains(e.target)) closeProjMenu(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeProjMenu(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    closeProjMenu();
+    const mo = $("#fs-modal"); if (mo && !mo.hidden) closeFs(); // Esc 也關資料夾選擇 modal（與對話頁一致）
+  });
 }
 
 function renderProjectSwitcher() {
@@ -170,7 +174,7 @@ function projBrowse() { closeProjMenu(); openFs(); }
 
 /* 資料夾選擇 Modal（本地模式，用 /v1/fs 瀏覽真實目錄）*/
 let fsPath = null, fsShowHidden = localStorage.getItem("xk_fshidden") === "1";
-function openFs() { const mo = $("#fs-modal"); if (!mo) return; mo.hidden = false; const h = $("#fs-hidden"); if (h) h.checked = fsShowHidden; fsGo(null); }
+function openFs() { const mo = $("#fs-modal"); if (!mo) return; mo.hidden = false; mo.onclick = (e) => { if (e.target === mo) closeFs(); }; const h = $("#fs-hidden"); if (h) h.checked = fsShowHidden; fsGo(null); }
 function fsGo(opts) {
   opts = opts || {};
   const qs = [];

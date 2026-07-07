@@ -172,6 +172,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
         <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/><circle cx="12" cy="11" r="1"/><circle cx="23" cy="19" r="1"/></g></svg>
         <h1 id="roomTitle">專案會議室</h1>
         <span class="app-ver" title="xitto-kernel 版本">v__VERSION__</span>
+        <button id="theme" class="ghost" type="button" title="切換深色/淺色" aria-label="切換深色/淺色模式" style="padding:2px 8px;font-size:14px;margin-left:6px">🌙</button>
       </div>
       <div class="side-tagline">多人即時協作，紀要自動整理</div>
       <nav class="mode-nav" id="roomModeNav" aria-label="切換模式" hidden style="margin-top:10px">
@@ -321,6 +322,18 @@ const fmtTime = (iso) => { try { return new Date(iso).toLocaleString(); } catch 
 
 // 主題：跟隨系統，記憶偏好（與 shared/style.css 的 [data-theme] 對齊）
 (() => { const t = localStorage.getItem("xk_theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); document.documentElement.setAttribute("data-theme", t); })();
+// 主題切換鈕：會議室自帶一份（未載 app.js），與許願台/對話共用 xk_theme
+(() => {
+  const b = $("#theme"); if (!b) return;
+  const sync = () => { b.textContent = document.documentElement.getAttribute("data-theme") === "light" ? "☀️" : "🌙"; };
+  sync();
+  b.onclick = () => {
+    const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("xk_theme", next); } catch { /* 略 */ }
+    sync();
+  };
+})();
 
 let roomId = null, memberId = null, myName = "", workspace = "default", es = null;
 let inviteLink = "", pickedFolder = "";   // pickedFolder：本地模式選中的專案資料夾絕對路徑
