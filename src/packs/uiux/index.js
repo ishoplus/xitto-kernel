@@ -4,12 +4,12 @@
 // 工具：read/ls/glob/grep(探勘既有 UI 與 design token) + web_search/web_fetch(參考設計/元件範式/WCAG) + write/edit + bash(跑 build/格式化/起 dev server)。
 import { withBaseRules } from '../shared/prompt.js';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, dirname, basename, isAbsolute, relative } from 'node:path';
+import { join, dirname, basename, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
 import { createFsTools } from '../shared/fs-tools.js';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
 import { createWebSearchTool, createWebFetchTool } from '../shared/web-tools.js';
-import { capturePage } from '../shared/browser.js';
+import { createScreenshotTool } from '../shared/browser.js';
 
 const SYSTEM_PROMPT = [
   '你是資深 UI/UX 設計工程師。水準對標 Vercel v0：一句需求就交付「生產級、可及、響應式、有設計系統一致性」的介面（程式碼，不是圖）。準則：',
@@ -66,7 +66,7 @@ const SYSTEM_PROMPT = [
   '【產出與自檢】',
   '- 用 write/edit 產出/修改前端檔；改既有檔前先 read。可用 web_search/web_fetch 找元件範式或 WCAG/APG 準則佐證，關鍵決策說明理由。',
   '- 收尾自我檢查：語意標籤、img alt、表單標籤、對比、focus 樣式、響應式、各互動狀態是否齊全。verify 會以 a11y 靜態檢查（必要時加專案本地 a11y 工具）守門，未過會退回要你補。',
-  '- 視覺自檢：產出/改完頁面後用 ui_screenshot 把它截圖看一眼（a picture is worth 1000 tokens），對照渲染尺寸、是否橫向溢出、console 錯誤、載入失敗資源，發現問題就修再截一次。窄螢幕可傳 width 驗響應式。（需環境有 playwright；沒有就退回靜態自檢。）',
+  '- 視覺自檢：產出/改完頁面後用 screenshot 把它截圖看一眼（a picture is worth 1000 tokens），對照渲染尺寸、是否橫向溢出、console 錯誤、載入失敗資源，發現問題就修再截一次。窄螢幕可傳 width 驗響應式。（需環境有 playwright；沒有就退回靜態自檢。）',
 ].join('\n');
 
 // 偵測專案是否自備 a11y 檢查腳本（pa11y / axe / lighthouse 等）；有則 verify 一併跑「真檢查」。
@@ -189,41 +189,8 @@ export function auditAssets(src, htmlPath) {
  * @param {{ cwd?: string }} [opts]
  * @returns {import('../../types.js').DomainPack}
  */
-const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
-
 export function createUiuxPack({ cwd = process.cwd() } = {}) {
   const fs = createFsTools(cwd);
-  const abs = (p) => (isAbsolute(p) ? p : join(cwd, p));
-  const within = (p) => { const full = abs(p); const r = relative(cwd, full); return (r === '' || (!r.startsWith('..') && !isAbsolute(r))) ? full : null; };
-
-  // 視覺自檢：把 HTML 檔（或 URL）用 headless 瀏覽器全頁截圖，回報渲染尺寸/溢出/console 錯誤。
-  const uiScreenshot = {
-    name: 'ui_screenshot', label: '截圖預覽', readOnly: true,
-    description: '把一個 HTML 檔（相對路徑）或 http(s) URL 用 headless 瀏覽器開啟並「全頁截圖」存檔，回傳圖片路徑、實際渲染尺寸、是否橫向溢出、console 錯誤、載入失敗的資源。產出/改完 UI 後用它自己看一眼、對照修正（a picture is worth 1000 tokens）。需安裝 playwright（未裝會提示怎麼裝）。',
-    parameters: { type: 'object', properties: {
-      path: { type: 'string', description: '要截圖的 HTML 檔（相對 cwd）；與 url 二選一' },
-      url: { type: 'string', description: 'http(s) 網址；與 path 二選一' },
-      out: { type: 'string', description: '輸出 PNG 路徑（相對 cwd），預設 .xitto-preview/<name>.png' },
-      width: { type: 'number', description: '視窗寬度，預設 1280' },
-      height: { type: 'number', description: '視窗高度，預設 800' },
-    } },
-    execute: async (_id, { path, url, out, width, height } = {}) => {
-      let target;
-      if (url) { if (!/^https?:\/\//i.test(url)) return txt({ error: 'url 需為 http(s)' }); target = { url }; }
-      else if (path) { const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path }); target = { file: p }; }
-      else return txt({ error: '需給 path 或 url' });
-      const rel = out || join('.xitto-preview', (path ? basename(path).replace(/\.html?$/i, '') : 'page') + '.png');
-      const outAbs = within(rel);
-      if (!outAbs) return txt({ error: '輸出路徑須在工作目錄內', out: rel });
-      const r = await capturePage(target, { cwd, outPath: outAbs, viewport: { width: width || 1280, height: height || 800 } });
-      if (!r.ok) return txt({ ok: false, reason: r.reason, ...(r.install ? { hint: `安裝後即可使用：${r.install}` } : {}) });
-      return txt({
-        ok: true, screenshot: relative(cwd, outAbs), rendered: r.rendered, viewport: r.viewport,
-        overflowX: r.overflowX, consoleErrors: r.consoleErrors.slice(0, 20), failedResources: r.failedResources.slice(0, 20),
-        ...(r.overflowX ? { note: '頁面橫向溢出——通常是寬內容沒包 overflow-x 或有固定寬度元素；修掉再截一次。' } : {}),
-      });
-    },
-  };
 
   // 淺層走訪 cwd 找 HTML 檔（排除依賴/建置產物目錄），供 verify 做 a11y 守門。
   const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'out', 'coverage']);
@@ -252,7 +219,7 @@ export function createUiuxPack({ cwd = process.cwd() } = {}) {
       createGlobTool(cwd), createGrepTool(cwd),     // 探勘既有 UI / design token
       createWebSearchTool(), createWebFetchTool(),  // 參考設計、元件範式、WCAG 準則
       fs.write, fs.edit, fs.bash,                   // 產出前端檔 / 跑 build、格式化、起 dev server
-      uiScreenshot,                                 // 視覺自檢：截圖看渲染結果
+      createScreenshotTool(cwd),                    // 視覺自檢：截圖看渲染結果
     ],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['DESIGN.md', 'STYLEGUIDE.md', 'CLAUDE.md', 'AGENTS.md'], // 專案級設計規範注入點

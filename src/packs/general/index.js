@@ -8,6 +8,7 @@ import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
 import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { createWebFetchTool, createWebSearchTool, createHttpTool } from '../shared/web-tools.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
+import { createScreenshotTool } from '../shared/browser.js';
 
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 
@@ -97,7 +98,7 @@ export function createGeneralPack({ cwd = process.cwd() } = {}) {
 
   return {
     name: 'general',
-    tools: () => [read, ls, globTool, grepTool, write, edit, bash, webSearch, webFetch, http, readImage],
+    tools: () => [read, ls, globTool, grepTool, write, edit, bash, webSearch, webFetch, http, readImage, createScreenshotTool(cwd)],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['AGENTS.md', 'GENERAL.md'],
     preToolPolicy: {

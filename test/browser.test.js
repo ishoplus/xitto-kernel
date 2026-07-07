@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { capturePage } from '../src/packs/shared/browser.js';
 import { createUiuxPack } from '../src/packs/uiux/index.js';
+import { createCodingPack } from '../src/packs/coding/index.js';
+import { createGeneralPack } from '../src/packs/general/index.js';
 
 // fake launcher：回一個假瀏覽器，goto/setContent 時觸發預設的 console/pageerror/requestfailed。
 function fakeLaunch({ consoleError, pageError, failedReq, dims } = {}) {
@@ -68,22 +70,28 @@ test('capturePage：沒有目標（url/file/html）→ ok:false', async () => {
   assert.match(r.reason, /url.*file.*html|三選一/);
 });
 
-test('ui_screenshot 工具：guard（缺 path/url、非法 url、檔不存在）', async () => {
+test('screenshot 工具：三個 pack（uiux/coding/general）皆註冊', () => {
+  for (const make of [createUiuxPack, createCodingPack, createGeneralPack]) {
+    assert.ok(make({ cwd: '/tmp' }).tools().map((t) => t.name).includes('screenshot'), `${make.name} 應有 screenshot 工具`);
+  }
+});
+
+test('screenshot 工具：guard（缺 path/url、非法 url、檔不存在）', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'shot3-'));
   try {
-    const tool = createUiuxPack({ cwd: dir }).tools().find((t) => t.name === 'ui_screenshot');
-    assert.ok(tool, '應有 ui_screenshot 工具');
+    const tool = createUiuxPack({ cwd: dir }).tools().find((t) => t.name === 'screenshot');
+    assert.ok(tool, '應有 screenshot 工具');
     assert.match(JSON.parse((await tool.execute('1', {})).content[0].text).error, /需給 path 或 url/);
     assert.match(JSON.parse((await tool.execute('2', { url: 'ftp://x' })).content[0].text).error, /http/);
     assert.match(JSON.parse((await tool.execute('3', { path: 'nope.html' })).content[0].text).error, /不存在/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('ui_screenshot 工具：playwright 未裝 → ok:false + 安裝提示（真實路徑）', async () => {
+test('screenshot 工具：playwright 未裝 → ok:false + 安裝提示（真實路徑）', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'shot4-'));
   try {
     writeFileSync(join(dir, 'page.html'), '<!doctype html><h1>hi</h1>');
-    const tool = createUiuxPack({ cwd: dir }).tools().find((t) => t.name === 'ui_screenshot');
+    const tool = createUiuxPack({ cwd: dir }).tools().find((t) => t.name === 'screenshot');
     const r = JSON.parse((await tool.execute('1', { path: 'page.html' })).content[0].text);
     // 此環境沒裝 playwright → 應優雅回報；若剛好裝了則 ok:true 也可接受
     if (!r.ok) { assert.match(r.reason, /playwright/i); assert.match(r.hint, /playwright/i); }
