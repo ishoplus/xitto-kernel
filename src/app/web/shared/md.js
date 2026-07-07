@@ -32,6 +32,67 @@
     return emph(t).replace(/\u0000(\d+)\u0000/g, (_, i) => holds[+i]);
   };
 
+  // ── 輕量語法高亮（零依賴、離線）───────────────────────────────
+  // 把程式碼區塊 token 上色（js/ts/py/bash/sql/json；未知語言保持單色）。
+  // 安全性：所有輸出片段（token 與間隙）一律經 esc，untrusted 內容不會逸出成 HTML。
+  const KW = {
+    js: 'const let var function return if else for while do switch case break continue new class extends super this typeof instanceof in of try catch finally throw async await yield import export from default void delete static get set',
+    ts: 'const let var function return if else for while do switch case break continue new class extends super this typeof instanceof in of try catch finally throw async await yield import export from default void delete static get set interface type enum implements public private protected readonly namespace declare as keyof abstract',
+    py: 'def return if elif else for while break continue class import from as pass raise try except finally with lambda global nonlocal yield async await in is not and or del assert',
+    bash: 'if then else elif fi for in do done case esac function while until return local export source',
+    sql: 'select from where insert into values update set delete create table drop alter add index join left right inner outer full on group by order having limit offset union all as distinct and or not null is in like between exists count sum avg min max primary key foreign references default constraint unique',
+  };
+  const LIT = { js: 'true false null undefined NaN Infinity', ts: 'true false null undefined NaN Infinity', py: 'True False None', bash: 'true false', sql: 'true false null' };
+  const LN = { js: '//', ts: '//', bash: '#', py: '#', sql: '--' };
+  const BLOCK = { js: true, ts: true, sql: true };
+  const alt = (s) => s.trim().split(/\s+/).join('|');
+  const buildRe = (lang) => {
+    const parts = [];
+    if (BLOCK[lang]) parts.push('(?<com>/\\*[\\s\\S]*?\\*/)');
+    const ln = LN[lang];
+    if (ln === '//') parts.push('(?<com2>//[^\\n]*)');
+    else if (ln === '#') parts.push('(?<com2>#[^\\n]*)');
+    else if (ln === '--') parts.push('(?<com2>--[^\\n]*)');
+    const strs = ['"(?:\\\\.|[^"\\\\])*"', "'(?:\\\\.|[^'\\\\])*'"];
+    if (lang === 'js' || lang === 'ts') strs.push('`(?:\\\\.|[^`\\\\])*`');
+    parts.push('(?<str>' + strs.join('|') + ')');
+    parts.push('(?<num>\\b0[xX][0-9a-fA-F]+\\b|\\b\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b)');
+    if (KW[lang]) parts.push('(?<key>\\b(?:' + alt(KW[lang]) + ')\\b)');
+    if (LIT[lang]) parts.push('(?<lit>\\b(?:' + alt(LIT[lang]) + ')\\b)');
+    return new RegExp(parts.join('|'), 'g' + (lang === 'sql' ? 'i' : ''));
+  };
+  const reCache = {};
+  const getRe = (lang) => (reCache[lang] || (reCache[lang] = buildRe(lang)));
+  const normLang = (l) => {
+    l = String(l || '').toLowerCase();
+    if (/^(js|javascript|jsx|mjs|cjs|node)$/.test(l)) return 'js';
+    if (/^(ts|typescript|tsx)$/.test(l)) return 'ts';
+    if (/^(py|python)$/.test(l)) return 'py';
+    if (/^(sh|bash|shell|zsh|console)$/.test(l)) return 'bash';
+    if (l === 'sql') return 'sql';
+    if (/^(json|jsonc)$/.test(l)) return 'json';
+    return '';
+  };
+  const scan = (code, re, clsOf) => {
+    re.lastIndex = 0;
+    let out = '', last = 0, m;
+    while ((m = re.exec(code))) {
+      if (m.index > last) out += esc(code.slice(last, m.index));
+      const cls = clsOf(m, re.lastIndex, code);
+      out += cls ? `<span class="hl-${cls}">${esc(m[0])}</span>` : esc(m[0]);
+      last = re.lastIndex;
+      if (re.lastIndex === m.index) re.lastIndex++; // 防零寬匹配無限迴圈
+    }
+    return out + esc(code.slice(last));
+  };
+  const jsonRe = /(?<str>"(?:\\.|[^"\\])*")|(?<num>-?\b\d[\d.eE+-]*\b)|(?<lit>\b(?:true|false|null)\b)/g;
+  const highlight = (code, langRaw) => {
+    const lang = normLang(langRaw);
+    if (lang === 'json') return scan(code, jsonRe, (m, end, src) => (m.groups.str ? (/^\s*:/.test(src.slice(end)) ? 'prop' : 'str') : m.groups.num ? 'num' : 'lit'));
+    if (!lang) return esc(code); // 未知語言 → 純轉義（維持現況）
+    return scan(code, getRe(lang), (m) => { const g = m.groups; return (g.com || g.com2) ? 'com' : g.str ? 'str' : g.num ? 'num' : g.key ? 'key' : g.lit ? 'lit' : ''; });
+  };
+
   const mdRender = (src) => {
     const lines = String(src).replace(/\r/g, "").split("\n");
     const out = [];
@@ -65,7 +126,7 @@
       const fence = ln.match(/^```(\S*)/);
       if (fence) {
         if (inCode) {
-          out.push(`<pre class='code'><code${codeLang ? ` class="lang-${esc(codeLang)}"` : ""}>` + esc(buf.join("\n")) + "</code></pre>");
+          out.push(`<pre class='code'><code${codeLang ? ` class="lang-${esc(codeLang)}"` : ""}>` + highlight(buf.join("\n"), codeLang) + "</code></pre>");
           buf = []; inCode = false; codeLang = "";
         } else {
           closeAllLists(); inCode = true; codeLang = fence[1] || "";
@@ -142,7 +203,7 @@
 
     closeAllLists();
     if (inCode)
-      out.push(`<pre class='code'><code${codeLang ? ` class="lang-${esc(codeLang)}"` : ""}>` + esc(buf.join("\n")) + "</code></pre>");
+      out.push(`<pre class='code'><code${codeLang ? ` class="lang-${esc(codeLang)}"` : ""}>` + highlight(buf.join("\n"), codeLang) + "</code></pre>");
     return out.join("");
   };
 

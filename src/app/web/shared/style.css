@@ -29,6 +29,13 @@
   --btnfg:   #ffffff;
   --danger:  #f08a8a;
   --warnbg:  #1e1b12;
+  /* 程式碼語法高亮 token 色（深色）*/
+  --hl-com:  #6b7488;   /* 註解 */
+  --hl-str:  #7fd18b;   /* 字串 */
+  --hl-num:  #e2b878;   /* 數字 */
+  --hl-key:  #9aa2ff;   /* 關鍵字 */
+  --hl-lit:  #e59aa0;   /* 字面值 true/false/null */
+  --hl-prop: #79c8e0;   /* JSON 鍵 */
 
   /* 間距（8pt Grid，嚴格執行）*/
   --sp-1: 4px;   /* 4  */
@@ -79,6 +86,13 @@
   --btnfg:   #ffffff;
   --danger:  #d62f2f;
   --warnbg:  #fdf6e3;
+  /* 程式碼語法高亮 token 色（淺色）*/
+  --hl-com:  #8a909c;
+  --hl-str:  #197a3e;
+  --hl-num:  #9a5b00;
+  --hl-key:  #5b61e6;
+  --hl-lit:  #b0483e;
+  --hl-prop: #0b6b8a;
   --hairline: transparent;
   --shadow-sm:   0 1px 2px rgba(16,20,40,.06);
   --shadow-md:   0 6px 20px -6px rgba(16,20,40,.12);
@@ -374,6 +388,13 @@ a:focus-visible {
   padding: 0;
   font-size: 13px;
 }
+/* 語法高亮 token（mdRender 的輕量高亮器產生 .hl-*；未知語言則無 span，保持單色）*/
+.md .hl-com  { color: var(--hl-com); font-style: italic; }
+.md .hl-str  { color: var(--hl-str); }
+.md .hl-num  { color: var(--hl-num); }
+.md .hl-key  { color: var(--hl-key); font-weight: 600; }
+.md .hl-lit  { color: var(--hl-lit); }
+.md .hl-prop { color: var(--hl-prop); }
 .md a { color: var(--accent); }
 .md strong { font-weight: 600; }
 .md em { font-style: italic; }

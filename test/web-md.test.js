@@ -49,7 +49,8 @@ test('有序清單保留起始號：3. → <ol start="3">', () => {
 test('既有能力不回歸：標題 / 表格 / 程式碼塊 / 待辦清單 / 行內碼', () => {
   assert.match(md('# 標題'), /<h1>標題<\/h1>/);
   assert.match(md('| A | B |\n| - | - |\n| 1 | 2 |'), /<table class='md-table'>.*<th>A<\/th>.*<td>1<\/td>/s);
-  assert.match(md('```js\nconst x=1;\n```'), /<pre class='code'><code class="lang-js">const x=1;<\/code><\/pre>/);
+  // 程式碼塊：語法高亮後 token 帶 span，但仍是 pre.code + lang class（高亮細節見 web-md-highlight.test.js）
+  assert.match(md('```js\nconst x=1;\n```'), /<pre class='code'><code class="lang-js">.*const.*<\/code><\/pre>/s);
   assert.match(md('- [x] 完成'), /☑ 完成/);
   assert.match(md('這是 `code`'), /<code>code<\/code>/);
 });
