@@ -41,6 +41,7 @@
   flex-shrink: 0;
 }
 
+.brand-row { display: flex; align-items: center; gap: var(--sp-2); }
 .brand h1 {
   font-size: 17px;
   font-weight: 700;
@@ -1006,7 +1007,10 @@
   <aside class="sidebar" aria-label="專案導覽">
     <div class="sidebar-head">
       <div class="brand">
-        <h1>🪄 xitto 許願台</h1>
+        <div class="brand-row">
+          <h1>🪄 xitto 許願台</h1>
+          <button class="ghost theme-btn" id="theme" data-tooltip="切換主題" aria-label="切換深色/淺色模式" style="margin-left:auto">🌙</button>
+        </div>
         <p class="brand-tagline">說出你想完成的事，做完給你成品</p>
       </div>
       <nav class="mode-nav" aria-label="切換模式" style="margin-top:10px">
@@ -1042,8 +1046,6 @@
 
     <div class="sidebar-foot">
       <span class="app-ver" title="xitto-kernel 版本">v__VERSION__</span>
-      <span class="spacer" aria-hidden="true"></span>
-      <button class="ghost icon-btn" id="theme" data-tooltip="切換主題" aria-label="切換深色/淺色模式">🌙</button>
     </div>
   </aside>
 
@@ -1059,7 +1061,7 @@
           placeholder="說出你想完成的事⋯例如：把這個資料夾的 .md 整理成目錄 index.md；或抓 example.com 標題寫進 title.txt"
           aria-describedby="goal-hint"
         ></textarea>
-        <div id="goal-hint" class="wish-hint">⌘ / Ctrl + Enter 送出</div>
+        <div id="goal-hint" class="wish-hint">Enter 送出 · Shift+Enter 換行</div>
 
         <div class="wish-footer">
           <label for="pack" class="sr-only">選擇領域</label>
@@ -1185,10 +1187,18 @@ $("#go-btn").onclick = async () => {
 };
 
 $("#goal").addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+  // 送出鍵三頁一致：Enter 送出、Shift+Enter 換行（擋 IME 組字中的 Enter）
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     $("#go-btn").click();
   }
+});
+// Esc 停止進行中的任務（與對話/會議室一致）；資料夾 modal 開著時交給 app.js 的 Esc 關閉，不停任務
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const fs = document.getElementById("fs-modal");
+  if (fs && !fs.hidden) return;
+  if (streamCtl && activeId) cancelTask(activeId);
 });
 
 /* IME 保護旗標 */

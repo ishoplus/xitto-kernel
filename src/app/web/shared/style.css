@@ -267,6 +267,9 @@ a:focus-visible {
 .mode-nav a { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--dim); text-decoration: none; white-space: nowrap; transition: background .12s, color .12s; }
 .mode-nav a:hover { color: var(--fg); }
 .mode-nav a.active { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* 主題切換鈕（三頁一致：側欄標題列右上）*/
+.theme-btn { flex-shrink: 0; padding: 4px 9px; font-size: 15px; line-height: 1; }
 /* 驗收徽章（完成定義）*/
 .badge.vok   { color: var(--ok);   border-color: color-mix(in srgb, var(--ok) 45%, var(--line));   background: color-mix(in srgb, var(--ok) 10%, transparent); }
 .badge.vfail { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: color-mix(in srgb, var(--warn) 10%, transparent); }

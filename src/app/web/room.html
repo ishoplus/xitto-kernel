@@ -172,7 +172,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
         <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/><circle cx="12" cy="11" r="1"/><circle cx="23" cy="19" r="1"/></g></svg>
         <h1 id="roomTitle">專案會議室</h1>
         <span class="app-ver" title="xitto-kernel 版本">v__VERSION__</span>
-        <button id="theme" class="ghost" type="button" title="切換深色/淺色" aria-label="切換深色/淺色模式" style="padding:2px 8px;font-size:14px;margin-left:6px">🌙</button>
+        <button id="theme" class="ghost theme-btn" type="button" title="切換深色/淺色" aria-label="切換深色/淺色模式" style="margin-left:6px">🌙</button>
       </div>
       <div class="side-tagline">多人即時協作，紀要自動整理</div>
       <nav class="mode-nav" id="roomModeNav" aria-label="切換模式" hidden style="margin-top:10px">
@@ -910,7 +910,14 @@ $("#sideBackdrop").onclick = closeSide;
 // 點側欄的動作按鈕（離開/紀要/複製邀請）後自動收起抽屜；瀏覽檔案/資料夾不收（開檔預覽本身會蓋在上層）
 $(".side-actions").addEventListener("click", (e) => { if (window.matchMedia("(max-width: 720px)").matches && e.target.closest("button")) closeSide(); });
 
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeFilePreview(); closeSide(); if (!$("#fsModal").hidden) $("#fsModal").hidden = true; } });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("#fsModal").hidden) { $("#fsModal").hidden = true; return; }      // 依序：資料夾 modal
+  const fp = document.getElementById("file-preview");
+  if (fp && fp.innerHTML.trim()) { closeFilePreview(); return; }           // 檔案預覽
+  if ($(".side")?.classList.contains("open")) { closeSide(); return; }     // 手機側欄抽屜
+  const sb = $("#stopBtn"); if (sb && !sb.hidden) sb.click();              // 都沒開 → 停止 AI 回覆
+});
 window.addEventListener("beforeunload", () => { if (roomId && memberId) navigator.sendBeacon?.(`/v1/rooms/${roomId}/leave` + (authTok ? "?token=" + encodeURIComponent(authTok) : ""), new Blob([JSON.stringify({ memberId })], { type: "application/json" })); });
 </script>
 </body>
