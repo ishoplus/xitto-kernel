@@ -25,6 +25,8 @@ import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
 import { maybeCompact, resolveCompactionSettings } from './compaction.js';
 import { checkGoal, normalizeFeedback } from './goal-loop.js';
 import { newSessionId, saveSession, loadSession, listSessions, latestSession } from './session.js';
+import { defaultStreamFn } from './provider.js';
+import { createModelLogger, withLogging, resolveRetry, attachLoopLogger } from './log.js';
 
 // 載入 pack.contextFiles：從 cwd 逐層往上找每個檔名，找到就讀入並注入 system prompt（領域規範）。
 // 對標 xitto-code 的 CLAUDE.md/AGENTS.md 載入；但檔名由 pack 決定（kernel 不認識具體檔名）。
@@ -199,11 +201,21 @@ export function createKernel(pack, config = {}) {
   const playbook = createPlaybook(join(dataDir, 'playbook.md'));
   const episodes = createEpisodes(join(dataDir, 'episodes.jsonl'));
 
+  // 模型介面日誌 + 自動重試：包住 provider streamFn，記錄每次 LLM 呼叫（請求 body / HTTP 狀態 / 串流時序 /
+  // stopReason / usage / 錯誤原文），並把結果分類成 outcome（empty=「沒回覆就中斷」的核心徵狀）；連線錯 /
+  // 429 / 5xx 由 SDK 層自動重試。可用 XITTO_LOG*（日誌）與 XITTO_LLM_*（重試/逾時）環境變數調整或關閉。
+  const modelLogger = createModelLogger({ ...(config.logging || {}), dataDir });
+  const retryCfg = resolveRetry(config.retry);
+  const baseStreamFn = config.streamFn || defaultStreamFn();
+  const mkStreamFn = (label, turnId) => withLogging(baseStreamFn, modelLogger, { ...retryCfg, label, turnId });
+  let turnSeq = 0;
+  const newTurnId = () => `t${(++turnSeq).toString(36)}-${Date.now().toString(36).slice(-5)}`;
+
   // 事實層自動萃取：從對話抽持久事實存進 memory（去重靠 memory.save + existing 過濾）。
   let lastMessages = [];
   const doExtract = async (messages) => {
     if (!config.model || !config.getApiKey) return { extracted: [] };
-    const streamFn = config.streamFn || (await import('./provider.js')).defaultStreamFn();
+    const streamFn = mkStreamFn('extract');
     const facts = await extractFacts({ model: config.model, getApiKey: config.getApiKey, streamFn, messages: messages || [], existing: memory.list() });
     const saved = [];
     for (const f of facts) { if (memory.save(f).saved) saved.push(f); }
@@ -289,7 +301,7 @@ export function createKernel(pack, config = {}) {
   const subDeps = {
     getModel: () => config.model,
     getApiKey: config.getApiKey,
-    getStreamFn: () => config.streamFn, // 與 kernel 同一個 provider（測試可注入 fake）；未給則 subagent 內 fallback pi-ai
+    getStreamFn: () => mkStreamFn('subagent'), // 與 kernel 同一個 provider（含日誌+重試包裝）；測試注入的 fake 也一併被包
     getReadOnlyTools: () => allTools.filter((t) => t.readOnly === true && t.name !== 'spawn_agent' && t.name !== 'spawn_agents'),
     getAgentType: (name) => agents.get(name), // 自訂 agent 類型：以其專屬 prompt + 工具子集跑子 agent
   };
@@ -453,7 +465,8 @@ export function createKernel(pack, config = {}) {
       if (!config.model) throw new Error('runTurn 需要 config.model（LLM model 物件）。');
       if (!config.getApiKey) throw new Error('runTurn 需要 config.getApiKey。');
       const { Agent } = await import('./agent-loop.js');
-      const streamFn = config.streamFn || (await import('./provider.js')).defaultStreamFn();
+      const turnId = newTurnId();                    // 關聯本輪的 model-calls 與 agent-loop 日誌
+      const streamFn = mkStreamFn(opts.systemPromptOverride ? 'delegate' : 'main', turnId);
       const model = opts.model || config.model; // 可寫委派可指定 per-agent model
 
       // 語系驅動：偵測語言→注入該語言的具體指令在最前面（opts.lang > config.lang > 自動偵測）。
@@ -506,6 +519,7 @@ export function createKernel(pack, config = {}) {
         }
       });
       if (opts.onEvent) agent.subscribe((e) => opts.onEvent(e));
+      attachLoopLogger(agent, modelLogger, { turnId }); // 記 agent-loop 過程（工具/回合/收尾），與 model-calls 同 turnId
       opts.onAgent?.(agent); // 讓呼叫端拿到 agent（Ctrl+C → agent.abort()）
 
       await agent.prompt(input);
