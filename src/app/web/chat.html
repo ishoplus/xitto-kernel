@@ -359,6 +359,24 @@ body {
   flex-shrink: 0;
 }
 
+/* 每行容器（行 + 刪除鈕），hover 才顯示刪除 */
+.file-item { display: flex; align-items: center; }
+.file-item .file-row { flex: 1; min-width: 0; }
+.file-del {
+  flex-shrink: 0; background: none; border: none; cursor: pointer;
+  color: var(--dim); font-size: 12px; padding: 2px 5px; border-radius: var(--r-sm);
+  opacity: 0; transition: opacity var(--duration-fast);
+}
+.file-item:hover .file-del, .file-del:focus { opacity: 1; }
+.file-del:hover { color: var(--err, #e5484d); background: var(--card); }
+/* 檔案操作列（新資料夾／新檔／上傳） */
+.file-actions { display: flex; gap: var(--sp-1); padding: 0 var(--sp-2) var(--sp-1); flex-wrap: wrap; }
+.file-actions button {
+  background: none; border: 1px solid var(--line); color: var(--dim);
+  border-radius: var(--r-sm); font-size: 11px; padding: 2px 7px; cursor: pointer; width: auto;
+}
+.file-actions button:hover { color: var(--fg); border-color: var(--accent); }
+
 /* ── 右側主區 ─────────────────────────────────────────── */
 .main {
   display: flex;
@@ -978,6 +996,12 @@ body {
     <section class="file-section" aria-label="工作區檔案">
       <h3>📂 檔案 <button class="refresh-btn" id="files-refresh" type="button" onclick="refreshFiles()" title="刷新檔案列表" aria-label="刷新檔案列表">↻</button><button class="refresh-btn" id="open-folder-btn" type="button" onclick="openWsFolder()" title="在系統檔案管理器開啟工作目錄（本機模式）" aria-label="開啟資料夾" hidden>📂</button><button class="refresh-btn" id="open-term-btn" type="button" onclick="openWsTerminal()" title="在終端機開啟工作目錄（本機模式）" aria-label="開啟終端機" hidden>⌨</button></h3>
       <div id="file-breadcrumb" class="file-breadcrumb" aria-live="polite"></div>
+      <div class="file-actions">
+        <button type="button" onclick="wbMkdir()" title="在目前資料夾新建子資料夾">📁＋ 資料夾</button>
+        <button type="button" onclick="wbNewfile()" title="新建空檔案">＋ 檔案</button>
+        <button type="button" onclick="document.getElementById('wb-upload').click()" title="上傳到目前資料夾">⬆ 上傳</button>
+        <input id="wb-upload" type="file" multiple hidden onchange="wbUpload(this.files)">
+      </div>
       <div class="file-list" id="wbfiles" role="tree" aria-label="檔案列表"></div>
     </section>
     
@@ -1232,6 +1256,37 @@ async function openWsTerminal() {
 // 只有本機模式顯示「開啟資料夾 / 終端機」（遠端部署沒意義）。
 if (window.__XITTO__ && window.__XITTO__.local) { const f = $("#open-folder-btn"), t = $("#open-term-btn"); if (f) f.hidden = false; if (t) t.hidden = false; }
 
+// 新建資料夾 / 新建空檔 / 上傳 / 刪除（在目前 curSpace + wbSub 目錄下）。
+async function wbMkdir() {
+  const name = prompt("新資料夾名稱："); if (!name || !name.trim()) return;
+  const r = await api("/v1/workspaces/mkdir", { method: "POST", body: JSON.stringify({ ws: curSpace, sub: wbSub, name: name.trim() }) }).then((x) => x.json()).catch(() => ({ error: "連線失敗" }));
+  if (r && r.error) alert(r.error); else loadFiles();
+}
+async function wbNewfile() {
+  const name = prompt("新檔名稱（例 notes.md）："); if (!name || !name.trim()) return;
+  const r = await api("/v1/workspaces/newfile", { method: "POST", body: JSON.stringify({ ws: curSpace, sub: wbSub, name: name.trim() }) }).then((x) => x.json()).catch(() => ({ error: "連線失敗" }));
+  if (r && r.error) alert(r.error); else loadFiles();
+}
+async function wbUpload(files) {
+  if (!files || !files.length) return;
+  let ok = 0, fail = 0;
+  for (const f of files) {
+    try {
+      const q = "?ws=" + encodeURIComponent(curSpace) + "&sub=" + encodeURIComponent(wbSub) + "&name=" + encodeURIComponent(f.name);
+      const r = await fetch("/v1/workspaces/upload" + q, { method: "POST", headers: { authorization: "Bearer " + TOKEN, "content-type": f.type || "application/octet-stream" }, body: f }).then((x) => x.json());
+      if (r && r.ok) ok++; else fail++;
+    } catch { fail++; }
+  }
+  const inp = $("#wb-upload"); if (inp) inp.value = "";
+  loadFiles();
+  if (fail) alert("上傳完成：" + ok + " 成功、" + fail + " 失敗");
+}
+async function wbDelete(encFull, name, isDir) {
+  if (!confirm("刪除" + (isDir ? "資料夾" : "檔案") + "「" + name + "」？" + (isDir ? "（含內容，無法復原）" : ""))) return;
+  const r = await api("/v1/workspaces/file?ws=" + encodeURIComponent(curSpace) + "&path=" + encFull, { method: "DELETE" }).then((x) => x.json()).catch(() => ({ error: "連線失敗" }));
+  if (r && r.error) alert(r.error); else loadFiles();
+}
+
 async function loadFiles() {
   const r = await api("/v1/workspaces/files?ws=" + encodeURIComponent(curSpace) + "&sub=" + encodeURIComponent(wbSub)).then((r) => r.json()).catch(() => ({ dirs: [], files: [] }));
 
@@ -1239,14 +1294,17 @@ async function loadFiles() {
   bc.textContent = wbSub ? "📂 " + wbSub : "";
 
   let html = wbSub ? `<button class="file-up" onclick="wbUp()" aria-label="上一層" type="button">⬆ 上一層</button>` : "";
-  html += (r.dirs || []).map((d) => `<button class="file-row" onclick="wbNav('${encodeURIComponent((wbSub ? wbSub + "/" : "") + d)}')" type="button">📁 <span class="name">${esc(d)}</span>/</button>`).join("");
+  html += (r.dirs || []).map((d) => {
+    const full = (wbSub ? wbSub + "/" : "") + d;
+    return `<div class="file-item"><button class="file-row" onclick="wbNav('${encodeURIComponent(full)}')" type="button">📁 <span class="name">${esc(d)}</span>/</button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(d)}',true)" title="刪除資料夾" type="button">🗑</button></div>`;
+  }).join("");
   html +=
     (r.files || []).map((f) => {
       const full = (wbSub ? wbSub + "/" : "") + f.name;
-      return `<button class="file-row" onclick="wbView('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button">
+      return `<div class="file-item"><button class="file-row" onclick="wbView('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button">
     <span class="name">📄 ${esc(f.name)}</span>
     <span class="size">${fmtSize(f.size)}</span>
-  </button>`;
+  </button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(f.name)}',false)" title="刪除" type="button">🗑</button></div>`;
     }).join("");
 
   if (!(r.dirs || []).length && !(r.files || []).length)

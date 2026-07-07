@@ -928,6 +928,36 @@ test('HTTP：會議室錄音 /audio → STT → 以成員身份發言（source:v
   } finally { srv.close(); stt.close(); rmSync(base, { recursive: true, force: true }); }
 });
 
+test('HTTP：對話模式工作目錄檔案管理——mkdir/newfile/upload/delete（含刪資料夾、防刪根）', async () => {
+  await withServer(async ({ url, H, base }) => {
+    const ws = 'wsx';
+    const wsDir = join(base, '.srv', 'ws', ws);
+    // 新建資料夾
+    assert.equal((await fetch(url('/v1/workspaces/mkdir'), { method: 'POST', headers: H, body: JSON.stringify({ ws, sub: '', name: 'docs' }) })).status, 200);
+    assert.ok(existsSync(join(wsDir, 'docs')), 'docs 資料夾已建');
+    // 重名 → 409
+    assert.equal((await fetch(url('/v1/workspaces/mkdir'), { method: 'POST', headers: H, body: JSON.stringify({ ws, sub: '', name: 'docs' }) })).status, 409, '同名 → 409');
+    // 新建空檔（子目錄下）
+    assert.equal((await fetch(url('/v1/workspaces/newfile'), { method: 'POST', headers: H, body: JSON.stringify({ ws, sub: 'docs', name: 'a.md' }) })).status, 200);
+    assert.equal(readFileSync(join(wsDir, 'docs', 'a.md'), 'utf8'), '', '空檔已建');
+    // 上傳（二進位）
+    const up = await fetch(url('/v1/workspaces/upload?ws=' + ws + '&sub=docs&name=b.txt'), { method: 'POST', headers: { authorization: 'Bearer t', 'content-type': 'text/plain' }, body: 'hello' }).then((r) => r.json());
+    assert.equal(up.ok, true); assert.equal(readFileSync(join(wsDir, 'docs', 'b.txt'), 'utf8'), 'hello', '上傳內容正確');
+    // 刪檔
+    assert.equal((await fetch(url('/v1/workspaces/file?ws=' + ws + '&path=docs/b.txt'), { method: 'DELETE', headers: H })).status, 200);
+    assert.ok(!existsSync(join(wsDir, 'docs', 'b.txt')), 'b.txt 已刪');
+    // 刪資料夾（遞迴）
+    assert.equal((await fetch(url('/v1/workspaces/file?ws=' + ws + '&path=docs'), { method: 'DELETE', headers: H })).status, 200);
+    assert.ok(!existsSync(join(wsDir, 'docs')), 'docs 資料夾（含內容）已刪');
+    // 防刪工作目錄根
+    assert.equal((await fetch(url('/v1/workspaces/file?ws=' + ws + '&path='), { method: 'DELETE', headers: H })).status, 400, '刪根 → 400');
+    // 非法名（穿越）→ 400
+    assert.equal((await fetch(url('/v1/workspaces/mkdir'), { method: 'POST', headers: H, body: JSON.stringify({ ws, sub: '', name: '..' }) })).status, 400, '.. → 400');
+    // 未認證 → 401
+    assert.equal((await fetch(url('/v1/workspaces/mkdir'), { method: 'POST', body: JSON.stringify({ ws, name: 'x' }) })).status, 401, '無 token → 401');
+  });
+});
+
 test('HTTP：/v1/workspaces/open-folder|open-terminal 遠端模式 → 400（防在伺服器上開資料夾）', async () => {
   await withServer(async ({ url, H }) => {   // withServer 為非 local 模式
     assert.equal((await fetch(url('/v1/workspaces/open-folder?ws=default'), { method: 'POST', headers: H })).status, 400, '遠端 open-folder → 400');

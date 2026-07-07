@@ -1720,10 +1720,41 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const full = resolveArtifact(dir, rel);
       if (!full) return json(res, 400, { error: 'path 不合法' });
       if (req.method === 'DELETE') {
-        try { if (existsSync(full)) rmSync(full); log({ action: 'delete', path: rel }); return json(res, 200, { ok: true }); }
+        if (resolve(full) === resolve(dir)) return json(res, 403, { error: '不能刪除工作目錄根' });
+        try { if (existsSync(full)) rmSync(full, { recursive: true, force: true }); log({ action: 'delete', path: rel }); return json(res, 200, { ok: true }); } // recursive → 也能刪資料夾
         catch (e) { return json(res, 500, { error: e.message }); }
       }
       return serveFile(res, full, rel, url.searchParams.get('download'), url.searchParams.get('as') === 'text');
+    }
+    // 工作台：上傳檔（?ws=&sub=&name=，body 為檔案二進位）
+    if (req.method === 'POST' && path === '/v1/workspaces/upload') {
+      const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
+      const rel = joinUploadRel(url.searchParams.get('sub'), url.searchParams.get('name'));
+      if (!rel) return json(res, 400, { error: '檔名不合法' });
+      const full = resolveArtifact(dir, rel);
+      if (!full) return json(res, 400, { error: 'path 不合法' });
+      const r = await readRaw(req);
+      if (r.over) return json(res, 413, { error: `檔案過大（上限 ${Math.round(MAX_UPLOAD / 1048576)}MB）` });
+      if (!r.buffer || !r.buffer.length) return json(res, 400, { error: '空檔案' });
+      try { mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, r.buffer); } catch (e) { return json(res, 400, { error: e.message }); }
+      log({ action: 'ws-upload', path: rel, size: r.buffer.length });
+      return json(res, 200, { ok: true, name: basename(full), size: r.buffer.length, sub: rel });
+    }
+    // 工作台：新建資料夾 / 新建空檔（body: {ws, sub, name}）
+    if (req.method === 'POST' && (path === '/v1/workspaces/mkdir' || path === '/v1/workspaces/newfile')) {
+      const body = await readBody(req);
+      const dir = workspaceDir(baseDir, body.ws || url.searchParams.get('ws') || 'default', local);
+      const rel = joinUploadRel(body.sub, body.name);
+      if (!rel) return json(res, 400, { error: '名稱不合法' });
+      const full = resolveArtifact(dir, rel);
+      if (!full) return json(res, 400, { error: 'path 不合法' });
+      if (existsSync(full)) return json(res, 409, { error: '已存在同名項目' });
+      try {
+        if (path.endsWith('mkdir')) mkdirSync(full, { recursive: true });
+        else { mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, ''); }
+      } catch (e) { return json(res, 400, { error: e.message }); }
+      log({ action: path.endsWith('mkdir') ? 'ws-mkdir' : 'ws-newfile', path: rel });
+      return json(res, 200, { ok: true, sub: rel });
     }
 
     // 附掛背景任務的事件流（replay 緩衝 + 即時；已結束則回放後關閉）
@@ -2115,7 +2146,7 @@ export function startServer(opts = {}) {
     console.log(`狀態目錄（rooms/sessions/tasks/ws）：${resolve(baseDir)}${process.env.XITTO_SERVER_DIR ? '' : '（相對路徑；容器部署請設 XITTO_SERVER_DIR 指到掛載卷）'}`);
     console.log('API：POST /v1/run · /v1/stream · /v1/tasks · /v1/tasks/:id/{answer,steer,cancel}｜GET /v1/tasks[/:id[/events|/file]] · /health');
     console.log('會議室：POST /v1/rooms · /v1/rooms/:id/{join,leave,say,invite,mkdir,upload,model} · DELETE /v1/rooms/:id｜GET /v1/rooms[/:id[/events|/files|/file]] · /v1/models');
-    if (sttEnabled) console.log(`🎙 語音轉文字：已啟用（STT ${stt.endpoint} · model ${stt.model || 'default'}）→ 會議室可錄音轉逐字稿`);
+    if (stt && stt.endpoint) console.log(`🎙 語音轉文字：已啟用（STT ${stt.endpoint} · model ${stt.model || 'default'}）→ 會議室可錄音轉逐字稿`);
   });
   return server;
 }
