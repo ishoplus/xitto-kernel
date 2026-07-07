@@ -490,6 +490,14 @@ body {
 .msg.steered .bubble { box-shadow: inset 2px 0 0 var(--accent); padding-left: var(--sp-2); }
 /* 終端機模式：who 列被隱藏，改用 body 前綴標插話（比 .msg.user 的「›」更具體，確保覆蓋）*/
 .thread.tui .msg.user.steered .body::before { content: "↳ "; color: var(--accent); font-weight: 700; }
+/* 插話後回覆的銜接標記（掛在 assistant 泡泡頂部）*/
+.steer-pickup {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: var(--sp-1);
+  opacity: .85;
+}
 
 .body {
   white-space: pre-wrap;
@@ -1679,11 +1687,13 @@ function msgHtml(m, idx) {
   const note = !isUser && m.note ? `<div class="turn-note">⚠ ${esc(m.note)}</div>` : ""; // 保底提示（截斷/中斷/空回應）
   const steered = isUser && m._steer; // 回覆中插話的訊息
   const steerTag = steered ? ` <span class="steer-tag" title="回覆進行中插入，agent 於下一步接手">↳ 插話</span>` : "";
+  const steerPickup = !isUser && m._afterSteer ? `<div class="steer-pickup">↳ 接手你的插話</div>` : ""; // 插話後的回覆銜接標記
 
   return `<div class="msg ${isUser ? "user" : "asst"}${steered ? " steered" : ""}" role="article" aria-label="${steered ? "你的插話" : isUser ? "你的訊息" : "xitto 的回覆"}">
     <div class="avatar" aria-hidden="true">${isUser ? "🙂" : "🤖"}</div>
     <div class="bubble">
       <div class="who" aria-hidden="true">${isUser ? "你" : "xitto"}${steerTag}</div>
+      ${steerPickup}
       ${!isUser && !procInRail() ? procHtml(m, idx) : ""}
       ${phase}
       <div class="body ${isUser ? "" : "md"}">${bodyHtml}${cursor}</div>
@@ -1961,7 +1971,7 @@ function onRunEvent(run, ev) {
   }
   // 插話已被 agent 套用 → 當前回合已收尾，為插話後的回覆開一個新的 assistant 泡泡（避免和前一輪的字混在一起）
   if (ev.type === "steered") {
-    const asst2 = { role: "assistant", text: "", tools: [], _procOpen: false, phase: "thinking" };
+    const asst2 = { role: "assistant", text: "", tools: [], _procOpen: false, phase: "thinking", _afterSteer: true };
     run.chatMsgs.push(asst2);
     run.asst = asst2;
     if (run.chatMsgs === messages) { render(); scrollDown(); }
@@ -1987,7 +1997,7 @@ function finalize(asst, firstUserText) {
   if (!sessionId) return; // 沒拿到 sessionId → 不落地
   const title = (allChats().find((c) => c.id === sessionId)?.title) || firstUserText.slice(0, 40);
   upsertChat({ id: sessionId, title, ts: Date.now(), space: curSpace, pack: $("#pack").value });
-  saveTranscript(sessionId, messages.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, _steer: m._steer })));
+  saveTranscript(sessionId, messages.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, _steer: m._steer, _afterSteer: m._afterSteer })));
   renderChats();
 }
 
@@ -2013,7 +2023,7 @@ function finalizeRun(run) {
   if (!sid) { renderChats(); return; }                          // 沒拿到 sessionId → 不落地（僅刷新列表）
   const title = (allChats().find((c) => c.id === sid)?.title) || run.firstUserText.slice(0, 40);
   upsertChat({ id: sid, title, ts: Date.now(), space: run.space, pack: run.pack });
-  saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, note: m.note, _steer: m._steer })));
+  saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, note: m.note, _steer: m._steer, _afterSteer: m._afterSteer })));
   renderChats();
   // 佇列：本輪結束後，若仍在同一對話且非使用者中止 → 自動送出下一則排隊訊息。
   const q = run.chatMsgs && run.chatMsgs._queue;
