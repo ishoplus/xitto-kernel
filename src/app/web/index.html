@@ -783,6 +783,12 @@
 .exp-item { padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2); background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); }
 .exp-item-t { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .exp-item-d { font-size: 12.5px; color: var(--dim); line-height: 1.55; margin-top: 2px; }
+.sk-act { margin-left: auto; display: inline-flex; gap: 6px; flex-shrink: 0; }
+.sk-btn { font-size: 11px; font-weight: 500; padding: 2px 8px; background: transparent; color: var(--accent); border: 1px solid var(--line); border-radius: 5px; cursor: pointer; }
+.sk-btn:hover { border-color: var(--accent); }
+.sk-btn.danger { color: var(--danger); }
+.sk-btn.danger:hover { border-color: var(--danger); }
+.sk-body { margin: 8px 0 0; padding: 8px 10px; background: var(--code); border: 1px solid var(--line); border-radius: var(--r-sm); font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
 .exp-pack { font-size: 10.5px; font-weight: 500; color: var(--dim); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
 .exp-used { font-size: 10.5px; font-weight: 500; color: var(--accent); }
 .exp-stale { font-size: 10.5px; font-weight: 600; color: var(--warn); }
@@ -1831,6 +1837,24 @@ async function refreshExp() {
   return e;
 }
 
+// 技能管理：查看完整內容（就地展開/收合）
+async function skillView(pack, name, sid) {
+  const el = document.getElementById(sid);
+  if (!el) return;
+  if (!el.hidden) { el.hidden = true; return; }          // 再按一次 → 收合
+  el.textContent = "載入中…"; el.hidden = false;
+  const r = await api("/v1/skills/body?ws=" + encodeURIComponent(curSpace) + "&pack=" + encodeURIComponent(pack) + "&name=" + encodeURIComponent(name))
+    .then((x) => x.json()).catch(() => null);
+  el.textContent = r && r.body ? r.body : "✗ " + ((r && r.error) || "載入失敗");
+}
+// 技能管理：刪除（agent 之後仍可在需要時重新結晶）
+async function skillDel(pack, name) {
+  if (!confirm("刪除技能「" + name + "」？\nagent 之後仍可在需要時重新結晶。")) return;
+  const r = await api("/v1/skills/remove", { method: "POST", body: JSON.stringify({ ws: curSpace, pack, name }) })
+    .then((x) => x.json()).catch(() => ({ error: "連線失敗" }));
+  if (r && r.ok) refreshExp(); else alert("刪除失敗：" + ((r && r.error) || "未知錯誤"));
+}
+
 function closeExperience() { setTab("task"); }   // expOpen 由 setTab 統一維護
 
 async function openExperience() {
@@ -1859,7 +1883,13 @@ function renderExperience(e) {
   const sec = (icon, title, n, inner) => (n ? `<section class="exp-sec"><h3 class="exp-h">${icon} ${title} <span class="exp-n">${n}</span></h3>${inner}</section>` : "");
   const memHtml = (e.memory || []).map((m) => `<div class="exp-fact">• ${esc(m)}</div>`).join("");
   const pbHtml = (e.playbook || []).map((p) => `<div class="exp-item"><div class="exp-item-t">${esc(p.topic)} <span class="exp-pack">${esc(packLabel(p.pack))}</span></div><div class="exp-item-d">${esc(p.note)}</div></div>`).join("");
-  const skHtml = (e.skills || []).map((s) => `<div class="exp-item"><div class="exp-item-t">⚡ ${esc(s.name)}${s.used ? ` <span class="exp-used">用過 ${s.used} 次</span>` : ""}${s.stale ? ` <span class="exp-stale">⚠ 待修</span>` : ""} <span class="exp-pack">${esc(packLabel(s.pack))}</span></div>${s.desc ? `<div class="exp-item-d">${esc(s.desc)}</div>` : ""}</div>`).join("");
+  const skHtml = (e.skills || []).map((s, i) => {
+    const sid = "skb-" + i;
+    return `<div class="exp-item"><div class="exp-item-t">⚡ ${esc(s.name)}${s.used ? ` <span class="exp-used">用過 ${s.used} 次</span>` : ""}${s.stale ? ` <span class="exp-stale">⚠ 待修</span>` : ""} <span class="exp-pack">${esc(packLabel(s.pack))}</span>` +
+      `<span class="sk-act"><button class="sk-btn" type="button" onclick="skillView('${esc(s.pack)}','${esc(s.name)}','${sid}')">查看</button>` +
+      `<button class="sk-btn danger" type="button" onclick="skillDel('${esc(s.pack)}','${esc(s.name)}')">刪除</button></span></div>` +
+      `${s.desc ? `<div class="exp-item-d">${esc(s.desc)}</div>` : ""}<pre class="sk-body" id="${sid}" hidden></pre></div>`;
+  }).join("");
   const ocText = (o) => (o === "success" ? "✓ 成功" : o === "failure" ? "✗ 失敗" : esc(o));
   const epHtml = (e.episodes || []).map((ep) => `<div class="exp-ep ${ep.outcome === "success" ? "ok" : ep.outcome === "failure" ? "fail" : ""}"><div class="exp-ep-s">${esc(ep.summary)}</div><div class="exp-ep-m">${ep.outcome ? `<span class="exp-oc">${ocText(ep.outcome)}</span>` : ""}${(ep.tags || []).map((t) => `<span class="exp-tag">${esc(t)}</span>`).join("")}<span>${fmtTime(ep.ts)}</span></div></div>`).join("");
   const trust = e.trust || { tools: [], bash: [] };

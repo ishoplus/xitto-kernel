@@ -184,12 +184,19 @@ export function createSkills(dir, { verifyRunner, capFilter } = {}) {
     try { unlinkSync(file); skills = readAll(); return { removed: nm }; } catch (e) { return { error: e.message }; }
   };
 
+  // 讀單一技能完整 markdown（供 UI「查看內容」）；name 經 slug 化防穿越。
+  const read = (name) => {
+    const file = fileOf(slug(name));
+    if (!existsSync(file)) return null;
+    try { return readFileSync(file, 'utf8'); } catch { return null; }
+  };
+
   return {
     skills, promptSection,
     tool: loadTool,
     tools: [loadTool, saveTool, checkTool, runSkillTool],
     list: () => readAll().map(({ name, desc, used, stale }) => ({ name, desc, used, stale })),
-    check, remove,
+    check, remove, read,
     reload: () => { skills = readAll(); return skills; },
   };
 }

@@ -1774,6 +1774,29 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       try { return json(res, 200, readWorkspaceExperience(dir)); }
       catch (e) { return json(res, 200, { packs: [], memory: [], playbook: [], skills: [], episodes: [], trust: { tools: [], bash: [] }, counts: { memory: 0, playbook: 0, skills: 0, episodes: 0, trust: 0 }, error: e.message }); }
     }
+    // 技能管理：查看完整內容 / 刪除（agent 結晶的 markdown 技能，使用者可自行查看與修剪）。
+    // 技能存於 <wsDir>/.xitto-kernel/<pack>/skills/<name>.md；pack 限已知 pack 防路徑穿越。
+    if (req.method === 'GET' && path === '/v1/skills/body') {
+      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      const pack = url.searchParams.get('pack'); const name = url.searchParams.get('name');
+      if (!pack || !PACKS[pack]) return json(res, 400, { error: `未知 pack「${pack}」` });
+      if (!name) return json(res, 400, { error: '缺 name' });
+      const dir = join(workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local), '.xitto-kernel', pack, 'skills');
+      const body = createSkills(dir).read(name);
+      return body == null ? json(res, 404, { error: '找不到技能', name, pack }) : json(res, 200, { name, pack, body });
+    }
+    if (req.method === 'POST' && path === '/v1/skills/remove') {
+      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      const body = await readBody(req);
+      if (!body.pack || !PACKS[body.pack]) return json(res, 400, { error: `未知 pack「${body.pack}」` });
+      if (!body.name) return json(res, 400, { error: '缺 name' });
+      const dir = join(workspaceDir(baseDir, body.ws || 'default', local), '.xitto-kernel', body.pack, 'skills');
+      const r = createSkills(dir).remove(body.name);
+      if (r.error) return json(res, 404, r);
+      log({ action: 'skill-remove', pack: body.pack, name: r.removed });
+      return json(res, 200, { ok: true, ...r });
+    }
+
     // 工作台：取檔（看/下載）/ 刪檔
     if (path === '/v1/workspaces/file' && (req.method === 'GET' || req.method === 'DELETE')) {
       const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
