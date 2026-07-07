@@ -12,7 +12,7 @@ import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 import { scanCode, sortFindings } from '../shared/security-scan.js';
 import { scanQuality, langOf } from '../shared/code-quality.js';
-import { lspDiagnostics, lspDefinition, lspHover, lspSymbols, lspReferences, lspRename, applyTextEdits, serverFor, hasCommand } from '../shared/lsp.js';
+import { lspDiagnostics, lspDefinition, lspHover, lspSymbols, lspReferences, lspRename, lspWorkspaceSymbols, applyTextEdits, serverFor, hasCommand } from '../shared/lsp.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -334,9 +334,22 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     },
   };
 
+  const lspWsSymTool = {
+    name: 'lsp_workspace_symbols', label: '全專案符號搜尋', readOnly: true,
+    description: '用 language server 在整個工作區依名稱搜尋符號（class/function/method…），像 IDE 的「Go to Symbol in Workspace」。懂符號而非純文字，比 grep 準。path 給任一該語言的檔（決定用哪個 server），query 為符號名關鍵字。',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: '任一該語言的檔（定 server 與工作區）' }, query: { type: 'string', description: '符號名關鍵字' } }, required: ['path', 'query'] },
+    execute: async (_id, { path, query }) => {
+      const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      const e = lspErr(path); if (e) return e;
+      const r = await lspWorkspaceSymbols(p, cwd, query);
+      if (!r.ok) return txt({ ok: false, path, reason: r.reason, ...(r.install ? { hint: `安裝 ${r.install} 後即可使用` } : {}) });
+      return txt({ ok: true, count: r.symbols.length, symbols: r.symbols.slice(0, 200) });
+    },
+  };
+
   return {
     name: 'coding',
-    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool, lspDefTool, lspHoverTool, lspSymbolsTool, lspRefTool, lspRenameTool],
+    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool, lspDefTool, lspHoverTool, lspSymbolsTool, lspRefTool, lspRenameTool, lspWsSymTool],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）

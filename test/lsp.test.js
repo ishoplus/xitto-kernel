@@ -194,3 +194,22 @@ test('coding pack：references / rename 工具已註冊', () => {
   assert.ok(names.includes('lsp_references'));
   assert.ok(names.includes('lsp_rename'));
 });
+
+// ── 擴充：workspace/symbol（全專案符號搜尋）──
+import { lspWorkspaceSymbols } from '../src/packs/shared/lsp.js';
+
+test('lspWorkspaceSymbols（mock）：依名稱搜尋全專案符號', async () => {
+  await withCFile(async (f, dir) => {
+    const r = await lspWorkspaceSymbols(f, dir, 'add', { timeoutMs: 4000, servers: MOCK_C });
+    assert.equal(r.ok, true);
+    assert.equal(r.symbols.length, 2);
+    assert.equal(r.symbols[0].name, 'add');
+    assert.equal(r.symbols[0].kind, 'function');
+    assert.equal(r.symbols[0].line, 10);   // range line 9 → 1-based 10
+    assert.match(r.symbols[0].file, /lib\.c$/);
+  });
+});
+
+test('coding pack：lsp_workspace_symbols 工具已註冊', () => {
+  assert.ok(createCodingPack({ cwd: '/tmp' }).tools().map((t) => t.name).includes('lsp_workspace_symbols'));
+});

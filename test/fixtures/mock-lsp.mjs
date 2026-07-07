@@ -42,6 +42,12 @@ process.stdin.on('data', (chunk) => {
         { range: { start: { line: 0, character: 4 }, end: { line: 0, character: 7 } }, newText: nn },
         { range: { start: { line: 4, character: 11 }, end: { line: 4, character: 14 } }, newText: nn },
       ] } });
+    } else if (msg.method === 'workspace/symbol') {
+      const uri = 'file:///proj/lib.c';
+      reply(msg.id, [
+        { name: 'add', kind: 12, location: { uri, range: { start: { line: 9, character: 0 }, end: { line: 9, character: 3 } } }, containerName: '' },
+        { name: 'addTwo', kind: 12, location: { uri, range: { start: { line: 20, character: 0 }, end: { line: 20, character: 6 } } } },
+      ]);
     } else if (msg.method === 'exit') {
       process.exit(0);
     }

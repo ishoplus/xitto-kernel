@@ -272,3 +272,21 @@ export async function lspRename(absPath, cwd, line, col, newName, opts = {}) {
   } catch (e) { return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) }; }
   finally { ses.client.shutdown(); }
 }
+
+// 全專案符號搜尋（workspace/symbol，像 IDE 的 Go to Symbol in Workspace）。
+// anchorFile：任一該語言的檔——用來決定用哪個 server 並建立 workspace root（也開它幫 server 起索引）。
+// 回 { ok, symbols:[{name,kind,file,line,container}] }（line 可能為 null：部分 server 的 WorkspaceSymbol 不含 range）。
+export async function lspWorkspaceSymbols(anchorFile, cwd, query, opts = {}) {
+  const ses = await openSession(anchorFile, cwd, opts);
+  if (!ses.ok) return ses;
+  try {
+    const res = await reqTimeout(ses.client, 'workspace/symbol', { query: String(query || '') }, opts.timeoutMs || 8000);
+    const arr = Array.isArray(res) ? res : [];
+    const symbols = arr.map((s) => {
+      const loc = s.location || {};
+      return { name: s.name, kind: SYMBOL_KIND[s.kind] || String(s.kind), file: uriToPath(loc.uri), line: loc.range ? (loc.range.start.line + 1) : null, container: s.containerName || undefined };
+    });
+    return { ok: true, symbols };
+  } catch (e) { return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) }; }
+  finally { ses.client.shutdown(); }
+}
