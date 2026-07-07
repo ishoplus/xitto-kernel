@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>xitto · 許願台</title>
+<title>xitto · 任務台</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- 設計系統 + 共享工具庫 -->
 <link rel="stylesheet" href="shared/style.css">
@@ -1006,13 +1006,13 @@
     <div class="sidebar-head">
       <div class="brand">
         <div class="brand-row">
-          <h1>🪄 xitto 許願台</h1>
+          <h1>📋 xitto 任務台</h1>
           <button class="ghost theme-btn" id="theme" data-tooltip="切換主題" aria-label="切換深色/淺色模式" style="margin-left:auto">🌙</button>
         </div>
         <p class="brand-tagline">說出你想完成的事，做完給你成品</p>
       </div>
       <nav class="mode-nav" aria-label="切換模式" style="margin-top:10px">
-        <a href="/" class="active" aria-current="page">🪄 許願台</a>
+        <a href="/" class="active" aria-current="page">📋 任務台</a>
         <a href="/chat">💬 對話</a>
         <a href="/room">🏛 會議室</a>
       </nav>
@@ -1077,7 +1077,7 @@
       <div class="wz-tabs" id="wz-tabs" role="tablist" aria-label="工作區頁籤"></div>
       <div id="current-task" aria-live="polite" aria-label="當前任務">
         <div class="welcome">
-          <div class="welcome-icon" aria-hidden="true">🪄</div>
+          <div class="welcome-icon" aria-hidden="true">📋</div>
           <h2 class="welcome-title">說出你想完成的事</h2>
           <p class="welcome-sub">在上方輸入一句話，交給它去做——做完把成品給你。<br>左邊可看歷史成品與工作區檔案，點任一個在這裡展開。</p>
         </div>
@@ -1130,7 +1130,7 @@ function resetMainTask() {
   closeExperience();
   closePreview();
   $("#current-task").innerHTML = `<div class="welcome">
-    <div class="welcome-icon" aria-hidden="true">🪄</div>
+    <div class="welcome-icon" aria-hidden="true">📋</div>
     <h2 class="welcome-title">說出你想完成的事</h2>
     <p class="welcome-sub">在上方輸入一句話，交給它去做——做完把成品給你。<br>左邊可看歷史成品與工作區檔案，點任一個在這裡展開。</p>
   </div>`;
@@ -1644,7 +1644,7 @@ function renderTabs() {
   const el = $("#wz-tabs"); if (!el) return;
   const fixed = (id, label, onclick) =>
     `<button class="wz-tab${activeTab === id ? " active" : ""}" type="button" role="tab" aria-selected="${activeTab === id}" onclick="${onclick}"><span class="wz-tab-lbl">${label}</span></button>`;
-  let html = fixed("task", "🪄 任務", "setTab('task')")
+  let html = fixed("task", "📋 任務", "setTab('task')")
            + fixed("exp", "🧠 記憶", "openExperience()");
   openFiles.forEach((f, i) => {
     const on = activeTab === "file:" + f.key;
