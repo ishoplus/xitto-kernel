@@ -171,6 +171,11 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
         <h1 id="roomTitle">專案會議室</h1>
         <span class="app-ver" title="xitto-kernel 版本">v__VERSION__</span>
       </div>
+      <nav class="mode-nav" id="roomModeNav" aria-label="切換模式" hidden style="margin-top:8px">
+        <a href="/">🪄 許願台</a>
+        <a href="/chat">💬 對話</a>
+        <a href="/room" class="active" aria-current="page">🏛 會議室</a>
+      </nav>
       <div class="side-meta">
         <span class="pill" id="wsPill">—</span>
         <span class="pill" id="packPill">—</span>
@@ -238,6 +243,11 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
         <button id="newRoomBtn" type="button">＋ 新建會議</button>
       </div>
     </div>
+    <nav class="mode-nav" aria-label="切換模式" style="margin:2px 0 12px">
+      <a href="/">🪄 許願台</a>
+      <a href="/chat">💬 對話</a>
+      <a href="/room" class="active" aria-current="page">🏛 會議室</a>
+    </nav>
     <p class="sub">選一間進入，或新建一場專案會議。此頁僅操作者可見。</p>
     <div class="fs-list" id="roomList" style="max-height:56vh"></div>
   </div>
@@ -353,6 +363,8 @@ async function switchModel() {
 const params = new URLSearchParams(location.search);
 const joinRoomId = params.get("room");
 const isOperator = !joinRoomId;   // 無 ?room= 即主持人（大廳進來，持 master token）；帶 ?room= 為訪客
+// 模式切換器：只給主持人（訪客是會議參與者，不顯示許願台/對話入口）
+if (isOperator) { const _mn = document.getElementById("roomModeNav"); if (_mn) _mn.hidden = false; }
 const inviteToken = params.get("invite");
 let authTok = token || inviteToken || "";        // 加入前：master 或邀請碼；加入後：成員 token
 const api = (p, opt = {}, tok = authTok) => fetch(p, { ...opt, headers: { "content-type": "application/json", ...(tok ? { authorization: "Bearer " + tok } : {}), ...(opt.headers || {}) } });

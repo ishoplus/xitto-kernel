@@ -261,6 +261,12 @@ a:focus-visible {
 .badge.needs    { color: var(--warn);   border-color: var(--warn);   }
 .badge.done     { color: var(--ok);     border-color: var(--ok);     }
 .badge.error    { color: var(--danger); border-color: var(--danger); }
+
+/* ── 模式切換器（三頁一致：許願台 / 對話 / 會議室）── */
+.mode-nav { display: inline-flex; gap: 2px; background: var(--inset); border: 1px solid var(--line); border-radius: 999px; padding: 2px; max-width: 100%; }
+.mode-nav a { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--dim); text-decoration: none; white-space: nowrap; transition: background .12s, color .12s; }
+.mode-nav a:hover { color: var(--fg); }
+.mode-nav a.active { background: var(--accent); color: #fff; font-weight: 600; }
 /* 驗收徽章（完成定義）*/
 .badge.vok   { color: var(--ok);   border-color: color-mix(in srgb, var(--ok) 45%, var(--line));   background: color-mix(in srgb, var(--ok) 10%, transparent); }
 .badge.vfail { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: color-mix(in srgb, var(--warn) 10%, transparent); }
