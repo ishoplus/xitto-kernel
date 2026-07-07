@@ -1250,9 +1250,8 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       } catch { /* 尚無檔 → 空清單 */ }
       // STT 現況注入頁面（不含 apiKey；hasKey 標記是否已設）→ UI 預填、可就地改。
       const sttPage = { endpoint: stt?.endpoint || '', model: stt?.model || '', language: stt?.language || '', hasKey: !!stt?.apiKey, enabled: !!(stt && stt.endpoint) };
+      // 標題/簡介由前端依 EXISTING 切換（首次引導 vs 設定模式），此處只注入資料。
       const html = SETUP_HTML
-        .replace('<h1>初始設定</h1>', '<h1>模型設定</h1>')
-        .replace(/尚未偵測到 provider 設定（<code>providers.json<\/code>）。填入要用的模型服務，儲存後服務會自動啟動——不需要重進容器。/, '在此新增或更新模型服務（provider / model）。既有設定不會被覆蓋；儲存後服務自動重載，可繼續新增。')
         .replace('/*EXISTING*/null', JSON.stringify(existing))
         .replace('/*STT*/null', JSON.stringify(sttPage))
         .replace('/*THINK*/null', JSON.stringify({ level: defaultThinking || 'off' }));
@@ -1856,121 +1855,174 @@ const SETUP_HTML = `<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>xitto · 初始設定</title>
 <style>
-:root{--bg:#0f1115;--card:#191c23;--inset:#12141a;--line:#2a2e37;--fg:#e6e8ee;--dim:#9aa0ad;--accent:#5b63e6;--btnfg:#fff;--ok:#3fb950;--err:#e5484d}
+:root{--bg:#0f1115;--card:#191c23;--inset:#12141a;--line:#2a2e37;--fg:#e6e8ee;--dim:#9aa0ad;--accent:#5b63e6;--accent-soft:color-mix(in srgb,#5b63e6 14%,transparent);--btnfg:#fff;--ok:#3fb950;--err:#e5484d}
 @media (prefers-color-scheme: light){:root{--bg:#f5f6f8;--card:#fff;--inset:#f0f1f4;--line:#d9dce2;--fg:#1a1d24;--dim:#6b7280;--btnfg:#fff}}
 *{box-sizing:border-box}html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;display:flex;align-items:center;justify-content:center;padding:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;width:min(520px,96vw);padding:26px;max-height:94vh;overflow-y:auto;position:relative}
-.brand{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-.close{width:auto;margin:0 0 0 auto;padding:5px 10px;background:transparent;color:var(--dim);border:1px solid var(--line);border-radius:8px;font-size:15px;font-weight:400;line-height:1}
+/* ── App shell：側欄導覽 + 內容面板 ── */
+.shell{display:flex;gap:16px;width:min(940px,96vw);max-height:94vh}
+.shell.solo{width:min(540px,96vw)}                 /* 首次引導：單欄聚焦 */
+.side{flex:0 0 208px;display:flex;flex-direction:column;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 14px}
+.shell.solo .side{display:none}
+.brand{display:flex;align-items:center;gap:9px;padding:2px 6px 14px}
+.brand svg{width:28px;height:28px;flex:none}.brand h1{font-size:17px;margin:0;font-weight:650}
+.tabs{display:flex;flex-direction:column;gap:2px}
+.tab{display:flex;align-items:center;gap:9px;width:100%;margin:0;text-align:left;padding:10px 12px;border:0;border-radius:10px;background:transparent;color:var(--dim);font:inherit;font-weight:500;cursor:pointer}
+.tab:hover{background:var(--inset);color:var(--fg)}
+.tab.active{background:var(--accent-soft);color:var(--accent);font-weight:650}
+.side-foot{margin-top:auto;padding:12px 6px 2px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);border-top:1px solid var(--line)}
+.ver{opacity:.8}
+.close{width:auto;margin:0 0 0 auto;padding:5px 10px;background:transparent;color:var(--dim);border:1px solid var(--line);border-radius:8px;font-size:13px;font-weight:400;line-height:1;cursor:pointer}
 .close:hover{color:var(--fg);border-color:var(--accent)}
-.mini{width:auto;margin:0 0 0 6px;padding:1px 8px;font-size:11px;font-weight:500;background:transparent;color:var(--accent);border:1px solid var(--line);border-radius:6px;vertical-align:middle}
-.mini:hover{border-color:var(--accent)}
-.brand svg{width:30px;height:30px}.brand h1{font-size:20px;margin:0}
-.sub{color:var(--dim);font-size:14px;margin:0 0 18px}
+.main{flex:1;min-width:0;overflow-y:auto}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px 26px}
+.panel[hidden]{display:none}
+.shell.solo .main{overflow:visible}
+.ph{font-size:19px;font-weight:650;margin:0 0 4px}
+.sub{color:var(--dim);font-size:13.5px;margin:0 0 18px}
+.sub-card{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}
+.sub-card>.sch{font-size:14px;font-weight:600;margin:0 0 2px}
 label{display:block;font-size:13px;color:var(--dim);margin:14px 0 5px}
 input,select{width:100%;background:var(--inset);color:var(--fg);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit}
 input:focus,select:focus{outline:none;border-color:var(--accent)}
+.chk{display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;color:var(--fg);font-size:13.5px}
+.chk input{width:auto;margin:0}
 .grid2{display:flex;gap:10px}.grid2>div{flex:1}
+.spacer{flex:1}
 details{border:1px solid var(--line);border-radius:9px;padding:0 12px;margin-top:14px}
 summary{cursor:pointer;padding:9px 0;font-size:13px;color:var(--dim)}
 button{background:var(--accent);color:var(--btnfg);border:0;border-radius:9px;padding:11px 16px;font:inherit;font-weight:600;cursor:pointer;width:100%;margin-top:18px}
 button:disabled{opacity:.6;cursor:default}
 button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
 button.ghost:hover{border-color:var(--accent)}
+.actions{display:flex;gap:10px}.actions>button{flex:1}
+.mini{width:auto;margin:0;padding:3px 9px;font-size:11px;font-weight:500;background:transparent;color:var(--accent);border:1px solid var(--line);border-radius:6px;cursor:pointer}
+.mini:hover{border-color:var(--accent)}
+.mini.danger{color:var(--err);border-color:color-mix(in srgb,var(--err) 30%,var(--line))}
+.mini.danger:hover{border-color:var(--err)}
 .msg{margin-top:14px;font-size:13px;padding:9px 12px;border-radius:9px;display:none}
 .msg.err{display:block;color:var(--err);background:color-mix(in srgb,var(--err) 12%,transparent);border:1px solid color-mix(in srgb,var(--err) 35%,var(--line))}
 .msg.ok{display:block;color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,var(--line))}
 .hint{color:var(--dim);font-size:12px;margin-top:4px}
 code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
-#existing{margin:0 0 6px}
-.exist-h{font-size:13px;color:var(--dim);margin:2px 0 8px}
-.exist-p{border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-bottom:8px;background:var(--inset)}
-.exist-p b{font-size:13px}
-.exist-m{font-size:12px;color:var(--dim);margin-top:3px}
-.exist-m .def{color:var(--accent);font-weight:600}
-.exist-top{display:flex;align-items:center;gap:6px}
-.exist-act{margin-left:auto;display:flex;gap:6px;flex-shrink:0}
-.mini.danger{color:var(--err);border-color:color-mix(in srgb,var(--err) 30%,var(--line))}
-.mini.danger:hover{border-color:var(--err)}
+/* ── 既有模型清單：每個 provider 一塊、每顆 model 一列 ── */
+#existing{margin:0 0 4px}
+.exist-h{font-size:13px;color:var(--dim);margin:2px 0 10px}
+.prov{border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;background:var(--inset)}
+.prov-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.prov-h b{font-size:14px}
+.tag{font-size:11px;color:var(--dim);background:var(--card);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+.prov-act{display:flex;gap:6px}
+.mrow{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--line)}
+.mname{font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mname .def{color:var(--accent);font-weight:650}
+.mact{display:flex;gap:6px;flex:none}
+/* ── 手機：側欄變頂部橫向分頁 ── */
+@media (max-width:720px){
+  body{align-items:flex-start;padding:10px}
+  .shell,.shell.solo{flex-direction:column;width:100%;max-height:none}
+  .side{flex:none}.shell.solo .side{display:flex}
+  .tabs{flex-direction:row;overflow-x:auto}
+  .tab{flex:none}
+  .side-foot{margin-top:12px}
+}
 </style></head><body>
-<div class="card">
-  <div class="brand"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/></g></svg><h1>初始設定</h1><button id="closeBtn" class="close" type="button" title="關閉（不變更）" hidden>✕ 關閉</button></div>
-  <p class="sub">尚未偵測到 provider 設定（<code>providers.json</code>）。填入要用的模型服務，儲存後服務會自動啟動——不需要重進容器。</p>
-  <div id="existing"></div>
-  <label>快速套用（選一個服務會自動帶入網址，仍可修改）</label>
-  <select id="preset">
-    <option value="custom">自訂 / 其他 OpenAI 相容服務</option>
-    <option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option>
-    <option value="minimax">MiniMax</option><option value="openrouter">OpenRouter</option>
-    <option value="anthropic">Anthropic (Claude)</option>
-  </select>
-  <div class="grid2">
-    <div><label>Provider 名稱</label><input id="provider" placeholder="openai" autocomplete="off"></div>
-    <div><label>API 介面</label><select id="api"><option>openai-completions</option><option>openai-responses</option><option>anthropic-messages</option></select></div>
-  </div>
-  <label>Base URL</label><input id="baseUrl" placeholder="https://api.openai.com/v1" autocomplete="off">
-  <label>API Key</label><input id="apiKey" type="password" placeholder="sk-…" autocomplete="off">
-  <div class="hint">也可填 <code>&#36;{ENV_VAR}</code> 讓它從環境變數讀取（例如 <code>&#36;{OPENAI_API_KEY}</code>）。</div>
-  <div class="grid2">
-    <div><label>Model ID</label><input id="modelId" placeholder="gpt-4o" autocomplete="off"></div>
-    <div><label>顯示名稱（可留白）</label><input id="modelName" placeholder="同 Model ID" autocomplete="off"></div>
-  </div>
-  <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;color:var(--fg)">
-    <input type="checkbox" id="image" style="width:auto;margin:0"> 🖼 支援圖片（視覺輸入）——此模型可接收圖片訊息
-  </label>
-  <details><summary>進階（可留白用預設）</summary>
-    <div class="grid2" style="margin-bottom:12px"><div><label>Context Window</label><input id="contextWindow" type="number" placeholder="128000"></div><div><label>Max Tokens</label><input id="maxTokens" type="number" placeholder="4096"></div></div>
-    <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;color:var(--fg)">
-      <input type="checkbox" id="reasoning" style="width:auto;margin:0"> 🧠 推理型模型（可啟用思考模式）
-    </label>
-    <div><label>思考參數格式 <span style="opacity:.6">（推理型必選；內網端點 pi-ai 猜不到 vendor）</span></label>
-      <select id="thinkingFormat">
-        <option value="auto">自動偵測（官方雲端端點適用）</option>
-        <option value="qwen">qwen — 送 enable_thinking</option>
-        <option value="qwen-chat-template">qwen（vLLM/SGLang）— chat_template_kwargs.enable_thinking</option>
-        <option value="zai">zai / GLM — 送 thinking:{type}</option>
-        <option value="deepseek">deepseek — thinking:{type} + reasoning_effort</option>
-        <option value="openai">openai 風格 — reasoning_effort</option>
+<div class="shell solo" id="shell">
+  <aside class="side">
+    <div class="brand"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b63e6"/><g fill="#fff"><path d="M11 21l8-8 1.6 1.6-8 8z" opacity=".95"/><path d="M20 9l.7 1.8L22.5 11.5l-1.8.7L20 14l-.7-1.8L17.5 11.5l1.8-.7z"/></g></svg><h1 id="pageTitle">設定</h1></div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" type="button" data-tab="models">🧠 模型</button>
+      <button class="tab" type="button" data-tab="thinking" id="tabThinking" hidden>💭 思考</button>
+      <button class="tab" type="button" data-tab="voice" id="tabVoice" hidden>🎙 語音</button>
+    </nav>
+    <div class="side-foot"><span class="ver" id="ver"></span><span class="spacer"></span><button id="closeBtn" class="close" type="button" title="關閉（不變更）" hidden>✕ 關閉</button></div>
+  </aside>
+  <main class="main">
+    <section class="panel active" data-panel="models">
+      <div class="ph" id="mHead">初始設定</div>
+      <p class="sub" id="modelsIntro">尚未偵測到 provider 設定（<code>providers.json</code>）。填入要用的模型服務，儲存後服務會自動啟動——不需要重進容器。</p>
+      <div id="existing"></div>
+      <div class="sub-card">
+        <div class="sch" id="formTitle">新增模型</div>
+        <label>快速套用（選一個服務會自動帶入網址，仍可修改）</label>
+        <select id="preset">
+          <option value="custom">自訂 / 其他 OpenAI 相容服務</option>
+          <option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option>
+          <option value="minimax">MiniMax</option><option value="openrouter">OpenRouter</option>
+          <option value="anthropic">Anthropic (Claude)</option>
+        </select>
+        <div class="grid2">
+          <div><label>Provider 名稱</label><input id="provider" placeholder="openai" autocomplete="off"></div>
+          <div><label>API 介面</label><select id="api"><option>openai-completions</option><option>openai-responses</option><option>anthropic-messages</option></select></div>
+        </div>
+        <label>Base URL</label><input id="baseUrl" placeholder="https://api.openai.com/v1" autocomplete="off">
+        <label>API Key</label><input id="apiKey" type="password" placeholder="sk-…" autocomplete="off">
+        <div class="hint">也可填 <code>&#36;{ENV_VAR}</code> 讓它從環境變數讀取（例如 <code>&#36;{OPENAI_API_KEY}</code>）。</div>
+        <div class="grid2">
+          <div><label>Model ID</label><input id="modelId" placeholder="gpt-4o" autocomplete="off"></div>
+          <div><label>顯示名稱（可留白）</label><input id="modelName" placeholder="同 Model ID" autocomplete="off"></div>
+        </div>
+        <label class="chk"><input type="checkbox" id="image"> 🖼 支援圖片（視覺輸入）——此模型可接收圖片訊息</label>
+        <details><summary>進階（可留白用預設）</summary>
+          <div class="grid2" style="margin-bottom:12px"><div><label>Context Window</label><input id="contextWindow" type="number" placeholder="128000"></div><div><label>Max Tokens</label><input id="maxTokens" type="number" placeholder="4096"></div></div>
+          <label class="chk" style="margin-bottom:6px"><input type="checkbox" id="reasoning"> 🧠 推理型模型（可啟用思考模式）</label>
+          <div><label>思考參數格式 <span style="opacity:.6">（推理型必選；內網端點 pi-ai 猜不到 vendor）</span></label>
+            <select id="thinkingFormat">
+              <option value="auto">自動偵測（官方雲端端點適用）</option>
+              <option value="qwen">qwen — 送 enable_thinking</option>
+              <option value="qwen-chat-template">qwen（vLLM/SGLang）— chat_template_kwargs.enable_thinking</option>
+              <option value="zai">zai / GLM — 送 thinking:{type}</option>
+              <option value="deepseek">deepseek — thinking:{type} + reasoning_effort</option>
+              <option value="openai">openai 風格 — reasoning_effort</option>
+            </select>
+          </div>
+        </details>
+        <label class="chk" id="defWrap" style="display:none"><input type="checkbox" id="makeDefault"> 設為預設模型（新會議 / 未指定時用它）</label>
+        <div class="msg" id="msg"></div>
+        <div class="actions"><button id="test" class="ghost" type="button" title="不儲存，先打一次對話確認可連線">🧪 測試對話</button><button id="save" type="button">儲存並啟動</button></div>
+      </div>
+    </section>
+    <section class="panel" data-panel="thinking" hidden>
+      <div class="ph">💭 思考模式（預設強度）</div>
+      <p class="sub" id="thinkStatus"></p>
+      <label>預設思考強度（對話頁可逐則覆蓋）</label>
+      <select id="thinkLevel">
+        <option value="off">關閉（不啟用思考）</option>
+        <option value="low">低</option>
+        <option value="medium">中</option>
+        <option value="high">高</option>
       </select>
-    </div>
-  </details>
-  <label id="defWrap" style="display:none;align-items:center;gap:8px;margin-top:14px;cursor:pointer;color:var(--fg)">
-    <input type="checkbox" id="makeDefault" style="width:auto;margin:0"> 設為預設模型（新會議 / 未指定時用它）
-  </label>
-  <div class="msg" id="msg"></div>
-  <div class="grid2"><div><button id="test" class="ghost" type="button" title="不儲存，先打一次對話確認可連線">🧪 測試對話</button></div><div><button id="save" type="button">儲存並啟動</button></div></div>
-</div>
-<div class="card" id="sttCard" style="display:none;margin-top:14px">
-  <div class="brand" style="margin-bottom:4px"><h1 style="font-size:18px">🎙 語音轉文字（會議室錄音）</h1></div>
-  <p class="sub" id="sttStatus"></p>
-  <label>STT 端點（OpenAI 相容 <code>/v1/audio/transcriptions</code>）</label>
-  <input id="sttEndpoint" placeholder="http://localhost:8000/v1/audio/transcriptions" autocomplete="off">
-  <div class="hint">留空 = 停用會議室錄音鈕。本地可用 faster-whisper-server（見 <code>docs/13</code>）。</div>
-  <div class="grid2">
-    <div><label>模型</label><input id="sttModel" placeholder="Systran/faster-whisper-large-v3" autocomplete="off"></div>
-    <div><label>語言碼（留白＝自動偵測）</label><input id="sttLang" placeholder="zh" autocomplete="off"></div>
-  </div>
-  <label>API Key（本地通常不需要）</label><input id="sttKey" type="password" placeholder="留空 = 不變更" autocomplete="off">
-  <div class="msg" id="sttMsg"></div>
-  <div class="grid2"><div><button id="sttTest" class="ghost" type="button" title="不儲存，先打一次確認 STT 端點可連線">🧪 測試語音端點</button></div><div><button id="sttSave" type="button">儲存語音設定</button></div></div>
-</div>
-<div class="card" id="thinkCard" style="display:none;margin-top:14px">
-  <div class="brand" style="margin-bottom:4px"><h1 style="font-size:18px">💭 思考模式（預設強度）</h1></div>
-  <p class="sub" id="thinkStatus"></p>
-  <label>預設思考強度（對話頁可逐則覆蓋）</label>
-  <select id="thinkLevel">
-    <option value="off">關閉（不啟用思考）</option>
-    <option value="low">低</option>
-    <option value="medium">中</option>
-    <option value="high">高</option>
-  </select>
-  <p class="sub" style="margin-top:8px">僅對<strong>推理型模型</strong>有效（該 model 需 <code>reasoning:true</code>）。內網自建端點若思考沒生效，多半是 pi-ai 猜不到 vendor → 送錯欄位；請在該 model 的設定加 <code>compat.thinkingFormat</code>（qwen／zai／deepseek）。驗證方式見 <code>docs/15-model-logging.md</code>。</p>
-  <div class="msg" id="thinkMsg"></div>
-  <div class="grid2"><div></div><div><button id="thinkSave" type="button">儲存思考預設</button></div></div>
+      <p class="sub" style="margin-top:12px">僅對<strong>推理型模型</strong>有效（該 model 需在「模型」分頁勾選推理型）。內網自建端點若思考沒生效，多半是 pi-ai 猜不到 vendor → 送錯欄位；請在該 model 加 <code>compat.thinkingFormat</code>（qwen／zai／deepseek）。驗證見 <code>docs/15-model-logging.md</code>。</p>
+      <div class="msg" id="thinkMsg"></div>
+      <button id="thinkSave" type="button">儲存思考預設</button>
+    </section>
+    <section class="panel" data-panel="voice" hidden>
+      <div class="ph">🎙 語音轉文字（會議室錄音）</div>
+      <p class="sub" id="sttStatus"></p>
+      <label>STT 端點（OpenAI 相容 <code>/v1/audio/transcriptions</code>）</label>
+      <input id="sttEndpoint" placeholder="http://localhost:8000/v1/audio/transcriptions" autocomplete="off">
+      <div class="hint">留空 = 停用會議室錄音鈕。本地可用 faster-whisper-server（見 <code>docs/13</code>）。</div>
+      <div class="grid2">
+        <div><label>模型</label><input id="sttModel" placeholder="Systran/faster-whisper-large-v3" autocomplete="off"></div>
+        <div><label>語言碼（留白＝自動偵測）</label><input id="sttLang" placeholder="zh" autocomplete="off"></div>
+      </div>
+      <label>API Key（本地通常不需要）</label><input id="sttKey" type="password" placeholder="留空 = 不變更" autocomplete="off">
+      <div class="msg" id="sttMsg"></div>
+      <div class="actions"><button id="sttTest" class="ghost" type="button" title="不儲存，先打一次確認 STT 端點可連線">🧪 測試語音端點</button><button id="sttSave" type="button">儲存語音設定</button></div>
+    </section>
+  </main>
 </div>
 <script>
 var $=function(s){return document.querySelector(s)};
+// 分頁切換：點側欄按鈕 → 切對應面板（模型／思考／語音）。
+function showTab(name){
+  var ts=document.querySelectorAll(".tab"),ps=document.querySelectorAll(".panel"),i;
+  for(i=0;i<ts.length;i++)ts[i].classList.toggle("active",ts[i].getAttribute("data-tab")===name);
+  for(i=0;i<ps.length;i++)ps[i].hidden=(ps[i].getAttribute("data-panel")!==name);
+}
+(function(){var ts=document.querySelectorAll(".tab");for(var i=0;i<ts.length;i++)(function(t){t.onclick=function(){showTab(t.getAttribute("data-tab"))}})(ts[i])})();
+// 版本（設定模式的 /health 帶 version；首次引導無妨）。
+fetch("/health",{cache:"no-store"}).then(function(r){return r.json()}).then(function(h){if(h&&h.version)$("#ver").textContent="v"+h.version}).catch(function(){});
 var PRESETS={custom:{provider:"",api:"openai-completions",baseUrl:"",model:""},openai:{provider:"openai",api:"openai-completions",baseUrl:"https://api.openai.com/v1",model:"gpt-4o"},deepseek:{provider:"deepseek",api:"openai-completions",baseUrl:"https://api.deepseek.com",model:"deepseek-chat"},minimax:{provider:"minimax",api:"openai-completions",baseUrl:"https://api.minimaxi.com/v1",model:"MiniMax-M2"},openrouter:{provider:"openrouter",api:"openai-completions",baseUrl:"https://openrouter.ai/api/v1",model:""},anthropic:{provider:"anthropic",api:"anthropic-messages",baseUrl:"https://api.anthropic.com",model:"claude-sonnet-4"}};
 function applyPreset(){var p=PRESETS[$("#preset").value]||PRESETS.custom;$("#provider").value=p.provider;$("#api").value=p.api;$("#baseUrl").value=p.baseUrl;$("#modelId").value=p.model}
 $("#preset").onchange=applyPreset;applyPreset();
@@ -1982,7 +2034,7 @@ var EXISTING=/*EXISTING*/null;
 // STT：/settings 注入現有語音設定（不含 apiKey，hasKey 標記）；首次引導頁為 null → 不顯示語音卡。
 var STT=/*STT*/null;
 if(STT){
-  $("#sttCard").style.display="block";
+  $("#tabVoice").hidden=false;
   $("#sttEndpoint").value=STT.endpoint||"";$("#sttModel").value=STT.model||"";$("#sttLang").value=STT.language||"";
   if(STT.hasKey)$("#sttKey").placeholder="留空 = 沿用現有 API Key";
   $("#sttStatus").textContent=STT.enabled?"狀態：已啟用 — 會議室成員可錄音轉逐字稿。":"狀態：未啟用 — 填入 STT 端點即開啟。";
@@ -2009,7 +2061,7 @@ var showMsg=esch;
 // THINK：/settings 注入當前思考預設；首次引導頁為 null → 不顯示此卡。
 var THINK=/*THINK*/null;
 if(THINK){
-  $("#thinkCard").style.display="block";
+  $("#tabThinking").hidden=false;
   $("#thinkLevel").value=THINK.level||"off";
   $("#thinkStatus").textContent="目前預設："+(THINK.level&&THINK.level!=="off"?"思考強度「"+THINK.level+"」":"關閉");
   $("#thinkSave").onclick=async function(){
@@ -2020,18 +2072,30 @@ if(THINK){
     $("#thinkStatus").textContent="目前預設："+(r.thinking&&r.thinking!=="off"?"思考強度「"+r.thinking+"」":"關閉");
   };
 }
-if(EXISTING){                              // 設定模式：顯示已配置的 provider/model 清單 + 允許設預設
+if(EXISTING){                              // 設定模式：完整側欄佈局 + 已配置模型清單 + 允許設預設
+  $("#shell").classList.remove("solo");    // 顯示側欄與分頁
+  $("#pageTitle").textContent="設定";
+  $("#mHead").textContent="🧠 模型";
+  $("#formTitle").textContent="新增 / 更新模型";
+  $("#save").textContent="新增 / 更新模型";
   $("#defWrap").style.display="flex";
   var n=EXISTING.reduce(function(a,p){return a+p.models.length},0);
-  var html='<div class="exist-h">目前已配置 '+EXISTING.length+' 個 provider · '+n+' 個模型（可編輯／刪除，或用下方表單新增／更新）：</div>';
+  $("#modelsIntro").innerHTML="目前已配置 <b>"+EXISTING.length+"</b> 個 provider · <b>"+n+"</b> 個模型。可編輯／刪除既有，或用下方表單新增／更新。";
+  var html="";
   EXISTING.forEach(function(p,pi){
-    html+='<div class="exist-p"><div class="exist-top"><b>'+esc(p.provider)+'</b> <span class="exist-m">'+esc(p.api||"")+'</span>'+
-      '<span class="exist-act"><button class="mini" type="button" onclick="editProvider('+pi+')">編輯</button>'+
-      '<button class="mini danger" type="button" onclick="delProvider('+pi+')">刪除</button></span></div><div class="exist-m">'+
-      p.models.map(function(m){var lbl=esc(m.name||m.id)+(m.name&&m.name!==m.id?' ('+esc(m.id)+')':'')+(m.image?' 🖼':'');var head=m.default?'<span class="def">★ '+lbl+'（預設）</span>':lbl+' <button class="mini" type="button" onclick="setDefault(\\''+esc(m.id)+'\\')">設為預設</button>';return head+' <button class="mini" type="button" title="真打一次對話測試連線" onclick="testModel(\\''+esc(m.id)+'\\')">測試</button> <button class="mini danger" type="button" title="刪除此模型" onclick="delModel(\\''+esc(m.id)+'\\')">✕</button>'}).join('<br>')+'</div></div>';
+    html+='<div class="prov"><div class="prov-h"><b>'+esc(p.provider)+'</b><span class="tag">'+esc(p.api||"")+'</span><span class="spacer"></span>'+
+      '<span class="prov-act"><button class="mini" type="button" onclick="editProvider('+pi+')">編輯</button>'+
+      '<button class="mini danger" type="button" onclick="delProvider('+pi+')">刪除</button></span></div>'+
+      p.models.map(function(m){
+        var lbl=esc(m.name||m.id)+(m.name&&m.name!==m.id?' <span style="opacity:.55">('+esc(m.id)+')</span>':'')+(m.image?' 🖼':'')+(m.reasoning?' 🧠':'');
+        var name=m.default?'<span class="mname"><span class="def">★ '+lbl+'</span>（預設）</span>':'<span class="mname">'+lbl+'</span>';
+        var act='<span class="mact">'+(m.default?'':'<button class="mini" type="button" onclick="setDefault(\\''+esc(m.id)+'\\')">設為預設</button>')+
+          '<button class="mini" type="button" title="真打一次對話測試連線" onclick="testModel(\\''+esc(m.id)+'\\')">測試</button>'+
+          '<button class="mini danger" type="button" title="刪除此模型" onclick="delModel(\\''+esc(m.id)+'\\')">✕</button></span>';
+        return '<div class="mrow">'+name+'<span class="spacer"></span>'+act+'</div>';
+      }).join("")+'</div>';
   });
   $("#existing").innerHTML=html;
-  $("#save").textContent="新增 / 更新模型";
   // 設定模式（已有 provider）：可直接關閉離開、不必操作。首次引導（EXISTING 為 null）則不給關，需先設定。
   var cb=$("#closeBtn");
   var close=function(){if(history.length>1)history.back();else location.href="/"};
