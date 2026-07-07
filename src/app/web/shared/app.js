@@ -51,7 +51,7 @@ const api = (p, opts = {}) =>
     },
   });
 
-/** 讀 SSE 串流：逐 `data:` 事件解析後丟給 onEv（許願台與對話頁共用）。*/
+/** 讀 SSE 串流：逐 `data:` 事件解析後丟給 onEv（任務台與對話頁共用）。*/
 async function readSSE(resp, onEv) {
   const reader = resp.body.getReader();
   const dec = new TextDecoder();
@@ -122,7 +122,7 @@ function addSpace(space) {
 
 /* ── 6b. 專案切換器（popover）+ 資料夾選擇（兩頁共用）──────────
    頁面需提供 DOM：#proj-switch（內含 #proj-btn、#proj-menu）與 #fs-modal。
-   各頁呼叫 mountProjectSwitcher(onChange)；onChange 做頁面專屬刷新（對話：開新對話；許願台：重載歷史/檔案）。 */
+   各頁呼叫 mountProjectSwitcher(onChange)；onChange 做頁面專屬刷新（對話：開新對話；任務台：重載歷史/檔案）。 */
 let _projOnChange = () => {};
 
 function mountProjectSwitcher(onChange) {

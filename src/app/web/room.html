@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>xitto · 會議室</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<!-- 設計系統（與許願台／對話頁共用同一套 token、字體、明暗主題）-->
+<!-- 設計系統（與任務台／對話頁共用同一套 token、字體、明暗主題）-->
 <link rel="stylesheet" href="shared/style.css">
 <script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, stt: __STT__, version: "__VERSION__", origin: "__PUBLIC_ORIGIN__" };</script>
 <script src="shared/md.js"></script>
@@ -150,7 +150,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
 /* 手機頂欄（漢堡 + 房名）與抽屜側欄：桌機隱藏 */
 .mobile-bar { display: none; }
 .side-backdrop { display: none; }
-@media (max-width: 1024px) { :root { --sidebar-w: 260px; } }  /* 與許願台/對話同寬，切頁不變寬 */
+@media (max-width: 1024px) { :root { --sidebar-w: 260px; } }  /* 與任務台/對話同寬，切頁不變寬 */
 @media (max-width: 720px) {
   .app { grid-template-columns: 1fr; }
   /* 側欄改成從左滑入的抽屜（不再整個消失 → 手機也能看成員/檔案/邀請/紀要/離開）*/
@@ -322,7 +322,7 @@ const fmtTime = (iso) => { try { return new Date(iso).toLocaleString(); } catch 
 
 // 主題：跟隨系統，記憶偏好（與 shared/style.css 的 [data-theme] 對齊）
 (() => { const t = localStorage.getItem("xk_theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); document.documentElement.setAttribute("data-theme", t); })();
-// 主題切換鈕：會議室自帶一份（未載 app.js），與許願台/對話共用 xk_theme
+// 主題切換鈕：會議室自帶一份（未載 app.js），與任務台/對話共用 xk_theme
 (() => {
   const b = $("#theme"); if (!b) return;
   const sync = () => { b.textContent = document.documentElement.getAttribute("data-theme") === "light" ? "☀️" : "🌙"; };
@@ -379,7 +379,7 @@ async function switchModel() {
 const params = new URLSearchParams(location.search);
 const joinRoomId = params.get("room");
 const isOperator = !joinRoomId;   // 無 ?room= 即主持人（大廳進來，持 master token）；帶 ?room= 為訪客
-// 模式切換器：只給主持人（訪客是會議參與者，不顯示許願台/對話入口）
+// 模式切換器：只給主持人（訪客是會議參與者，不顯示任務台/對話入口）
 if (isOperator) { const _mn = document.getElementById("roomModeNav"); if (_mn) _mn.hidden = false; }
 const inviteToken = params.get("invite");
 let authTok = token || inviteToken || "";        // 加入前：master 或邀請碼；加入後：成員 token

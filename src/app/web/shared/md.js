@@ -1,5 +1,5 @@
 /* ── Markdown 渲染（Web 共用，零依賴、可離線）─────────────────
- * 對話頁（chat）、許願台（index）、會議室（room）共用同一個 mdRender，
+ * 對話頁（chat）、任務台（index）、會議室（room）共用同一個 mdRender，
  * 讓 AI 回覆的排版三處一致（標題、粗/斜/刪除線、行內碼、程式碼區塊、
  * 有序/無序/巢狀/待辦清單、blockquote、GFM 表格、連結、圖片、水平線）。
  * 樣式沿用 shared/style.css 的 .md 系列 token。

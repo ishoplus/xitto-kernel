@@ -170,7 +170,7 @@ export function listDir(wsDir, sub) {
   return { sub: rel, dirs: dirs.sort(), files: files.sort((a, b) => b.mtime - a.mtime) };
 }
 
-// 讀一個 workspace 累積的「五層經驗」（跨 pack 聚合）→ 給 Wishboard 視覺化「它對你的了解」。
+// 讀一個 workspace 累積的「五層經驗」（跨 pack 聚合）→ 給 Task Board 視覺化「它對你的了解」。
 // 純讀不寫（各 store 構造只讀檔，不會建檔/落地）。回傳事實/手冊/技能/情節/信任 + 計數。
 const _tsNum = (t) => (typeof t === 'number' ? t : Date.parse(t) || 0);
 export function readWorkspaceExperience(wsDir) {
@@ -1162,7 +1162,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       return res.end(readFileSync(file));
     }
 
-    // 「許願台」網頁（公開可載入；token 注入頁面供同源 API 呼叫——PoC/本地自用,正式部署請前置真實認證）
+    // 「任務台」網頁（公開可載入；token 注入頁面供同源 API 呼叫——PoC/本地自用,正式部署請前置真實認證）
     if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
       if (needsLogin(req)) return loginRedirect(res, path);
       let html; try { html = webHtml(); } catch { return json(res, 500, { error: 'web UI 未找到' }); }
@@ -1171,7 +1171,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     }
 
     // 「對話」網頁：同一 kernel 的另一個前端——對話式（mode:turn + 固定 sessionId 多輪、SSE 串流），
-    // 與許願台（mode:goal、交付物導向）做出區別。共用同一組工作區（五層沉澱跨頁累積）。
+    // 與任務台（mode:goal、交付物導向）做出區別。共用同一組工作區（五層沉澱跨頁累積）。
     if (req.method === 'GET' && (path === '/chat' || path === '/chat.html')) {
       if (needsLogin(req)) return loginRedirect(res, path);
       let html; try { html = chatHtml(); } catch { return json(res, 500, { error: 'chat UI 未找到' }); }
@@ -1768,7 +1768,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       log({ action: term ? 'open-terminal' : 'open-folder', dir });
       return json(res, 200, { ok: true, dir });
     }
-    // 工作區累積的「五層經驗」（給 Wishboard 視覺化「它越用越懂你」——Claude Code 沒有的差異點）
+    // 工作區累積的「五層經驗」（給 Task Board 視覺化「它越用越懂你」——Claude Code 沒有的差異點）
     if (req.method === 'GET' && path === '/v1/workspaces/experience') {
       const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
       try { return json(res, 200, readWorkspaceExperience(dir)); }
@@ -2330,7 +2330,7 @@ export function startServer(opts = {}) {
   const onReconfigure = () => { try { server.close(); } catch { /* 略 */ } startServer(opts); };
   server = createServerApp({ model, getApiKey, resolveModel, models, token, auth, adminEmails, allowedEmailDomain, ssoOpen, stt, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
   server.listen(port, () => {
-    console.log(`🪄 許願台：http://localhost:${port}/  （本機瀏覽器打開即用）`);
+    console.log(`📋 任務台：http://localhost:${port}/  （本機瀏覽器打開即用）`);
     console.log(`👥 會議室：http://localhost:${port}/room  （多人 + AI 針對專案對談；點名 @ai 才回覆）`);
     if (ips.length) {
       console.log('🌐 區網位址（同網段其他人可用這些連入 / 邀請連結也會用第一個）：');

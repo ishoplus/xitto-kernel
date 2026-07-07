@@ -14,9 +14,9 @@ The same kernel (multi-step tool loop, guard chain, permissions/sandbox, provide
 "coding" is just one DomainPack — swap it for "data query", "knowledge base", "support/ops", etc. by replacing the pack.
 The interactive CLI lives in the app layer (thin); a richer TUI or other frontends can be another app consuming the same kernel events.
 
-![xitto Wishboard — say what you want, watch it work, collect the deliverable](https://raw.githubusercontent.com/ishoplus/xitto-kernel/main/assets/wishboard.png)
+![xitto Task Board — say what you want, watch it work, collect the deliverable](https://raw.githubusercontent.com/ishoplus/xitto-kernel/main/assets/wishboard.png)
 
-> The 🪄 **Wishboard** web UI (one of the frontends): type one line → it runs in the background → you watch the live process (phase, steps, colored diffs) and collect the deliverable.
+> The 🪄 **Task Board** web UI (one of the frontends): type one line → it runs in the background → you watch the live process (phase, steps, colored diffs) and collect the deliverable.
 
 ## In one line
 
@@ -29,7 +29,7 @@ This is **not** trying to out-code Claude Code. On its own axis — a developer 
 **Reach for xitto-kernel when Claude Code structurally can't serve you:**
 - **A non-Claude model is required** — cost at scale, region/compliance (e.g. data-sovereignty), or air-gapped/on-prem local models. Claude Code only runs on Claude; the kernel runs on MiniMax / DeepSeek / OpenAI / local OSS / custom.
 - **You're building your *own* agent product** — your UI, your domain, your backend. The kernel is a library you `import`, not an end-product you adopt.
-- **Your users aren't developers** — the 🪄 Wishboard lets non-technical people type one line and collect a finished deliverable (PDF/DOCX/…), not a terminal/IDE.
+- **Your users aren't developers** — the 📋 Task Board lets non-technical people type one line and collect a finished deliverable (PDF/DOCX/…), not a terminal/IDE.
 - **The domain isn't coding** — patent disclosures, data-query, knowledge bases, document generation, each with its own verify gate ("definition of done").
 
 The kernel's edge isn't raw capability — it's **reach** (which models, which users, which domains, which deployment) plus a verifiable "done" contract and per-workspace context that compounds ("the more you use it, the more it knows your project").
@@ -118,7 +118,7 @@ Both `--goal` and the server's `POST /v1/tasks` (mode=goal) return deliverables 
 
 In practice: given "create a config file but I haven't decided the filename/content yet" → the agent doesn't guess, pauses to ask for the filename and content → only delivers the correct `app.config.json` after you answer. This makes "wish → deliver" both autonomous and in control.
 
-**🪄 Wishboard web UI (for non-technical users: open a browser and go)**
+**📋 Task Board web UI (for non-technical users: open a browser and go)**
 ```bash
 xitto-kernel serve                         # global install → open http://localhost:8787/ (also serves the /chat page)
 xitto-kernel serve --port 9000 --local --token secret   # pick a real folder & edit in place; set a token
@@ -154,9 +154,9 @@ No terminal, no touching keys (managed server-side). The interface centers on **
 
 **Persistent workspace (relationships between deliverables)**: each deliverable is an **independent conversation** (doesn't continue the previous one, avoiding context bloat), but they **share one persistent workspace** (`.xitto-server/ws/<workspace>`, default `default`) — so ① **files persist**, and later tasks can build on earlier results ("translate the plan.md I made last time into English"); ② **the five experience layers accumulate across deliverables** (preferences/skills/episodes/trust) — it **understands you better the more you use it**, no longer a stranger starting from scratch each time. `workspace` can be specified at POST time (one per user for multi-user); the web UI has a "Project" dropdown to switch, and each deliverable card marks its `📁 owning workspace`.
 
-**Local in-place mode (edit a real folder you pick, like Claude Code)**: with `XITTO_SERVER_LOCAL=1`, the web UI gains a "**📁 Pick folder**" button — **click your way** from the home directory into your real folder and select it (no typing paths; the browser can't get absolute paths, so the local server lists folders), or "New project" by pasting an absolute path directly. The task then **edits the files in that folder in place** (no separate isolated copy), and the workbench lists it too. This bridges two models — "Wishboard (isolated, serving non-technical users)" and "Claude Code (in-place, editing your existing codebase)": **local self-use, want in-place → give a path; isolated/hosted → give a name**. **Safety**: absolute paths are only honored in `local` mode; **in hosted mode an absolute path is sanitized into a managed workspace and cannot escape to arbitrary host paths**.
+**Local in-place mode (edit a real folder you pick, like Claude Code)**: with `XITTO_SERVER_LOCAL=1`, the web UI gains a "**📁 Pick folder**" button — **click your way** from the home directory into your real folder and select it (no typing paths; the browser can't get absolute paths, so the local server lists folders), or "New project" by pasting an absolute path directly. The task then **edits the files in that folder in place** (no separate isolated copy), and the workbench lists it too. This bridges two models — "Task Board (isolated, serving non-technical users)" and "Claude Code (in-place, editing your existing codebase)": **local self-use, want in-place → give a path; isolated/hosted → give a name**. **Safety**: absolute paths are only honored in `local` mode; **in hosted mode an absolute path is sanitized into a managed workspace and cannot escape to arbitrary host paths**.
 
-**History survives restarts (persistence)**: the task list is persisted to `.xitto-server/tasks/` and conversation sessions to `.xitto-server/sessions/`, reloaded on startup — so **after a restart, deliverable history shows automatically and old deliverables can still be "continued/adjusted"** (the conversation context is there too). Tasks still running/awaiting-answer at restart are marked "interrupted (restart)". Mirrors Claude Code's "conversations auto-persist", but the Wishboard **auto-displays history** (a deliverable list) rather than Claude Code's explicit `--resume`.
+**History survives restarts (persistence)**: the task list is persisted to `.xitto-server/tasks/` and conversation sessions to `.xitto-server/sessions/`, reloaded on startup — so **after a restart, deliverable history shows automatically and old deliverables can still be "continued/adjusted"** (the conversation context is there too). Tasks still running/awaiting-answer at restart are marked "interrupted (restart)". Mirrors Claude Code's "conversations auto-persist", but the Task Board **auto-displays history** (a deliverable list) rather than Claude Code's explicit `--resume`.
 
 **Provenance / file location**: a deliverable records its **logical location (workspace)**; the **physical absolute path** is hidden by default (hosted mode doesn't leak server paths), shown only in **local mode** (`XITTO_SERVER_LOCAL=1`), where a deliverable carries a "📂 file location" so you can find the file in Finder/Explorer.
 

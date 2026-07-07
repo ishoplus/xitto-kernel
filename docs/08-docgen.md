@@ -7,7 +7,7 @@
 ```bash
 xitto-kernel --pack docgen --goal "做一份…的 PDF 報告，存成 report.pdf"
 # 或互動：xitto-kernel --pack docgen
-# 或許願台：選 docgen 領域
+# 或任務台：選 docgen 領域
 ```
 
 agent 用 `gen_doc` 工具產出檔案。
@@ -46,7 +46,7 @@ brew install pandoc                 # 最佳；或裝 LibreOffice（soffice）
 
 ## 驗收徽章（完成定義）
 
-docgen 接上 kernel 的 verify 契約：產出後自動驗證每份文件有效（PDF=`%PDF`、DOCX=ZIP、HTML=含標籤、CSV=非空）→ 對話頁/許願台顯示 **✓ 驗收通過 / ⚠ 未通過**，使用者一眼知道成品可交付。
+docgen 接上 kernel 的 verify 契約：產出後自動驗證每份文件有效（PDF=`%PDF`、DOCX=ZIP、HTML=含標籤、CSV=非空）→ 對話頁/任務台顯示 **✓ 驗收通過 / ⚠ 未通過**，使用者一眼知道成品可交付。
 
 ## 範例
 

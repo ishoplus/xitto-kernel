@@ -79,7 +79,7 @@ body {
   align-items: center;
   gap: var(--sp-2);
   margin-bottom: var(--sp-1);
-  min-height: 28px;   /* 標題列與許願台/會議室同高，切頁不跳 */
+  min-height: 28px;   /* 標題列與任務台/會議室同高，切頁不跳 */
 }
 
 .side-brand h1 {
@@ -101,7 +101,7 @@ body {
   margin-top: var(--sp-3);
 }
 
-/* 資料夾選擇 Modal（與許願台一致）*/
+/* 資料夾選擇 Modal（與任務台一致）*/
 .modal {
   position: fixed;
   inset: 0;
@@ -1170,7 +1170,7 @@ body {
   </aside>
 </div>
 
-<!-- 資料夾選擇 Modal（與許願台一致；position:fixed，置於 shell 外）-->
+<!-- 資料夾選擇 Modal（與任務台一致；position:fixed，置於 shell 外）-->
 <div id="fs-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="fs-modal-title">
   <div class="modal-box">
     <div class="modal-title" id="fs-modal-title">選一個資料夾（就地工作）</div>
@@ -1819,7 +1819,7 @@ function scrollDown() {
 }
 
 /* SSE 讀取：解析 data: 行、逐事件回呼（前景串流與背景任務事件流共用）*/
-/* readSSE 已移至共用 app.js（許願台亦用） */
+/* readSSE 已移至共用 app.js（任務台亦用） */
 
 /* ── 送出訊息 ──────────────────────────────────────────── */
 async function send(textOverride) {

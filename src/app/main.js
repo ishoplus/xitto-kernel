@@ -38,7 +38,7 @@ export async function main(argv = process.argv.slice(2)) {
   // 子指令：init —— 首次設定導引，產生 providers.json
   if (argv[0] === 'init') { await runInit(argv.slice(1)); return; }
 
-  // 子指令：serve —— 啟動 Web 前端（🪄 許願台 + 對話頁 /chat）
+  // 子指令：serve —— 啟動 Web 前端（📋 任務台 + 對話頁 /chat）
   if (argv[0] === 'serve') { await runServe(argv.slice(1)); return; }
 
   // 子指令：map —— 批次可寫 map-verify（逐項轉換+驗收，未通過自動回滾）
@@ -153,7 +153,7 @@ function resolveCwd(dir) {
   return full;
 }
 
-// serve：啟動 Web 前端（許願台 + 對話頁）。旗標映射到 startServer(opts)；沿用 providers.json 載 model。
+// serve：啟動 Web 前端（任務台 + 對話頁）。旗標映射到 startServer(opts)；沿用 providers.json 載 model。
 async function runServe(args) {
   const o = { local: false };
   for (let i = 0; i < args.length; i++) {
@@ -183,7 +183,7 @@ async function runServe(args) {
 
 function printServeHelp() {
   console.log([
-    'xitto-kernel serve — 啟動 Web 前端（🪄 許願台 + 對話頁 /chat）',
+    'xitto-kernel serve — 啟動 Web 前端（📋 任務台 + 對話頁 /chat）',
     '',
     '用法:',
     '  xitto-kernel serve [--port <n>] [--local] [--token <t>] [--no-sandbox] [--concurrency <n>] [--model <id>]',
@@ -287,7 +287,7 @@ function printHelp() {
     '  xitto-kernel init                                        首次設定導引（產生 providers.json）',
     '  xitto-kernel [--pack <name>] [--cwd <dir>] [--model <id>] [--sandbox] [--resume [id]] [--yes]   互動跑內建 pack',
     '  xitto-kernel --pack general --goal "..." [--yes]         目標驅動自主循環（headless）',
-    '  xitto-kernel serve [--port <n>] [--local]                啟動 Web 前端（🪄 許願台 + 對話頁）',
+    '  xitto-kernel serve [--port <n>] [--local]                啟動 Web 前端（📋 任務台 + 對話頁）',
     '  xitto-kernel map <items.json> [--pack <name>] [--cwd <dir>]  批次可寫 map-verify（逐項轉換+驗收，未過回滾）',
     '  xitto-kernel new-agent <name>                            產出依賴 kernel 的獨立 agent 專案',
     '',

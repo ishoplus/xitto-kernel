@@ -263,7 +263,7 @@ a:focus-visible {
 .badge.done     { color: var(--ok);     border-color: var(--ok);     }
 .badge.error    { color: var(--danger); border-color: var(--danger); }
 
-/* ── 模式切換器（三頁一致：許願台 / 對話 / 會議室）── */
+/* ── 模式切換器（三頁一致：任務台 / 對話 / 會議室）── */
 .mode-nav { display: inline-flex; gap: 2px; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 2px; max-width: 100%; }
 .mode-nav a { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: var(--r-pill); font-size: 12px; font-weight: 500; color: var(--dim); text-decoration: none; white-space: nowrap; transition: background .12s, color .12s; }
 .mode-nav a:hover { color: var(--fg); }
@@ -436,7 +436,7 @@ a:focus-visible {
 }
 .md .md-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--fg) 3%, transparent); }
 
-/* ── 6c. 專案切換器（popover，對話頁與許願台共用）──────────── */
+/* ── 6c. 專案切換器（popover，對話頁與任務台共用）──────────── */
 .proj-switch { position: relative; flex: 1; min-width: 0; }
 .proj-btn {
   display: flex;
@@ -496,7 +496,7 @@ a:focus-visible {
 .proj-item .proj-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-sep { height: 1px; background: var(--line); margin: var(--sp-1) 0; }
 
-/* 檔案列表刷新鈕（對話頁 / 許願台共用）*/
+/* 檔案列表刷新鈕（對話頁 / 任務台共用）*/
 .refresh-btn {
   margin-left: auto;
   background: none;
