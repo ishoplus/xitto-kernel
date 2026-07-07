@@ -1,6 +1,7 @@
 // data-query pack — 真實資料查詢 agent（用 sqlite3 CLI，零依賴）。
 // 工具對一個 SQLite .db 跑真實 SQL；schema-before-query 守衛（對照 read-before-edit）。
 // 對應 docs/05-example-packs.md「B. data-query pack」。
+import { withBaseRules } from '../shared/prompt.js';
 import { spawnSync } from 'node:child_process';
 import { isAbsolute, join } from 'node:path';
 
@@ -54,7 +55,7 @@ export function createDataQueryPack({ cwd = process.cwd(), db } = {}) {
   return {
     name: 'data-query',
     tools: () => [listTables, describeTable, sqlQuery, sqlExec],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['SCHEMA.md', 'METRICS.md'],
     // 只有 sql_exec 是 mutating → kernel 從 metadata 推導
     preToolPolicy: {

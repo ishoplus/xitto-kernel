@@ -1,6 +1,7 @@
 // notes pack — 第三個範例領域：知識庫 / 筆記 agent。
 // 用來示範「怎麼從零做一個新領域 agent」（見 docs/06-authoring-a-pack.md）。
 // 工具操作 <cwd>/.notes/*.md；preToolPolicy 用 search-before-add（對照 read-before-edit）。
+import { withBaseRules } from '../shared/prompt.js';
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -60,7 +61,7 @@ export function createNotesPack({ cwd = process.cwd() } = {}) {
   return {
     name: 'notes',
     tools: () => [listNotes, searchNotes, readNote, addNote],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['NOTES.md'],
     // mutatingTools 省略 → 從 metadata 推導（add_note）
     preToolPolicy: {

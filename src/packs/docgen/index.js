@@ -1,5 +1,6 @@
 // docgen pack — 把產出變「可交付成品」：產 PDF / HTML 文件（中文支援）。
 // 與 doc-extract 對稱：那個「讀」Office/PDF，這個「產」文件。核心在 shared/doc-gen.js。
+import { withBaseRules } from '../shared/prompt.js';
 import { mkdirSync } from 'node:fs';
 import { join, isAbsolute, dirname, basename } from 'node:path';
 import { createFsTools } from '../shared/fs-tools.js';
@@ -52,7 +53,7 @@ export function createDocgenPack({ cwd = process.cwd() } = {}) {
   return {
     name: 'docgen',
     tools: () => [fs.read, fs.ls, fs.write, createGrepTool(cwd), createGlobTool(cwd), genDocTool(cwd, produced)],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['DOCGEN.md'],
     // 完成定義（verify 徽章）：產出的文件須有效（PDF=%PDF / DOCX=ZIP / HTML=有標籤 / 其餘非空）。
     verify: {

@@ -2,6 +2,7 @@
 // 工具以輕量真實實作示範（read/ls/write/edit 真的動檔案）；bash 走 shell。
 // read-before-edit 守衛與 read 工具透過閉包共享 readFiles 狀態，故能真實生效。
 // 對應 docs/05-example-packs.md「A. coding pack」。
+import { withBaseRules } from '../shared/prompt.js';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
@@ -164,7 +165,7 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
   return {
     name: 'coding',
     tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）
     verify: {

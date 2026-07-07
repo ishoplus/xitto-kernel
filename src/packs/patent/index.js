@@ -3,6 +3,7 @@
 // 依使用者習慣與交底書格式(可用 PATENT.md 覆蓋預設章節)，在符合領域專業下協助完成交底書。
 // 工具：read/ls/write/edit(共用 fs)+ grep/glob(挖專案創新點)+ web_search/web_fetch(現有技術檢索)。
 // 不臆造技術細節——不確定就用 ask 問使用者(kernel 注入)；verify 守門交底書必備章節是否齊全。
+import { withBaseRules } from '../shared/prompt.js';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createFsTools } from '../shared/fs-tools.js';
@@ -84,7 +85,7 @@ export function createPatentPack({ cwd = process.cwd() } = {}) {
       createWebSearchTool(), createWebFetchTool(), // 現有技術初步檢索
       fs.write, fs.edit,                           // 產出 / 修訂交底書
     ],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['PATENT.md', '交底書模板.md', 'CLAUDE.md'], // 使用者習慣與格式注入點(找到即注入 system prompt)
     // mutatingTools 省略 → kernel 從 write/edit 的 metadata 推導
     verify: {

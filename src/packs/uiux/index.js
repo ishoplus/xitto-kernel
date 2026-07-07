@@ -2,6 +2,7 @@
 // 與 coding 的分工：會的工具相近（讀寫前端檔、查參考），但「守什麼規矩、怎麼算做完」不同——
 // coding 守 lint/型別；uiux 守「設計一致性 + 可及性(a11y) + 響應式 + 視覺層次」，verify 以 a11y 靜態檢查守門。
 // 工具：read/ls/glob/grep(探勘既有 UI 與 design token) + web_search/web_fetch(參考設計/元件範式/WCAG) + write/edit + bash(跑 build/格式化/起 dev server)。
+import { withBaseRules } from '../shared/prompt.js';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, dirname, basename, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -198,7 +199,7 @@ export function createUiuxPack({ cwd = process.cwd() } = {}) {
       createWebSearchTool(), createWebFetchTool(),  // 參考設計、元件範式、WCAG 準則
       fs.write, fs.edit, fs.bash,                   // 產出前端檔 / 跑 build、格式化、起 dev server
     ],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['DESIGN.md', 'STYLEGUIDE.md', 'CLAUDE.md', 'AGENTS.md'], // 專案級設計規範注入點
     // mutatingTools 省略 → kernel 從 write/edit/bash 的 metadata 推導
     verify: {

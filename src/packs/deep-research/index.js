@@ -1,5 +1,6 @@
 // deep-research pack — 深度研究 agent：拆問題 → 多來源搜尋 → 讀全文查證 → 有引用的結論。
 // 工具：web_search/web_fetch（共用）+ write/read（存/讀報告）。搭配 kernel 的 spawn_agent 可並行子研究。
+import { withBaseRules } from '../shared/prompt.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { createWebSearchTool, createWebFetchTool } from '../shared/web-tools.js';
@@ -38,7 +39,7 @@ export function createDeepResearchPack({ cwd = process.cwd() } = {}) {
   return {
     name: 'deep-research',
     tools: () => [createWebSearchTool(), createWebFetchTool(), writeReport, readTool],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['RESEARCH.md'],
     permissionPolicy: { defaultMode: 'default' },
   };

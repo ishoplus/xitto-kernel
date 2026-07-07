@@ -1,5 +1,6 @@
 // devops/SRE pack — 維運自動化 agent。shell 為主 + 後台服務 + 設定檔 + 日誌搜尋 + 健康檢查。
 // 工具全由共用模組組成（fs-tools / code-nav / web-tools / bg）。
+import { withBaseRules } from '../shared/prompt.js';
 import { createFsTools } from '../shared/fs-tools.js';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
 import { createHttpTool } from '../shared/web-tools.js';
@@ -20,7 +21,7 @@ export function createDevopsPack({ cwd = process.cwd() } = {}) {
   return {
     name: 'devops',
     tools: () => [fs.read, fs.ls, createGlobTool(cwd), createGrepTool(cwd), fs.write, fs.edit, fs.bash, ...bg.tools, createHttpTool()],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['RUNBOOK.md', 'AGENTS.md'],
     preToolPolicy: { check: fs.readBeforeEdit },
     permissionPolicy: { defaultMode: 'default' },

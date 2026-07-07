@@ -1,5 +1,6 @@
 // general pack — 通用自主 agent。廣的 system prompt + 檔案/shell/web 工具。
 // 搭配 kernel 的 runGoal（目標循環）+ 子 agent + MCP，即為「給目標、自己做到完成」的通用 agent。
+import { withBaseRules } from '../shared/prompt.js';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, extname, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -20,7 +21,6 @@ const SYSTEM_PROMPT = [
   '- 需要外部資料：先 web_search 找來源，再 web_fetch 讀全文；串 API 用 http。不要憑空編造。',
   '- 還缺的能力（瀏覽器點擊、特定服務）可由使用者掛 MCP server 補上。',
   '- 編輯既有檔案前先 read；破壞性/對外操作前確認。',
-  '- 輸出避免使用 emoji（回覆、程式碼、檔案內容皆然），除非使用者明確要求。',
   '- 完成後明確說「已完成」並總結結果與如何驗證。',
 ].join('\n');
 
@@ -98,7 +98,7 @@ export function createGeneralPack({ cwd = process.cwd() } = {}) {
   return {
     name: 'general',
     tools: () => [read, ls, globTool, grepTool, write, edit, bash, webSearch, webFetch, http, readImage],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['AGENTS.md', 'GENERAL.md'],
     preToolPolicy: {
       check: (ctx) => {
