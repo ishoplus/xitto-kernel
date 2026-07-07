@@ -11,6 +11,7 @@ import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
 import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 import { scanCode, sortFindings } from '../shared/security-scan.js';
+import { scanQuality, langOf } from '../shared/code-quality.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -204,9 +205,39 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     },
   };
 
+  // 程式碼審查（移植自 CC code-review/simplify 的可靜態偵測子集）：品質/清理檢查。
+  const codeReview = {
+    name: 'code_review', label: '程式碼審查', readOnly: true,
+    description: '對「當前變更」的程式碼檔做靜態品質審查，找常見清理項：留下的除錯輸出、被吞掉的錯誤（空 catch/except:pass）、鬆散比較(==)、var 宣告、殘留 TODO/FIXME 等。可傳 paths 指定；純檢查不改檔。注意：只涵蓋機械式樣式，深層語意 bug（邏輯/邊界/競態）仍需你逐段人工審查。交付前搭配 security_review 一起跑。',
+    parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' }, description: '要審查的檔案（相對路徑）；省略則自動取 git 變更的程式碼檔' } } },
+    execute: async (_id, { paths } = {}) => {
+      const files = (Array.isArray(paths) && paths.length) ? paths : changedCodeFiles();
+      if (!files.length) return txt({ scanned: 0, findings: [], note: '沒有可審查的變更程式碼檔（或非 git 專案）；可用 paths 明確指定檔案。' });
+      const findings = [];
+      let scanned = 0;
+      for (const rel of files.slice(0, 300)) {
+        const p = abs(rel);
+        if (!existsSync(p)) continue;
+        let text; try { text = readFileSync(p, 'utf8'); } catch { continue; }
+        if (text.length > 500000 || /\x00/.test(text)) continue;
+        scanned++;
+        for (const f of scanQuality(text, langOf(rel))) findings.push({ file: rel, ...f });
+      }
+      const sorted = sortFindings(findings);
+      const bySeverity = sorted.reduce((m, f) => ((m[f.severity] = (m[f.severity] || 0) + 1), m), {});
+      return txt({
+        scanned, total: sorted.length, bySeverity,
+        findings: sorted.slice(0, 100),
+        note: sorted.length
+          ? '這些是靜態清理提示；深層語意 bug 需你逐段人工審查。'
+          : '未發現常見清理項（不代表無 bug——靜態檢查涵蓋有限，語意問題仍需人工審）。',
+      });
+    },
+  };
+
   return {
     name: 'coding',
-    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview],
+    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）
