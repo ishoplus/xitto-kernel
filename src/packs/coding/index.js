@@ -12,7 +12,7 @@ import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 import { scanCode, sortFindings } from '../shared/security-scan.js';
 import { scanQuality, langOf } from '../shared/code-quality.js';
-import { lspDiagnostics, serverFor, hasCommand } from '../shared/lsp.js';
+import { lspDiagnostics, lspDefinition, lspHover, lspSymbols, serverFor, hasCommand } from '../shared/lsp.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -254,9 +254,48 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     },
   };
 
+  // LSP 導覽/理解（跳定義 / hover / 符號大綱）——共用同一組 language server。
+  const lspErr = (path) => { const s = serverFor(abs(path)); return s ? null : txt({ error: '此副檔名不支援 LSP', path, supported: 'ts js py go rs c cpp' }); };
+  const lspDefTool = {
+    name: 'lsp_definition', label: '跳定義', readOnly: true,
+    description: '用 language server 找某位置符號的「定義」在哪（檔案:行:欄）。比 grep 準（懂 import/範圍/同名）。path 相對路徑，line/col 為 1-based。',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, line: { type: 'number' }, col: { type: 'number' } }, required: ['path', 'line', 'col'] },
+    execute: async (_id, { path, line, col }) => {
+      const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      const e = lspErr(path); if (e) return e;
+      const r = await lspDefinition(p, cwd, line, col);
+      if (!r.ok) return txt({ ok: false, path, reason: r.reason, ...(r.install ? { hint: `安裝 ${r.install} 後即可使用` } : {}) });
+      return txt({ ok: true, count: r.locations.length, locations: r.locations.slice(0, 50) });
+    },
+  };
+  const lspHoverTool = {
+    name: 'lsp_hover', label: 'hover 說明', readOnly: true,
+    description: '用 language server 取某位置符號的型別/簽章/文件（即 IDE 的 hover）。path 相對路徑，line/col 為 1-based。',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, line: { type: 'number' }, col: { type: 'number' } }, required: ['path', 'line', 'col'] },
+    execute: async (_id, { path, line, col }) => {
+      const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      const e = lspErr(path); if (e) return e;
+      const r = await lspHover(p, cwd, line, col);
+      if (!r.ok) return txt({ ok: false, path, reason: r.reason, ...(r.install ? { hint: `安裝 ${r.install} 後即可使用` } : {}) });
+      return txt({ ok: true, hover: r.hover || '（此位置無 hover 資訊）' });
+    },
+  };
+  const lspSymbolsTool = {
+    name: 'lsp_symbols', label: '符號大綱', readOnly: true,
+    description: '用 language server 列出一個檔的符號大綱（class/function/method/變數…，含階層與行號）。快速掌握檔案結構，比逐行讀更省。path 相對路徑。',
+    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    execute: async (_id, { path }) => {
+      const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      const e = lspErr(path); if (e) return e;
+      const r = await lspSymbols(p, cwd);
+      if (!r.ok) return txt({ ok: false, path, reason: r.reason, ...(r.install ? { hint: `安裝 ${r.install} 後即可使用` } : {}) });
+      return txt({ ok: true, count: r.symbols.length, symbols: r.symbols.slice(0, 200) });
+    },
+  };
+
   return {
     name: 'coding',
-    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool],
+    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool, lspDefTool, lspHoverTool, lspSymbolsTool],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）

@@ -6,7 +6,7 @@
 // ③ 高階 lspDiagnostics（偵測語言→找 server→initialize→didOpen→收診斷）。
 // server 命令來自固定白名單（依副檔名），非使用者提供的任意命令——不成為任意執行的破口。
 import { spawn, spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 
 // ── ① 線協議：Content-Length 框架 ──
@@ -125,31 +125,99 @@ export function hasCommand(cmd) {
   try { return spawnSync('which', [cmd], { encoding: 'utf8' }).status === 0; } catch { return false; }
 }
 const SEVERITY = { 1: 'error', 2: 'warning', 3: 'info', 4: 'hint' };
+const SYMBOL_KIND = { 1: 'file', 2: 'module', 3: 'namespace', 4: 'package', 5: 'class', 6: 'method', 7: 'property', 8: 'field', 9: 'constructor', 10: 'enum', 11: 'interface', 12: 'function', 13: 'variable', 14: 'constant', 15: 'string', 16: 'number', 17: 'boolean', 18: 'array', 19: 'object', 20: 'key', 21: 'null', 22: 'enum-member', 23: 'struct', 24: 'event', 25: 'operator', 26: 'type-parameter' };
 
-// 對單一檔取 LSP 診斷。回 { ok, diagnostics:[{line,col,severity,message,source}] } 或
-// { ok:false, reason } —— server 未安裝/啟動失敗時優雅回報，不丟例外。
-export async function lspDiagnostics(absPath, cwd, { timeoutMs = 8000, servers = LSP_SERVERS } = {}) {
+// 開一個 LSP session（spawn server + initialize + didOpen）。回 { ok, client, uri, cfg } 或
+// { ok:false, reason }（server 未安裝/讀檔失敗/啟動失敗，皆優雅回報不丟例外）。用完務必 client.shutdown()。
+async function openSession(absPath, cwd, { servers = LSP_SERVERS } = {}) {
   const s = serverFor(absPath);
   if (!s || !s.cmd) return { ok: false, reason: `不支援此副檔名的 LSP（${absPath}）` };
   const cfg = servers[s.lang] || s;
   if (!hasCommand(cfg.cmd)) return { ok: false, reason: `language server「${cfg.cmd}」未安裝`, install: cfg.cmd };
   let text; try { text = readFileSync(absPath, 'utf8'); } catch (e) { return { ok: false, reason: '讀檔失敗：' + e.message }; }
   const uri = pathToFileURL(absPath).href;
-  let client;
+  const client = createLspClient({ cmd: cfg.cmd, args: cfg.args || [], cwd });
   try {
-    client = createLspClient({ cmd: cfg.cmd, args: cfg.args || [], cwd });
     await client.initialize(pathToFileURL(cwd || process.cwd()).href);
     client.didOpen(uri, cfg.languageId, text);
-    const raw = await client.waitDiagnostics(uri, timeoutMs);
-    const diagnostics = raw.map((d) => ({
-      line: (d.range?.start?.line ?? 0) + 1,
-      col: (d.range?.start?.character ?? 0) + 1,
-      severity: SEVERITY[d.severity] || 'info',
-      message: d.message,
-      source: d.source || cfg.cmd,
-    }));
-    return { ok: true, diagnostics };
+    return { ok: true, client, uri, cfg };
   } catch (e) {
-    return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) };
-  } finally { if (client) client.shutdown(); }
+    client.shutdown();
+    return { ok: false, reason: 'LSP 啟動失敗：' + (e.message || String(e)) };
+  }
+}
+
+// request 加逾時（server 無回應時回 null，不永久等待）
+function reqTimeout(client, method, params, ms) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const t = setTimeout(() => { if (!done) { done = true; resolve(null); } }, ms); if (t.unref) t.unref();
+    client.request(method, params).then(
+      (r) => { if (!done) { done = true; clearTimeout(t); resolve(r); } },
+      (e) => { if (!done) { done = true; clearTimeout(t); reject(e); } },
+    );
+  });
+}
+const uriToPath = (u) => { try { return u && u.startsWith('file:') ? fileURLToPath(u) : (u || ''); } catch { return u || ''; } };
+const pos1 = (r) => ({ line: (r?.start?.line ?? 0) + 1, col: (r?.start?.character ?? 0) + 1 });
+
+// LSP position 為 0-based；工具對使用者用 1-based，這裡轉換。
+const toLspPos = (line, col) => ({ line: Math.max(0, (line || 1) - 1), character: Math.max(0, (col || 1) - 1) });
+
+// 對單一檔取 LSP 診斷。回 { ok, diagnostics:[{line,col,severity,message,source}] } 或 { ok:false, reason }。
+export async function lspDiagnostics(absPath, cwd, opts = {}) {
+  const ses = await openSession(absPath, cwd, opts);
+  if (!ses.ok) return ses;
+  try {
+    const raw = await ses.client.waitDiagnostics(ses.uri, opts.timeoutMs || 8000);
+    return { ok: true, diagnostics: raw.map((d) => ({ ...pos1(d.range), severity: SEVERITY[d.severity] || 'info', message: d.message, source: d.source || ses.cfg.cmd })) };
+  } catch (e) { return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) }; }
+  finally { ses.client.shutdown(); }
+}
+
+// 跳定義：回 { ok, locations:[{file,line,col}] }。line/col 為 1-based。
+export async function lspDefinition(absPath, cwd, line, col, opts = {}) {
+  const ses = await openSession(absPath, cwd, opts);
+  if (!ses.ok) return ses;
+  try {
+    const res = await reqTimeout(ses.client, 'textDocument/definition', { textDocument: { uri: ses.uri }, position: toLspPos(line, col) }, opts.timeoutMs || 8000);
+    const arr = res == null ? [] : (Array.isArray(res) ? res : [res]);
+    const locations = arr.map((loc) => ({ file: uriToPath(loc.uri || loc.targetUri), ...pos1(loc.range || loc.targetSelectionRange || loc.targetRange) }));
+    return { ok: true, locations };
+  } catch (e) { return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) }; }
+  finally { ses.client.shutdown(); }
+}
+
+// hover 說明（型別/簽章/文件）：回 { ok, hover:'…' }。
+export async function lspHover(absPath, cwd, line, col, opts = {}) {
+  const ses = await openSession(absPath, cwd, opts);
+  if (!ses.ok) return ses;
+  try {
+    const res = await reqTimeout(ses.client, 'textDocument/hover', { textDocument: { uri: ses.uri }, position: toLspPos(line, col) }, opts.timeoutMs || 8000);
+    const c = res && res.contents;
+    const toStr = (x) => (typeof x === 'string' ? x : (x && x.value) || '');
+    const hover = (Array.isArray(c) ? c.map(toStr).filter(Boolean).join('\n\n') : toStr(c)).trim().slice(0, 2000);
+    return { ok: true, hover };
+  } catch (e) { return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) }; }
+  finally { ses.client.shutdown(); }
+}
+
+// 檔內符號大綱：回 { ok, symbols:[{name,kind,line,depth}] }（階層以 depth 表示）。
+export async function lspSymbols(absPath, cwd, opts = {}) {
+  const ses = await openSession(absPath, cwd, opts);
+  if (!ses.ok) return ses;
+  try {
+    const res = await reqTimeout(ses.client, 'textDocument/documentSymbol', { textDocument: { uri: ses.uri } }, opts.timeoutMs || 8000);
+    const out = [];
+    const walk = (list, depth) => {
+      for (const s of (list || [])) {
+        const range = s.range || s.location?.range;
+        out.push({ name: s.name, kind: SYMBOL_KIND[s.kind] || String(s.kind), ...pos1(range), depth });
+        if (Array.isArray(s.children)) walk(s.children, depth + 1);
+      }
+    };
+    walk(res, 0);
+    return { ok: true, symbols: out };
+  } catch (e) { return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) }; }
+  finally { ses.client.shutdown(); }
 }

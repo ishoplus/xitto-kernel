@@ -92,3 +92,48 @@ test('coding pack lsp_diagnostics 工具：不支援副檔名 / server 未裝 �
     if (!hasCommand('pyright-langserver')) { assert.equal(py.ok, false); assert.match(py.reason, /未安裝/); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ── 擴充：go-to-definition / hover / symbols（mock server 注入）──
+import { lspDefinition, lspHover, lspSymbols } from '../src/packs/shared/lsp.js';
+const withCFile = async (fn) => {
+  const dir = mkdtempSync(join(tmpdir(), 'lspx-'));
+  try { writeFileSync(join(dir, 'x.c'), 'int foo(){ return 0; }\n'); return await fn(join(dir, 'x.c'), dir); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+};
+const MOCK_C = { c: { cmd: 'node', args: [MOCK], languageId: 'c' } };
+
+test('lspDefinition：回 {file,line,col}（0-based→1-based）', async () => {
+  await withCFile(async (f, dir) => {
+    const r = await lspDefinition(f, dir, 1, 5, { timeoutMs: 4000, servers: MOCK_C });
+    assert.equal(r.ok, true);
+    assert.equal(r.locations.length, 1);
+    assert.equal(r.locations[0].line, 10);   // mock line 9 → 10
+    assert.equal(r.locations[0].col, 3);      // char 2 → 3
+    assert.match(r.locations[0].file, /x\.c$/);
+  });
+});
+
+test('lspHover：回 hover 文字（MarkupContent.value）', async () => {
+  await withCFile(async (f, dir) => {
+    const r = await lspHover(f, dir, 1, 5, { timeoutMs: 4000, servers: MOCK_C });
+    assert.equal(r.ok, true);
+    assert.match(r.hover, /function foo\(\): void/);
+  });
+});
+
+test('lspSymbols：階層符號攤平（含 depth/kind/line）', async () => {
+  await withCFile(async (f, dir) => {
+    const r = await lspSymbols(f, dir, { timeoutMs: 4000, servers: MOCK_C });
+    assert.equal(r.ok, true);
+    assert.equal(r.symbols.length, 2);
+    assert.deepEqual(r.symbols[0], { name: 'foo', kind: 'function', line: 1, col: 1, depth: 0 });
+    assert.equal(r.symbols[1].name, 'bar');
+    assert.equal(r.symbols[1].depth, 1);       // 子符號
+  });
+});
+
+test('coding pack：4 個 LSP 工具皆註冊', () => {
+  const pack = createCodingPack({ cwd: '/tmp' });
+  const names = pack.tools().map((t) => t.name);
+  for (const n of ['lsp_diagnostics', 'lsp_definition', 'lsp_hover', 'lsp_symbols']) assert.ok(names.includes(n), `缺 ${n}`);
+});
