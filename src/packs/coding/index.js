@@ -12,6 +12,7 @@ import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 import { scanCode, sortFindings } from '../shared/security-scan.js';
 import { scanQuality, langOf } from '../shared/code-quality.js';
+import { lspDiagnostics, serverFor, hasCommand } from '../shared/lsp.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -235,9 +236,27 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     },
   };
 
+  // LSP 診斷（移植自 CC 的語言伺服器智能）：跑對應 language server 取型別錯/未定義/未使用等
+  // 真實診斷，比 grep 精準。需該語言的 server 已安裝（未裝則優雅提示安裝哪個）。
+  const lspTool = {
+    name: 'lsp_diagnostics', label: 'LSP 診斷', readOnly: true,
+    description: '用語言伺服器（typescript-language-server / pyright / gopls / rust-analyzer / clangd）對單一檔取真實診斷：型別錯誤、未定義符號、未使用變數等。比 grep/靜態樣式精準。支援 ts/js/py/go/rs/c/cpp；server 未安裝會回報要裝哪個。改檔後想確認沒壞可用它。',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: '要診斷的檔案（相對路徑）' } }, required: ['path'] },
+    execute: async (_id, { path }) => {
+      const p = abs(path);
+      if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      const s = serverFor(p);
+      if (!s) return txt({ error: '此副檔名不支援 LSP', path, supported: 'ts js py go rs c cpp' });
+      const r = await lspDiagnostics(p, cwd);
+      if (!r.ok) return txt({ ok: false, path, reason: r.reason, ...(r.install ? { hint: `安裝 ${r.install} 後即可使用` } : {}) });
+      const errors = r.diagnostics.filter((d) => d.severity === 'error').length;
+      return txt({ ok: true, path, server: s.cmd, total: r.diagnostics.length, errors, diagnostics: r.diagnostics.slice(0, 100) });
+    },
+  };
+
   return {
     name: 'coding',
-    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview],
+    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）
