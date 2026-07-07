@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmS
 import { join, dirname, isAbsolute, relative, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, networkInterfaces } from 'node:os';
+import { execFile } from 'node:child_process';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { createKernel } from '../kernel/index.js';
 import { cacheRetentionFor } from '../kernel/provider.js';
@@ -1684,6 +1685,27 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     if (req.method === 'GET' && path === '/v1/workspaces/files') {
       const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
       return json(res, 200, listDir(dir, url.searchParams.get('sub') || '') || { sub: '', dirs: [], files: [] });
+    }
+    // 本機模式：在系統原生檔案管理器 / 終端開啟工作目錄（服務跑在使用者本機才有意義；遠端會開在伺服器上 → 擋掉）。
+    if (req.method === 'POST' && (path === '/v1/workspaces/open-folder' || path === '/v1/workspaces/open-terminal')) {
+      if (!local) return json(res, 400, { error: '僅本機模式（serve:local / --local）支援——遠端部署無法開啟你的本機資料夾' });
+      const dir = workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local);
+      try { mkdirSync(dir, { recursive: true }); } catch { /* 略 */ }
+      const term = path.endsWith('open-terminal'); const p = process.platform;
+      let cmd, args;
+      if (term) {
+        if (p === 'darwin') { cmd = 'open'; args = ['-a', 'Terminal', dir]; }
+        else if (p === 'win32') { cmd = 'cmd'; args = ['/c', 'start', 'cmd', '/K', 'cd', '/d', dir]; }
+        else { cmd = 'x-terminal-emulator'; args = ['--working-directory=' + dir]; } // Linux 盡力而為
+      } else {
+        if (p === 'darwin') { cmd = 'open'; args = [dir]; }
+        else if (p === 'win32') { cmd = 'explorer'; args = [dir.replace(/\//g, '\\')]; }
+        else { cmd = 'xdg-open'; args = [dir]; }
+      }
+      // execFile 不走 shell（無注入風險）；explorer/部分命令成功也回非 0，忽略錯誤只記日誌。
+      execFile(cmd, args, (err) => { if (err) log({ action: term ? 'open-terminal' : 'open-folder', error: err.message }); });
+      log({ action: term ? 'open-terminal' : 'open-folder', dir });
+      return json(res, 200, { ok: true, dir });
     }
     // 工作區累積的「五層經驗」（給 Wishboard 視覺化「它越用越懂你」——Claude Code 沒有的差異點）
     if (req.method === 'GET' && path === '/v1/workspaces/experience') {

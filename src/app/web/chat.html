@@ -976,7 +976,7 @@ body {
     
     <!-- 檔案列表 -->
     <section class="file-section" aria-label="工作區檔案">
-      <h3>📂 檔案 <button class="refresh-btn" id="files-refresh" type="button" onclick="refreshFiles()" title="刷新檔案列表" aria-label="刷新檔案列表">↻</button></h3>
+      <h3>📂 檔案 <button class="refresh-btn" id="files-refresh" type="button" onclick="refreshFiles()" title="刷新檔案列表" aria-label="刷新檔案列表">↻</button><button class="refresh-btn" id="open-folder-btn" type="button" onclick="openWsFolder()" title="在系統檔案管理器開啟工作目錄（本機模式）" aria-label="開啟資料夾" hidden>📂</button><button class="refresh-btn" id="open-term-btn" type="button" onclick="openWsTerminal()" title="在終端機開啟工作目錄（本機模式）" aria-label="開啟終端機" hidden>⌨</button></h3>
       <div id="file-breadcrumb" class="file-breadcrumb" aria-live="polite"></div>
       <div class="file-list" id="wbfiles" role="tree" aria-label="檔案列表"></div>
     </section>
@@ -1221,6 +1221,16 @@ function refreshFiles() {
   if (b) { b.classList.remove("spin"); void b.offsetWidth; b.classList.add("spin"); }
   loadFiles();
 }
+
+// 本機模式：在系統檔案管理器 / 終端機開啟目前工作目錄（服務跑在你本機才有意義；遠端會回 400）。
+async function openWsFolder() {
+  try { const r = await api("/v1/workspaces/open-folder?ws=" + encodeURIComponent(curSpace), { method: "POST" }).then((x) => x.json()); if (r && r.error) alert(r.error); } catch { /* 略 */ }
+}
+async function openWsTerminal() {
+  try { const r = await api("/v1/workspaces/open-terminal?ws=" + encodeURIComponent(curSpace), { method: "POST" }).then((x) => x.json()); if (r && r.error) alert(r.error); } catch { /* 略 */ }
+}
+// 只有本機模式顯示「開啟資料夾 / 終端機」（遠端部署沒意義）。
+if (window.__XITTO__ && window.__XITTO__.local) { const f = $("#open-folder-btn"), t = $("#open-term-btn"); if (f) f.hidden = false; if (t) t.hidden = false; }
 
 async function loadFiles() {
   const r = await api("/v1/workspaces/files?ws=" + encodeURIComponent(curSpace) + "&sub=" + encodeURIComponent(wbSub)).then((r) => r.json()).catch(() => ({ dirs: [], files: [] }));

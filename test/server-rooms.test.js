@@ -928,6 +928,15 @@ test('HTTP：會議室錄音 /audio → STT → 以成員身份發言（source:v
   } finally { srv.close(); stt.close(); rmSync(base, { recursive: true, force: true }); }
 });
 
+test('HTTP：/v1/workspaces/open-folder|open-terminal 遠端模式 → 400（防在伺服器上開資料夾）', async () => {
+  await withServer(async ({ url, H }) => {   // withServer 為非 local 模式
+    assert.equal((await fetch(url('/v1/workspaces/open-folder?ws=default'), { method: 'POST', headers: H })).status, 400, '遠端 open-folder → 400');
+    assert.equal((await fetch(url('/v1/workspaces/open-terminal?ws=default'), { method: 'POST', headers: H })).status, 400, '遠端 open-terminal → 400');
+    // 未認證 → 401（在 authed 閘門之後）
+    assert.equal((await fetch(url('/v1/workspaces/open-folder?ws=default'), { method: 'POST' })).status, 401, '無 token → 401');
+  });
+});
+
 async function withServer(fn) {
   const base = mkdtempSync(join(tmpdir(), 'xk-rsrv-'));
   const srv = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', baseDir: join(base, '.srv') });
