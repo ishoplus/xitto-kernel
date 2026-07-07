@@ -137,3 +137,60 @@ test('coding pack：4 個 LSP 工具皆註冊', () => {
   const names = pack.tools().map((t) => t.name);
   for (const n of ['lsp_diagnostics', 'lsp_definition', 'lsp_hover', 'lsp_symbols']) assert.ok(names.includes(n), `缺 ${n}`);
 });
+
+// ── 擴充：references / rename ──
+import { lspReferences, lspRename, applyTextEdits } from '../src/packs/shared/lsp.js';
+const REN_SRC = 'int foo(int a) {\n    return a;\n}\nint main(void) {\n    return foo(1);\n}\n';
+
+test('applyTextEdits：由後往前套用不位移', () => {
+  const edits = [
+    { range: { start: { line: 0, character: 4 }, end: { line: 0, character: 7 } }, newText: 'bar' },
+    { range: { start: { line: 4, character: 11 }, end: { line: 4, character: 14 } }, newText: 'bar' },
+  ];
+  const out = applyTextEdits(REN_SRC, edits);
+  assert.match(out, /int bar\(int a\)/);
+  assert.match(out, /return bar\(1\)/);
+  assert.ok(!out.includes('foo'));
+});
+
+test('lspReferences（mock）：回引用清單（含宣告）', async () => {
+  await withCFile(async (f, dir) => {
+    const r = await lspReferences(f, dir, 1, 5, { timeoutMs: 4000, servers: MOCK_C });
+    assert.equal(r.ok, true);
+    assert.equal(r.references.length, 2);
+    assert.equal(r.references[0].line, 1);
+  });
+});
+
+test('lspRename（mock）→ applyTextEdits：完整重命名管線', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ren-'));
+  try {
+    const f = join(dir, 'm.c'); writeFileSync(f, REN_SRC);
+    const r = await lspRename(f, dir, 1, 5, 'bar', { timeoutMs: 4000, servers: MOCK_C });
+    assert.equal(r.ok, true);
+    assert.equal(r.changes.length, 1);
+    const out = applyTextEdits(REN_SRC, r.changes[0].edits);
+    assert.match(out, /int bar\(int a\)/);
+    assert.ok(!out.includes('foo'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('lsp_rename 工具：非法 newName / 不支援副檔名 → 擋下', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ren2-'));
+  try {
+    writeFileSync(join(dir, 'x.c'), 'int foo(){return 0;}\n');
+    writeFileSync(join(dir, 'a.txt'), 'hi');
+    const tool = createCodingPack({ cwd: dir }).tools().find((t) => t.name === 'lsp_rename');
+    assert.ok(tool);
+    const bad = JSON.parse((await tool.execute('1', { path: 'x.c', line: 1, col: 5, newName: '1bad name' })).content[0].text);
+    assert.match(bad.error, /合法識別字/);
+    const uns = JSON.parse((await tool.execute('2', { path: 'a.txt', line: 1, col: 1, newName: 'ok' })).content[0].text);
+    assert.match(uns.error, /不支援/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('coding pack：references / rename 工具已註冊', () => {
+  const names = createCodingPack({ cwd: '/tmp' }).tools().map((t) => t.name);
+  assert.ok(names.includes('lsp_references'));
+  assert.ok(names.includes('lsp_rename'));
+});

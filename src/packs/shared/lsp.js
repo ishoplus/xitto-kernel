@@ -7,7 +7,7 @@
 // server 命令來自固定白名單（依副檔名），非使用者提供的任意命令——不成為任意執行的破口。
 import { spawn, spawnSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 
 // ── ① 線協議：Content-Length 框架 ──
 export function encodeMessage(obj) {
@@ -159,6 +159,8 @@ function reqTimeout(client, method, params, ms) {
   });
 }
 const uriToPath = (u) => { try { return u && u.startsWith('file:') ? fileURLToPath(u) : (u || ''); } catch { return u || ''; } };
+// 真實路徑（去符號連結）——僅用於「去重比對」，回傳仍保留 server 原始路徑（與 cwd 同形，within 才不誤判）。
+const realOf = (p) => { try { return realpathSync(p); } catch { return p; } };
 const pos1 = (r) => ({ line: (r?.start?.line ?? 0) + 1, col: (r?.start?.character ?? 0) + 1 });
 
 // LSP position 為 0-based；工具對使用者用 1-based，這裡轉換。
@@ -218,6 +220,55 @@ export async function lspSymbols(absPath, cwd, opts = {}) {
     };
     walk(res, 0);
     return { ok: true, symbols: out };
+  } catch (e) { return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) }; }
+  finally { ses.client.shutdown(); }
+}
+
+// 找引用（含宣告）：回 { ok, references:[{file,line,col}] }。line/col 為 1-based。
+export async function lspReferences(absPath, cwd, line, col, opts = {}) {
+  const ses = await openSession(absPath, cwd, opts);
+  if (!ses.ok) return ses;
+  try {
+    const res = await reqTimeout(ses.client, 'textDocument/references', { textDocument: { uri: ses.uri }, position: toLspPos(line, col), context: { includeDeclaration: true } }, opts.timeoutMs || 8000);
+    const arr = res == null ? [] : (Array.isArray(res) ? res : [res]);
+    const seen = new Set();
+    const references = arr.map((loc) => ({ file: uriToPath(loc.uri), ...pos1(loc.range) }))
+      .filter((r) => { const k = `${realOf(r.file)}:${r.line}:${r.col}`; if (seen.has(k)) return false; seen.add(k); return true; }); // 去重（含符號連結別名 /var vs /private/var）
+    return { ok: true, references };
+  } catch (e) { return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) }; }
+  finally { ses.client.shutdown(); }
+}
+
+// WorkspaceEdit → 統一成 [{ uri, file, edits:[TextEdit] }]（支援 changes 與 documentChanges 兩種形態）。
+function normalizeWorkspaceEdit(we) {
+  if (!we) return [];
+  const byKey = new Map(); // 依「真實路徑」去重：server 可能同時回 changes 與 documentChanges，或用符號連結別名 → 避免同檔重複套用
+  const add = (uri, edits) => { const file = uriToPath(uri); const k = realOf(file); if (uri && !byKey.has(k)) byKey.set(k, { uri, file, edits: edits || [] }); };
+  if (we.changes) for (const [uri, edits] of Object.entries(we.changes)) add(uri, edits);
+  if (Array.isArray(we.documentChanges)) for (const dc of we.documentChanges) if (dc && dc.textDocument && Array.isArray(dc.edits)) add(dc.textDocument.uri, dc.edits);
+  return [...byKey.values()];
+}
+
+// 把一組 TextEdit 套到文字上。以字元偏移由後往前套（避免前面的編輯位移後面的位置）。
+// 註：LSP character 以 UTF-16 code unit 計；此處以 JS 字串索引處理（ASCII/BMP 識別字正確）。
+export function applyTextEdits(text, edits) {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
+  const off = (line, ch) => (starts[line] ?? text.length) + ch;
+  const list = (edits || []).map((e) => ({ s: off(e.range.start.line, e.range.start.character), e: off(e.range.end.line, e.range.end.character), t: e.newText }))
+    .sort((a, b) => b.s - a.s || b.e - a.e);
+  let out = text;
+  for (const ed of list) out = out.slice(0, ed.s) + ed.t + out.slice(ed.e);
+  return out;
+}
+
+// 重新命名符號：回 { ok, changes:[{uri,file,edits}] }（未套用；由呼叫端在沙箱內套 applyTextEdits）。
+export async function lspRename(absPath, cwd, line, col, newName, opts = {}) {
+  const ses = await openSession(absPath, cwd, opts);
+  if (!ses.ok) return ses;
+  try {
+    const res = await reqTimeout(ses.client, 'textDocument/rename', { textDocument: { uri: ses.uri }, position: toLspPos(line, col), newName: String(newName) }, opts.timeoutMs || 8000);
+    return { ok: true, changes: normalizeWorkspaceEdit(res) };
   } catch (e) { return { ok: false, reason: 'LSP 執行失敗：' + (e.message || String(e)) }; }
   finally { ses.client.shutdown(); }
 }

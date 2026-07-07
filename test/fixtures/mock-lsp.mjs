@@ -29,6 +29,19 @@ process.stdin.on('data', (chunk) => {
         selectionRange: { start: { line: 0, character: 9 }, end: { line: 0, character: 12 } },
         children: [{ name: 'bar', kind: 13, range: { start: { line: 1, character: 2 }, end: { line: 1, character: 5 } }, selectionRange: { start: { line: 1, character: 2 }, end: { line: 1, character: 5 } } }],
       }]);
+    } else if (msg.method === 'textDocument/references') {
+      const uri = msg.params.textDocument.uri;
+      reply(msg.id, [
+        { uri, range: { start: { line: 0, character: 4 }, end: { line: 0, character: 7 } } },
+        { uri, range: { start: { line: 4, character: 11 }, end: { line: 4, character: 14 } } },
+      ]);
+    } else if (msg.method === 'textDocument/rename') {
+      const uri = msg.params.textDocument.uri;
+      const nn = msg.params.newName;
+      reply(msg.id, { changes: { [uri]: [
+        { range: { start: { line: 0, character: 4 }, end: { line: 0, character: 7 } }, newText: nn },
+        { range: { start: { line: 4, character: 11 }, end: { line: 4, character: 14 } }, newText: nn },
+      ] } });
     } else if (msg.method === 'exit') {
       process.exit(0);
     }

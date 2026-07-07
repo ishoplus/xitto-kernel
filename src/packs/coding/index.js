@@ -3,7 +3,7 @@
 // read-before-edit 守衛與 read 工具透過閉包共享 readFiles 狀態，故能真實生效。
 // 對應 docs/05-example-packs.md「A. coding pack」。
 import { withBaseRules } from '../shared/prompt.js';
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync, writeFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
 import { createBackgroundTools } from '../../kernel/bg.js';
@@ -12,7 +12,7 @@ import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 import { scanCode, sortFindings } from '../shared/security-scan.js';
 import { scanQuality, langOf } from '../shared/code-quality.js';
-import { lspDiagnostics, lspDefinition, lspHover, lspSymbols, serverFor, hasCommand } from '../shared/lsp.js';
+import { lspDiagnostics, lspDefinition, lspHover, lspSymbols, lspReferences, lspRename, applyTextEdits, serverFor, hasCommand } from '../shared/lsp.js';
 
 const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s) }] });
 
@@ -293,9 +293,50 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     },
   };
 
+  const lspRefTool = {
+    name: 'lsp_references', label: '找引用', readOnly: true,
+    description: '用 language server 找某位置符號的所有「引用」（含宣告）。懂範圍/同名不同義，比 grep 準。改動前評估影響面很有用。path 相對路徑，line/col 為 1-based。',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, line: { type: 'number' }, col: { type: 'number' } }, required: ['path', 'line', 'col'] },
+    execute: async (_id, { path, line, col }) => {
+      const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      const e = lspErr(path); if (e) return e;
+      const r = await lspReferences(p, cwd, line, col);
+      if (!r.ok) return txt({ ok: false, path, reason: r.reason, ...(r.install ? { hint: `安裝 ${r.install} 後即可使用` } : {}) });
+      return txt({ ok: true, count: r.references.length, references: r.references.slice(0, 200) });
+    },
+  };
+  const lspRenameTool = {
+    name: 'lsp_rename', label: '重命名符號', mutating: true,
+    description: '用 language server 把某位置的符號在整個工作區安全重命名（懂範圍/同名不同義，比 sed/find-replace 準）。會實際改檔（僅工作目錄內、逃逸的檔會跳過），回改了哪些檔。path/line/col 為 1-based，newName 為新名稱（合法識別字）。',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, line: { type: 'number' }, col: { type: 'number' }, newName: { type: 'string' } }, required: ['path', 'line', 'col', 'newName'] },
+    execute: async (_id, { path, line, col, newName }) => {
+      const p = abs(path); if (!existsSync(p)) return txt({ error: '檔案不存在', path });
+      if (!/^[A-Za-z_$][\w$]*$/.test(String(newName || ''))) return txt({ error: 'newName 不是合法識別字', newName });
+      const e = lspErr(path); if (e) return e;
+      const r = await lspRename(p, cwd, line, col, newName);
+      if (!r.ok) return txt({ ok: false, path, reason: r.reason, ...(r.install ? { hint: `安裝 ${r.install} 後即可使用` } : {}) });
+      if (!r.changes.length) return txt({ ok: true, changed: [], note: '此位置無可重命名的符號，或無變更。' });
+      // 兩段式：先算好每個檔的新內容（僅工作目錄內），再一次寫入（縮小部分失敗的窗口）。
+      // 比對「真實路徑」判斷是否在 cwd 內——server 可能回符號連結別名（/var vs /private/var），
+      // 直接比字串會誤判逃逸。
+      const realCwd = (() => { try { return realpathSync(cwd); } catch { return cwd; } })();
+      const plans = []; const skipped = [];
+      for (const ch of r.changes) {
+        let real; try { real = realpathSync(ch.file); } catch { skipped.push(ch.file); continue; }
+        const rel = relative(realCwd, real);
+        if (rel.startsWith('..') || isAbsolute(rel)) { skipped.push(rel); continue; } // 逃逸 cwd → 跳過
+        let text; try { text = readFileSync(real, 'utf8'); } catch { skipped.push(rel); continue; }
+        plans.push({ file: real, rel, next: applyTextEdits(text, ch.edits), edits: ch.edits.length });
+      }
+      const changed = [];
+      for (const pl of plans) { try { writeFileSync(pl.file, pl.next); changed.push({ file: pl.rel, edits: pl.edits }); } catch (err) { skipped.push(pl.rel); } }
+      return txt({ ok: true, renamed: newName, changed, ...(skipped.length ? { skipped } : {}) });
+    },
+  };
+
   return {
     name: 'coding',
-    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool, lspDefTool, lspHoverTool, lspSymbolsTool],
+    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool, lspDefTool, lspHoverTool, lspSymbolsTool, lspRefTool, lspRenameTool],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）
