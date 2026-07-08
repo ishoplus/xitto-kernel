@@ -163,7 +163,7 @@ test('kernel：真實 runVerify — verify 通過(true)才新增，失敗(false)
     // 真實在沙箱外跑 `true` → exit 0 → 新增
     const ok = JSON.parse((await save.execute('t', { name: 'release', goal: '發版 SOP', body: 'bump→test→tag', verify: 'true' })).content[0].text);
     assert.equal(ok.saved, 'release');
-    assert.deepEqual(k.skills.list(), [{ name: 'release', desc: '發版 SOP', used: 0, stale: false }]);
+    assert.deepEqual(k.skills.list(), [{ name: 'release', desc: '發版 SOP', used: 0, stale: false, scope: 'workspace' }]);
     // `false` → exit 1 → 拒絕
     const bad = JSON.parse((await save.execute('t', { name: 'nope', goal: 'g', body: 'b', verify: 'false' })).content[0].text);
     assert.match(bad.error, /驗證未通過/);
@@ -197,5 +197,56 @@ test('capFilter：環境不支援的技能不列、不可載入', async () => {
     // 被隱藏的技能連 skill 工具也載不到
     const out = JSON.parse((await s.tool.execute('t', { name: 'browse' })).content[0].text);
     assert.match(out.error, /找不到技能/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('作用域分級：全域 + 工作區合併，同名工作區覆蓋；read/remove 命中來源檔', async () => {
+  const dir = tmp('sk-scope-');
+  try {
+    const G = join(dir, 'global'), W = join(dir, 'ws');
+    mkdirSync(G, { recursive: true }); mkdirSync(W, { recursive: true });
+    writeFileSync(join(G, 'deploy.md'), '---\ndescription: 全域部署\n---\n# g\nglobal steps');
+    writeFileSync(join(G, 'lint.md'), '---\ndescription: 全域 lint\n---\n# lint');
+    writeFileSync(join(W, 'deploy.md'), '---\ndescription: 專案部署\n---\n# w\nworkspace steps'); // 覆蓋全域同名
+    writeFileSync(join(W, 'test.md'), '---\ndescription: 專案測試\n---\n# test');
+
+    const s = createSkills(W, { globalDir: G });
+    // 合併：deploy（工作區覆蓋）、lint（全域）、test（工作區）
+    assert.deepEqual(s.list().map((x) => `${x.name}:${x.scope}`).sort(), ['deploy:workspace', 'lint:global', 'test:workspace']);
+    // prompt 標「全域」
+    assert.match(s.promptSection(), /lint：全域 lint（全域）/);
+    // read 命中來源檔：deploy→工作區版、lint→全域版
+    assert.match(s.read('deploy'), /workspace steps/);
+    assert.ok(s.read('lint'));
+    // 載入 deploy → 使用戳記寫進「工作區」來源檔，不動全域
+    await s.tool.execute('t', { name: 'deploy' });
+    assert.match(readFileSync(join(W, 'deploy.md'), 'utf8'), /usedCount: 1/);
+    assert.doesNotMatch(readFileSync(join(G, 'deploy.md'), 'utf8'), /usedCount/);
+    // remove lint → 刪全域來源檔
+    assert.deepEqual(s.remove('lint'), { removed: 'lint', scope: 'global' });
+    assert.equal(existsSync(join(G, 'lint.md')), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('skill_save scope：預設落工作區、scope=global 落全域、無全域目錄則安全回落', async () => {
+  const dir = tmp('sk-save-scope-');
+  try {
+    const G = join(dir, 'global'), W = join(dir, 'ws');
+    mkdirSync(W, { recursive: true });
+    const s = createSkills(W, { globalDir: G, verifyRunner: fakeRunner });
+    const save = s.tools.find((t) => t.name === 'skill_save');
+    // 預設 → 工作區
+    const r1 = await call(save, { name: 'proj-build', goal: '本專案構建', body: 'npm run build', verify: 'true' });
+    assert.equal(r1.scope, 'workspace');
+    assert.ok(existsSync(join(W, 'proj-build.md')) && !existsSync(join(G, 'proj-build.md')));
+    // scope=global → 全域
+    const r2 = await call(save, { name: 'mkqr', goal: '生成 QR', body: 'qrencode', verify: 'true', scope: 'global' });
+    assert.equal(r2.scope, 'global');
+    assert.ok(existsSync(join(G, 'mkqr.md')));
+    // 無 globalDir + scope=global → 回落工作區並提示
+    const s2 = createSkills(W, { verifyRunner: fakeRunner });
+    const r3 = await call(s2.tools.find((t) => t.name === 'skill_save'), { name: 'foo', goal: 'g', body: 'b', verify: 'true', scope: 'global' });
+    assert.equal(r3.scope, 'workspace');
+    assert.match(r3.hint, /未配置全域技能目錄/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

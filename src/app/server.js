@@ -13,7 +13,7 @@ import { createKernel } from '../kernel/index.js';
 import { cacheRetentionFor } from '../kernel/provider.js';
 import { createMemory } from '../kernel/memory.js';
 import { createEpisodes } from '../kernel/episodes.js';
-import { createSkills } from '../kernel/skills.js';
+import { createSkills, globalSkillsDir } from '../kernel/skills.js';
 import { createPlaybook } from '../kernel/playbook.js';
 import { fileAllowStore } from '../kernel/security/allow-store.js';
 import { loadModel, buildModel, providersConfigPath, loadProvidersConfig } from './providers.js';
@@ -185,7 +185,7 @@ export function readWorkspaceExperience(wsDir) {
     const d = join(root, pack); let had = false;
     try { for (const m of createMemory(join(d, 'memory.md')).list()) { had = true; if (!memSeen.has(m)) { memSeen.add(m); out.memory.push(m); } } } catch { /* 略 */ }
     try { for (const e of createPlaybook(join(d, 'playbook.md')).list()) { out.playbook.push({ ...e, pack }); had = true; } } catch { /* 略 */ }
-    try { for (const s of createSkills(join(d, 'skills')).list()) { out.skills.push({ ...s, pack }); had = true; } } catch { /* 略 */ }
+    try { for (const s of createSkills(join(d, 'skills'), { globalDir: globalSkillsDir(pack) }).list()) { out.skills.push({ ...s, pack }); had = true; } } catch { /* 略 */ }
     try { for (const ep of createEpisodes(join(d, 'episodes.jsonl')).list(50)) { out.episodes.push({ ...ep, pack }); had = true; } } catch { /* 略 */ }
     try { const t = fileAllowStore(join(d, 'allow.json')).list(); t.tools.forEach((x) => trustTools.add(x)); t.bash.forEach((x) => trustBash.add(x)); if (t.tools.length || t.bash.length) had = true; } catch { /* 略 */ }
     if (had) out.packs.push(pack);
@@ -1858,7 +1858,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (!pack || !PACKS[pack]) return json(res, 400, { error: `未知 pack「${pack}」` });
       if (!name) return json(res, 400, { error: '缺 name' });
       const dir = join(workspaceDir(baseDir, url.searchParams.get('ws') || 'default', local), '.xitto-kernel', pack, 'skills');
-      const body = createSkills(dir).read(name);
+      const body = createSkills(dir, { globalDir: globalSkillsDir(pack) }).read(name);
       return body == null ? json(res, 404, { error: '找不到技能', name, pack }) : json(res, 200, { name, pack, body });
     }
     if (req.method === 'POST' && path === '/v1/skills/remove') {
@@ -1867,7 +1867,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (!body.pack || !PACKS[body.pack]) return json(res, 400, { error: `未知 pack「${body.pack}」` });
       if (!body.name) return json(res, 400, { error: '缺 name' });
       const dir = join(workspaceDir(baseDir, body.ws || 'default', local), '.xitto-kernel', body.pack, 'skills');
-      const r = createSkills(dir).remove(body.name);
+      const r = createSkills(dir, { globalDir: globalSkillsDir(body.pack) }).remove(body.name);
       if (r.error) return json(res, 404, r);
       log({ action: 'skill-remove', pack: body.pack, name: r.removed });
       return json(res, 200, { ok: true, ...r });

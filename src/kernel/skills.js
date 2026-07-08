@@ -5,6 +5,11 @@
 // 技能是 markdown 指令(非可執行碼),自寫安全——名稱 slug 化防穿越,內容只是日後注入的提示文字。
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
+
+// 全域技能目錄（跨專案共用，對標 Claude Code 的 ~/.claude/skills）：~/.xitto-code/skills/<pack>。
+// 可用 XITTO_SKILLS_DIR 覆寫根路徑。工作區技能仍在 <cwd>/.xitto-kernel/<pack>/skills（更具體、同名覆蓋全域）。
+export const globalSkillsDir = (pack) => join(process.env.XITTO_SKILLS_DIR || join(homedir(), '.xitto-code', 'skills'), pack || 'default');
 
 const txt = (o) => ({ content: [{ type: 'text', text: typeof o === 'string' ? o : JSON.stringify(o) }] });
 
@@ -41,33 +46,42 @@ const firstDesc = (body) => {
 const slug = (s) => String(s || '').trim().toLowerCase()
   .replace(/[^a-z0-9一-龥_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
 
-export function createSkills(dir, { verifyRunner, capFilter } = {}) {
-  const fileOf = (name) => join(dir, `${name}.md`);
+// dir＝工作區技能目錄（<cwd>/.xitto-kernel/<pack>/skills）；globalDir＝可選的跨專案全域目錄。
+// 讀取時「全域→工作區」合併，同名以工作區為準（越具體越優先，對標 CC 的作用域分級）。
+// 寫入（skill_save）一律落工作區——結晶的是「這個專案摸出的流程」；patch/remove/read 依技能實際來源檔。
+export function createSkills(dir, { verifyRunner, capFilter, globalDir } = {}) {
+  const fileOf = (name) => join(dir, `${name}.md`); // 新存技能一律進工作區
   // capFilter(fm)：依環境能力篩技能（frontmatter 可標 `requires: cap,…` 或 `env: local`）。
   // 不通過的技能不列入 → 不出現在 prompt、skill 也載不到 → 錯環境下模型看不到無效技能。
   const allowFm = (fm) => (typeof capFilter !== 'function') || capFilter(fm);
-  const readAll = () => {
-    const out = [];
-    if (existsSync(dir)) {
-      for (const f of readdirSync(dir).filter((x) => x.endsWith('.md'))) {
-        try {
-          const md = readFileSync(join(dir, f), 'utf8');
-          const { fm } = splitFront(md);
-          if (!allowFm(fm)) continue; // 環境不支援 → 略過此技能
-          out.push({ name: f.replace(/\.md$/, ''), desc: firstDesc(md), body: md, used: Number(fm.usedCount) || 0, stale: fm.stale === 'true' });
-        } catch { /* 略 */ }
-      }
+  const readInto = (d, scope, byName) => {
+    if (!d || !existsSync(d)) return;
+    for (const f of readdirSync(d).filter((x) => x.endsWith('.md'))) {
+      try {
+        const md = readFileSync(join(d, f), 'utf8');
+        const { fm } = splitFront(md);
+        if (!allowFm(fm)) continue; // 環境不支援 → 略過此技能
+        const name = f.replace(/\.md$/, '');
+        byName.set(name, { name, desc: firstDesc(md), body: md, used: Number(fm.usedCount) || 0, stale: fm.stale === 'true', scope, file: join(d, f) });
+      } catch { /* 略 */ }
     }
-    return out;
   };
+  const readAll = () => {
+    const byName = new Map();
+    readInto(globalDir, 'global', byName);   // 先讀全域
+    readInto(dir, 'workspace', byName);        // 工作區同名覆蓋（更具體）
+    return [...byName.values()];
+  };
+  // patch 依技能實際來源檔（origin）：用過的全域技能更新全域檔、工作區技能更新工作區檔；未知名回落工作區。
   const patch = (name, p) => {
-    const file = fileOf(name);
+    const cur = readAll().find((s) => s.name === name);
+    const file = cur ? cur.file : fileOf(name);
     if (!existsSync(file)) return false;
     try { const { fm, body } = splitFront(readFileSync(file, 'utf8')); Object.assign(fm, p); writeFileSync(file, joinFront(fm, body)); return true; } catch { return false; }
   };
 
   let skills = readAll(); // 啟動快照（供 system prompt 列名用）
-  const label = (s) => `- ${s.name}：${s.desc}${s.used ? `（用過 ${s.used} 次）` : ''}${s.stale ? ' ⚠ 已失效待修' : ''}`;
+  const label = (s) => `- ${s.name}：${s.desc}${s.scope === 'global' ? '（全域）' : ''}${s.used ? `（用過 ${s.used} 次）` : ''}${s.stale ? ' ⚠ 已失效待修' : ''}`;
 
   const promptSection = () => (skills.length
     ? '\n\n# 可用技能（需要時用 skill 按名載入全文；摸出可重複流程可用 skill_save 結晶；⚠ 失效的先別用,可 skills_check 複查）\n' + skills.map(label).join('\n')
@@ -92,7 +106,8 @@ export function createSkills(dir, { verifyRunner, capFilter } = {}) {
   const saveTool = {
     name: 'skill_save', label: '結晶技能', readOnly: true,
     description: '把一套你摸出來、會重複用到的流程「結晶」成可複用技能。政策：每個技能必須附 (1) goal 明確目標 (2) verify 一條可驗證它有效的指令——verify 會被實際執行,通過(exit 0)才會新增,否則拒絕並回傳輸出讓你修正。確保結晶的是「已驗證的成功」。'
-      + '可選附 (3) script：一段可執行腳本——日後用 skill_run 直接「確定性重跑」，不必每次重推步驟（交付「能力」而非一次性成品）。與 playbook 的差別：playbook 是專案事實性 know-how，skill 是可複用且已驗證的操作流程/SOP。',
+      + '可選附 (3) script：一段可執行腳本——日後用 skill_run 直接「確定性重跑」，不必每次重推步驟（交付「能力」而非一次性成品）。與 playbook 的差別：playbook 是專案事實性 know-how，skill 是可複用且已驗證的操作流程/SOP。'
+      + ' 作用域 scope（預設 workspace）：若流程綁定「這個專案」（用到它的 build/test/deploy 指令、目錄結構、專屬慣例或設定）→ workspace；若是「與任何專案無關、換個專案照樣能用」的通用手法/工具操作（如「用 ffmpeg 壓縮影片」「產生 QR code」）→ global，之後所有專案都看得到。拿不準就用預設 workspace（較安全，只影響本專案；日後確定通用可再存一次為 global）。',
     parameters: {
       type: 'object',
       properties: {
@@ -102,10 +117,11 @@ export function createSkills(dir, { verifyRunner, capFilter } = {}) {
         verify: { type: 'string', description: '一條能驗證此技能/成果有效的 shell 指令（須 exit 0；如 `npm test`、`test -f dist/app.js`）。會被實際執行。' },
         script: { type: 'string', description: '可選；一段可執行 shell 腳本，封裝這個可重複流程。存檔後可用 skill_run <name> 直接重跑（確定性、免 LLM）。' },
         description: { type: 'string', description: '可選；省略則用 goal 當簡述' },
+        scope: { type: 'string', enum: ['workspace', 'global'], description: '作用域：workspace＝只此專案（預設）；global＝跨所有專案通用。判準見工具說明。' },
       },
       required: ['name', 'goal', 'body', 'verify'],
     },
-    execute: async (_id, { name, goal, body, verify, script, description }) => {
+    execute: async (_id, { name, goal, body, verify, script, description, scope }) => {
       const nm = slug(name);
       if (!nm) return txt({ error: 'name 不合法（需含中英數）' });
       if (!goal || !String(goal).trim()) return txt({ error: '缺 goal：每個技能必須有明確目標' });
@@ -124,12 +140,24 @@ export function createSkills(dir, { verifyRunner, capFilter } = {}) {
         `---\ndescription: ${desc}\ngoal: ${String(goal).replace(/\s+/g, ' ').trim()}\nverified: true\nverifiedAt: ${now}${hasScript ? '\nexecutable: true' : ''}\n---\n\n` +
         `## 目標\n${String(goal).trim()}\n\n${String(body).trim()}\n\n## 驗證（已通過 exit 0）\n\`\`\`sh\n${String(verify).trim()}\n\`\`\`\n` +
         (hasScript ? `\n## 腳本（可執行）\n\`\`\`sh\n${String(script).trim()}\n\`\`\`\n` : '');
+      // 作用域路由：global 且已配置全域目錄 → 落全域；否則落工作區（含 global 但環境沒配全域目錄時安全回落）。
+      const wantGlobal = scope === 'global';
+      const useGlobal = wantGlobal && !!globalDir;
+      const targetDir = useGlobal ? globalDir : dir;
+      const targetFile = join(targetDir, `${nm}.md`);
       try {
-        mkdirSync(dir, { recursive: true });
-        const existed = existsSync(fileOf(nm));
-        writeFileSync(fileOf(nm), content);
+        mkdirSync(targetDir, { recursive: true });
+        const existed = existsSync(targetFile);
+        // 存工作區時若同名全域存在＝覆蓋全域；存全域時若同名工作區存在＝該工作區版仍會蓋掉此全域版。
+        const shadowsGlobal = !useGlobal && !existed && !!globalDir && existsSync(join(globalDir, `${nm}.md`));
+        const shadowedByWs = useGlobal && existsSync(join(dir, `${nm}.md`));
+        writeFileSync(targetFile, content);
         skills = readAll();
-        return txt({ [existed ? 'updated' : 'saved']: nm, verified: true, executable: !!hasScript, verifyOutput: vr.output, hint: `驗證通過,已結晶為技能${hasScript ? '（含可執行腳本，可用 skill_run 直接重跑）' : ''}；本 session 可用 skill 按名載入。` });
+        const savedScope = useGlobal ? 'global' : 'workspace';
+        const note = (wantGlobal && !globalDir) ? '（此環境未配置全域技能目錄，已改存工作區）'
+          : shadowsGlobal ? '（注意：此工作區版本覆蓋了同名全域技能）'
+          : shadowedByWs ? '（注意：本工作區已有同名技能，載入時仍以工作區版為準）' : '';
+        return txt({ [existed ? 'updated' : 'saved']: nm, scope: savedScope, verified: true, executable: !!hasScript, verifyOutput: vr.output, hint: `驗證通過,已結晶為${savedScope === 'global' ? '全域' : '工作區'}技能${hasScript ? '（含可執行腳本，可用 skill_run 直接重跑）' : ''}；本 session 可用 skill 按名載入。${note}` });
       } catch (e) { return txt({ error: e.message }); }
     },
   };
@@ -178,24 +206,27 @@ export function createSkills(dir, { verifyRunner, capFilter } = {}) {
     },
   };
 
+  // 刪除依來源檔：可刪工作區也可刪全域（刪全域會影響所有專案，UI 會標「全域」提示）。
   const remove = (name) => {
-    const nm = slug(name); const file = fileOf(nm);
+    const nm = slug(name);
+    const cur = readAll().find((s) => s.name === nm || s.name === name);
+    const file = cur ? cur.file : fileOf(nm);
     if (!existsSync(file)) return { error: '找不到技能', name };
-    try { unlinkSync(file); skills = readAll(); return { removed: nm }; } catch (e) { return { error: e.message }; }
+    try { unlinkSync(file); skills = readAll(); return { removed: nm, scope: cur ? cur.scope : 'workspace' }; } catch (e) { return { error: e.message }; }
   };
 
-  // 讀單一技能完整 markdown（供 UI「查看內容」）；name 經 slug 化防穿越。
+  // 讀單一技能完整 markdown（供 UI「查看內容」）；依來源檔（工作區優先，否則全域）。
   const read = (name) => {
-    const file = fileOf(slug(name));
-    if (!existsSync(file)) return null;
-    try { return readFileSync(file, 'utf8'); } catch { return null; }
+    const cur = readAll().find((s) => s.name === slug(name) || s.name === name);
+    if (!cur || !existsSync(cur.file)) return null;
+    try { return readFileSync(cur.file, 'utf8'); } catch { return null; }
   };
 
   return {
     skills, promptSection,
     tool: loadTool,
     tools: [loadTool, saveTool, checkTool, runSkillTool],
-    list: () => readAll().map(({ name, desc, used, stale }) => ({ name, desc, used, stale })),
+    list: () => readAll().map(({ name, desc, used, stale, scope }) => ({ name, desc, used, stale, scope })),
     check, remove, read,
     reload: () => { skills = readAll(); return skills; },
   };

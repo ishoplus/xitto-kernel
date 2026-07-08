@@ -20,7 +20,7 @@ import { extractFacts } from './extract.js';
 import { createTodo } from './todo.js';
 import { createSpawnTool, createMapTool } from './subagent.js';
 import { createAgents } from './agents.js';
-import { createSkills } from './skills.js';
+import { createSkills, globalSkillsDir } from './skills.js';
 import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
 import { maybeCompact, resolveCompactionSettings } from './compaction.js';
 import { checkGoal, normalizeFeedback } from './goal-loop.js';
@@ -264,7 +264,7 @@ export function createKernel(pack, config = {}) {
     if (r.error) return { ok: false, code: null, output: (output + ' ' + r.error.message).trim() };
     return { ok: r.status === 0, code: r.status, output: output || '(no output)' };
   };
-  const skills = createSkills(join(dataDir, 'skills'), { verifyRunner: runVerify, capFilter: envAllows }); // 漸進揭露 + 結晶（須驗證）；capFilter：環境不支援的技能不列不載
+  const skills = createSkills(join(dataDir, 'skills'), { verifyRunner: runVerify, capFilter: envAllows, globalDir: globalSkillsDir(pack.name) }); // 漸進揭露 + 結晶（須驗證）；capFilter：環境不支援的技能不列不載；globalDir：跨專案全域技能（工作區同名覆蓋）
   const agents = createAgents(join(dataDir, 'agents')); // 自訂 agent 類型（spawn_agent/spawn_agents 的 agentType）
 
   // 澄清通道：app 提供 askUser 才有 ask_user 工具（結果導向:自主完成,只在非問不可時才打斷使用者）。
