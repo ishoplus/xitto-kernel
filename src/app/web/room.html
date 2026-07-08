@@ -849,7 +849,11 @@ async function loadFiles() {
   const r = await api(`/v1/rooms/${roomId}/files?sub=` + encodeURIComponent(wbSub)).then((r) => r.json()).catch(() => ({ dirs: [], files: [] }));
   $("#file-breadcrumb").textContent = wbSub ? "📂 " + wbSub : "";
   let html = wbSub ? `<button class="file-up" onclick="wbUp()" type="button">⬆ 上一層</button>` : "";
-  html += (r.dirs || []).map((d) => `<button class="file-row" onclick="wbNav('${encodeURIComponent((wbSub ? wbSub + "/" : "") + d)}')" type="button">📁 <span class="name">${esc(d)}</span>/</button>`).join("");
+  html += (r.dirs || []).map((d) => {
+    // 根目錄的 tmp 是 agent 暫存區：淡化 + 標「暫存」，但可點進去撈被誤丟的成品（後端 listDir 已放行 tmp）。
+    const isTmp = !wbSub && d === "tmp";
+    return `<button class="file-row"${isTmp ? ' style="opacity:.7"' : ''} onclick="wbNav('${encodeURIComponent((wbSub ? wbSub + "/" : "") + d)}')" type="button" title="${isTmp ? '暫存資料夾：agent 的中間／草稿檔放這裡（可能被清理）' : ''}">${isTmp ? "🗂" : "📁"} <span class="name">${esc(d)}</span>/${isTmp ? ' <span style="opacity:.5;font-size:.85em">（暫存）</span>' : ''}</button>`;
+  }).join("");
   html += (r.files || []).map((f) => { const full = (wbSub ? wbSub + "/" : "") + f.name; return `<button class="file-row" onclick="wbView('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button"><span class="name">📄 ${esc(f.name)}</span><span class="size">${fmtSize(f.size)}</span></button>`; }).join("");
   if (!(r.dirs || []).length && !(r.files || []).length) html += `<div class="empty">（${wbSub ? "空資料夾" : "還沒有檔案"}）</div>`;
   $("#wbfiles").innerHTML = html;

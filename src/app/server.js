@@ -143,6 +143,9 @@ export function ensureWorkdir(dir) {
 
 // 列工作區檔案（給「工作台」分頁）：遞迴,排除內部目錄,回 [{path,size,mtime}]。
 const SKIP_WS = new Set(['.xitto-kernel', 'node_modules', '.git', 'tmp', '.swebench-repos']);
+// UI 逐層瀏覽的隱藏集：只藏內部管線目錄，但「顯示」tmp（暫存）——讓成品被誤丟進 tmp 時仍可點進去撈回，
+// 根目錄又不被 tmp 內雜物淹沒（tmp 只是一個可折疊的資料夾項）。成品偵測 SKIP_SCAN 仍排除 tmp。
+const BROWSE_HIDDEN = new Set(['.xitto-kernel', 'node_modules', '.git', '.swebench-repos']);
 export function listWorkspaceFiles(dir, base = dir, out = [], depth = 0) {
   if (depth > 8 || out.length > 2000) return out;
   let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
@@ -163,7 +166,7 @@ export function listDir(wsDir, sub) {
   const dirs = [], files = [];
   let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return null; }
   for (const e of entries) {
-    if (SKIP_WS.has(e.name)) continue;
+    if (BROWSE_HIDDEN.has(e.name)) continue;
     if (e.isDirectory()) dirs.push(e.name);
     else if (e.isFile()) { try { const s = statSync(join(dir, e.name)); files.push({ name: e.name, size: s.size, mtime: s.mtimeMs }); } catch { /* 略 */ } }
   }

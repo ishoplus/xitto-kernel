@@ -1498,7 +1498,12 @@ async function loadFiles() {
   let html = wbSub ? `<button class="file-up" onclick="wbUp()" aria-label="上一層" type="button">⬆ 上一層</button>` : "";
   html += (r.dirs || []).map((d) => {
     const full = (wbSub ? wbSub + "/" : "") + d;
-    return `<div class="file-item"><button class="file-row" onclick="wbNav('${encodeURIComponent(full)}')" type="button">📁 <span class="name">${esc(d)}</span>/</button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(d)}',true)" title="刪除資料夾" type="button">🗑</button></div>`;
+    // 根目錄的 tmp 是 agent 的暫存區：淡化 + 標「暫存」，但仍可點進去撈被誤丟的成品。
+    const isTmp = !wbSub && d === "tmp";
+    const icon = isTmp ? "🗂" : "📁";
+    const tag = isTmp ? ` <span style="opacity:.5;font-size:.85em">（暫存）</span>` : "";
+    const rowStyle = isTmp ? ` style="opacity:.7"` : "";
+    return `<div class="file-item"><button class="file-row"${rowStyle} onclick="wbNav('${encodeURIComponent(full)}')" type="button" title="${isTmp ? '暫存資料夾：agent 的中間／草稿檔放這裡（可能被清理）' : ''}">${icon} <span class="name">${esc(d)}</span>/${tag}</button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(d)}',true)" title="刪除資料夾" type="button">🗑</button></div>`;
   }).join("");
   html +=
     (r.files || []).map((f) => {
