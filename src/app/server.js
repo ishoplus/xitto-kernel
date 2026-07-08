@@ -1394,6 +1394,80 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       } finally { clearTimeout(timer); }
     }
 
+    // 探測端點：向 {baseUrl}/models 查詢模型清單與上下文長度，回填 Context Window（免手動 curl）。
+    // vLLM／SGLang 的 /v1/models 每顆 model 會帶 max_model_len（＝推理服務實際 --max-model-len）；
+    // Ollama／OpenAI 官方 API 多半不回上下文長度，此時只回模型 id 清單，請依推理服務啟動參數手填。
+    if (req.method === 'POST' && path === '/v1/setup/probe') {
+      if (adminOnly(req, res)) return;
+      const body = await readBody(req);
+      let baseUrl = String(body.baseUrl || '').trim();
+      if (!baseUrl) return json(res, 400, { error: '探測需要 Base URL' });
+      // 解析 API Key：表單留空則沿用既有設定並展開 ${ENV}（沿用 /v1/setup/test 的做法）。
+      let apiKey = String(body.apiKey || '').trim();
+      try {
+        if (body.provider && body.modelId) {
+          let b = body;
+          if (!apiKey) { try { const base = loadProvidersConfig(providersConfigPath(configPath)); const k = base?.providers?.[body.provider]?.apiKey; if (k) b = { ...body, apiKey: k }; } catch { /* 無檔略過 */ } }
+          const built = buildModel(buildSetupConfig(b), b.modelId);
+          baseUrl = built.model.baseUrl || baseUrl;
+          apiKey = (await built.getApiKey(built.model.provider)) || apiKey;
+        }
+      } catch { /* 建不出 model（如尚未填 modelId）→ 用表單原始 baseUrl/apiKey 直接探測 */ }
+      const root = baseUrl.replace(/\/+$/, ''); const origin = root.replace(/\/v\d+$/, '');
+      const hdr = apiKey ? { authorization: 'Bearer ' + apiKey } : {};
+      const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 45000);
+      const getJson = async (u, opt = {}) => { try { const r = await fetch(u, { signal: ac.signal, ...opt, headers: { ...hdr, ...(opt.headers || {}) } }); const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch { /* 非 JSON */ } return { status: r.status, ok: r.ok, json: j, text: t }; } catch (e) { return { error: e.message || String(e) }; } };
+      // 從任意錯誤訊息挖窗口值：vLLM/SGLang「maximum context length is N」、TGI「must be <= N」等。
+      const ctxFromMsg = (s) => { if (!s) return null; const m = String(s).match(/maximum context length is (\d{3,8})/i) || String(s).match(/context.{0,20}?(\d{4,8})/i) || String(s).match(/<=\s*(\d{4,8})/) || String(s).match(/max(?:imum)?[^\d]{0,20}(\d{4,8})\s*tokens/i); return m ? Number(m[1]) : null; };
+      try {
+        let models = [];
+        // 方法 1：GET /models 的 max_model_len（vLLM／SGLang 直接帶）。
+        const r1 = await getJson(root + '/models');
+        if (r1.json) {
+          const list = Array.isArray(r1.json.data) ? r1.json.data : (Array.isArray(r1.json.models) ? r1.json.models : []);
+          const ctxOf = (m) => Number(m?.max_model_len ?? m?.max_len ?? m?.context_length ?? m?.n_ctx ?? m?.max_context_length) || null;
+          models = list.map((m) => ({ id: m.id || m.name || '', contextWindow: ctxOf(m) })).filter((m) => m.id);
+        }
+        const pickCtx = () => { const t = body.modelId ? models.find((m) => m.id === body.modelId) : null; return (t && t.contextWindow) || (models.find((m) => m.contextWindow)?.contextWindow) || null; };
+        let contextWindow = pickCtx(); let method = contextWindow ? '/models max_model_len' : null;
+        const modelId = body.modelId || (models[0] && models[0].id);
+        // 送一次指定 max_tokens 的極簡對話；回傳 { ok（是否成功生成）, resp }。
+        const sendN = async (n) => { const r = await getJson(root + '/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: n }) }); const ok = r.status === 200 && (Array.isArray(r.json?.choices) ? r.json.choices.length > 0 : !!(r.json && (r.json.choices || r.json.content))); return { ok, resp: r }; };
+        let hugeFailed = false;
+        if (!contextWindow && modelId) {
+          // 方法 2：超量請求逼端點吐上限。max_tokens 大過任何窗口，框架多半回錯並附「maximum context length is N」。
+          const { ok, resp } = await sendN(100000000);
+          hugeFailed = !ok; // 超量竟成功＝框架靜默截斷 max_tokens，方法 5 不可靠 → 之後跳過。
+          contextWindow = ctxFromMsg(resp.json?.message || resp.json?.error?.message || resp.json?.error || resp.text);
+          if (contextWindow) method = '超量探測（錯誤訊息回報上限）';
+        }
+        if (!contextWindow && modelId && hugeFailed) {
+          // 方法 5：自訂網關吞掉錯誤文本（如 vllmServe.py 崩在 KeyError）時，僅靠「成功/失敗」訊號定位。
+          // 由大到小試常見窗口：max_tokens=W-16 能放下（不報錯）的最大標準值即窗口。失敗的請求走驗證即回、成本低。
+          const STD = [1048576, 524288, 262144, 131072, 98304, 65536, 49152, 40960, 32768, 24576, 16384, 8192, 4096];
+          for (const W of STD) { const { ok } = await sendN(W - 16); if (ok) { contextWindow = W; method = '窗口分級探測（成功/失敗二分）'; break; } }
+        }
+        if (!contextWindow) {
+          // 方法 3：TGI 的 /info（max_total_tokens）。
+          const r3 = await getJson(origin + '/info');
+          contextWindow = Number(r3.json?.max_total_tokens ?? r3.json?.max_input_tokens) || null;
+          if (contextWindow) method = 'TGI /info';
+        }
+        if (!contextWindow && modelId) {
+          // 方法 4：Ollama 原生 /api/show 的 model_info.*.context_length。
+          const r4 = await getJson(origin + '/api/show', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: modelId, model: modelId }) });
+          const info = r4.json?.model_info || {};
+          const k = Object.keys(info).find((x) => /\.context_length$/.test(x));
+          contextWindow = (k && Number(info[k])) || null;
+          if (contextWindow) method = 'Ollama /api/show';
+        }
+        return json(res, 200, { ok: true, contextWindow, method, models });
+      } catch (e) {
+        const msg = ac.signal.aborted ? '逾時（20s）——檢查 Base URL／網路／金鑰' : (e.message || String(e));
+        return json(res, 200, { ok: false, error: String(msg).slice(0, 300) });
+      } finally { clearTimeout(timer); }
+    }
+
     // 換發邀請碼（撤銷舊連結；master only）
     const mRotate = path.match(/^\/v1\/rooms\/([^/]+)\/invite$/);
     if (req.method === 'POST' && mRotate) {
@@ -2032,7 +2106,7 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
         </details>
         <label class="chk" id="defWrap" style="display:none"><input type="checkbox" id="makeDefault"> 設為預設模型（新會議 / 未指定時用它）</label>
         <div class="msg" id="msg"></div>
-        <div class="actions"><button id="test" class="ghost" type="button" title="不儲存，先打一次對話確認可連線">🧪 測試對話</button><button id="save" type="button">儲存並啟動</button></div>
+        <div class="actions"><button id="probe" class="ghost" type="button" title="向端點 /models 查詢上下文長度自動回填（vLLM／SGLang 支援）">🔎 探測端點</button><button id="test" class="ghost" type="button" title="不儲存，先打一次對話確認可連線">🧪 測試對話</button><button id="save" type="button">儲存並啟動</button></div>
       </div>
     </section>
     <section class="panel" data-panel="thinking" hidden>
@@ -2208,6 +2282,24 @@ async function testForm(){
   else showMsg("✗ 測試失敗："+esc((r&&r.error)||"未知錯誤"),"err");
 }
 $("#test").onclick=testForm;
+// 探測端點：問 {baseUrl}/models 拿 max_model_len，自動回填 Context Window（並給 Max Tokens 建議值）。
+async function probeEndpoint(){
+  var b={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim()};
+  if(!b.baseUrl)return showMsg("探測需要 Base URL。","err");
+  $("#probe").disabled=true;showMsg("探測端點中…（最多 15 秒）","ok");
+  var r;try{r=await fetch("/v1/setup/probe",{method:"POST",headers:AUTH,body:JSON.stringify(b)}).then(function(x){return x.json()})}catch(e){r={ok:false,error:"無法連線到伺服器"}}
+  $("#probe").disabled=false;
+  if(!r||r.ok===false)return showMsg("✗ 探測失敗："+esc((r&&r.error)||"未知錯誤"),"err");
+  if(r.contextWindow){
+    $("#contextWindow").value=r.contextWindow;
+    if(!Number($("#maxTokens").value))$("#maxTokens").value=Math.min(r.contextWindow,8192);
+    showMsg("✓ 探測到 Context Window = "+r.contextWindow+"（來源："+esc(r.method||"端點")+"），已回填。Max Tokens 需 ≤ 此值且從中預留給輸出，已預填 "+$("#maxTokens").value+"（可自行調整）。","ok");
+  }else{
+    var ids=(r.models||[]).map(function(m){return m.id}).slice(0,8).join("、");
+    showMsg("端點可連線，但 /models 未回報上下文長度（Ollama／OpenAI 官方多半不回）。可用模型："+(ids||"（無）")+"。請依推理服務 --max-model-len 手動填。","err");
+  }
+}
+$("#probe").onclick=probeEndpoint;
 $("#save").onclick=async function(){
   var body={provider:$("#provider").value.trim(),api:$("#api").value,baseUrl:$("#baseUrl").value.trim(),apiKey:$("#apiKey").value.trim(),modelId:$("#modelId").value.trim(),modelName:$("#modelName").value.trim(),contextWindow:Number($("#contextWindow").value)||undefined,maxTokens:Number($("#maxTokens").value)||undefined,image:$("#image").checked||undefined,reasoning:$("#reasoning").checked||undefined,thinkingFormat:$("#thinkingFormat").value,makeDefault:$("#makeDefault").checked||undefined};
   // API Key 留空 = 沿用既有（編輯已配置的 provider 時免重填）；後端 /v1/setup 會從既有設定補上。
