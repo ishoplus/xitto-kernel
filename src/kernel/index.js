@@ -80,21 +80,33 @@ const DEFAULT_OUTPUT_GUIDE =
   '產出檔案時：最終成品放工作目錄根、用清楚好懂的檔名(如 report.md、budget.csv，別用 tmp_3.txt)；中間/暫存檔(下載、草稿、解壓內容、爬到的原始資料)一律放 tmp/ 目錄——那是過程檔，不算成品也可能被清掉。';
 
 // 語系驅動的語言提示：依使用者輸入偵測語系，注入「該語言」的具體指令（具體「全程用 X」> 通用「跟隨使用者」，
-// 能壓過中文 prompt 的體量）。這些指令使用者永遠看不到；輸出語言跟著使用者走 → 中文需求全程中文、English all in English。
-function detectLang(text = '') {
+// 能壓過中文 prompt 的體量）。這些指令使用者永遠看不到；輸出語言跟著使用者走。
+// 對標 CC：只對「能可靠由字形判定」的語系（日假名/韓諺文/漢字）給具體指令；其餘一律走 CC 式
+// 「跟隨使用者語言」的通用鏡像指令——不再把法/德/西/俄…等長尾語言硬鎖成英文（那比 CC 更窄）。
+// 中文再細分簡/繁：以「簡體專用字 / 繁體專用字」判定，避免簡體使用者被強制回繁體；無專用字時交回模型鏡像。
+const ZH_HANS_ONLY = /[实现这为发国东车问题时说话请见关会电门开万与个预让点见龙风飞车业务]/; // 簡體專用字（不出現於繁體）
+const ZH_HANT_ONLY = /[實現這為發國東車問題時說話請見關會電門開萬與個預讓點見龍風飛車業務]/; // 繁體專用字（不出現於簡體）
+export function detectLang(text = '') {
   const s = String(text);
   if (/[぀-ヿ]/.test(s)) return 'ja';                  // 日文假名
   if (/[가-힯]/.test(s)) return 'ko';                  // 韓文諺文
-  if (/[㐀-䶿一-鿿]/.test(s)) return 'zh';     // 漢字 → 視為中文
-  return 'en';
+  if (/[㐀-䶿一-鿿]/.test(s)) {                 // 漢字 → 中文，再判簡/繁字體變體
+    if (ZH_HANS_ONLY.test(s)) return 'zh-Hans';        // 含簡體專用字
+    if (ZH_HANT_ONLY.test(s)) return 'zh-Hant';        // 含繁體專用字
+    return 'zh';                                        // 無專用字（字形共通）→ 交模型鏡像
+  }
+  return 'auto';                                        // 拉丁/長尾語系 → CC 式跟隨使用者
 }
 const LANG_DIRECTIVE = {
-  zh: '【語言】全程使用繁體中文：你的回覆、思考、進度與驗收敘述、摘要、成品檔案內容一律用繁體中文（除非使用者明確要求其他語言）。',
-  en: '[Language] Respond ONLY in English for everything: your replies, reasoning, progress/verification narration, summaries, and deliverable file contents (unless the user explicitly asks for another language).',
+  'zh-Hant': '【語言】全程使用繁體中文：你的回覆、思考、進度與驗收敘述、摘要、成品檔案內容一律用繁體中文（除非使用者明確要求其他語言）。',
+  'zh-Hans': '【语言】全程使用简体中文：你的回复、思考、进度与验收叙述、摘要、成品文件内容一律用简体中文（除非用户明确要求其他语言）。',
+  zh: '【語言】全程使用中文，且字體變體與使用者輸入一致（使用者用簡體就回簡體、用繁體就回繁體）：回覆、思考、進度與驗收敘述、摘要、成品內容一律用中文（除非使用者明確要求其他語言）。',
   ja: '[言語] 返信・思考・進捗・検証の説明・要約・成果物の内容はすべて日本語で出力してください（ユーザーが他の言語を明示しない限り）。',
   ko: '[언어] 답변·사고·진행/검증 설명·요약·결과물 내용을 모두 한국어로 작성하세요(사용자가 다른 언어를 명시하지 않는 한).',
+  // auto：字形無法可靠判定（英/法/德/西/俄…）→ 讓模型自行偵測使用者語言並全程鏡像。措辭刻意強硬，壓過中文 prompt 本體的體量。
+  auto: '[Language] Detect the language the user writes in and use ONLY that language for everything — your replies, reasoning, progress/verification narration, summaries, and deliverable file contents — regardless of the language of these instructions, unless the user explicitly asks for another language.',
 };
-const langDirectiveFor = (lang) => (LANG_DIRECTIVE[lang] || `[Language] Respond only in "${lang}" for all output unless the user asks otherwise.`) + '\n\n';
+export const langDirectiveFor = (lang) => (LANG_DIRECTIVE[lang] || `[Language] Respond only in "${lang}" for all output unless the user asks otherwise.`) + '\n\n';
 
 // goal loop 指令外殼：依語系給模板，別對英文目標餵中文鷹架（鷹架語言也會帶偏輸出）。zh/en 為主，其餘退 en。
 const GOAL_TEMPLATES = {
@@ -111,7 +123,8 @@ const GOAL_TEMPLATES = {
     steerHead: '\n\n[Mid-task additions from the user — take them into account and adjust]\n',
   },
 };
-const goalTemplatesFor = (lang) => GOAL_TEMPLATES[lang] || GOAL_TEMPLATES.en;
+// 把細分語系碼歸一到 goal 模板的粗粒度鍵：zh-Hans/zh-Hant/zh 皆用 zh 中文腳手架，其餘（auto/en…）退 en。
+const goalTemplatesFor = (lang) => GOAL_TEMPLATES[String(lang).startsWith('zh') ? 'zh' : lang] || GOAL_TEMPLATES.en;
 
 // 把 sandboxable 工具的命令在執行期包進 Seatbelt（macOS OS 級隔離）。
 // 非 macOS / 沙箱關閉 / 無 command → wrapWithSeatbelt 回 null，跑原命令（仍受第 5 格靜態策略保護）。
@@ -364,6 +377,23 @@ export function createKernel(pack, config = {}) {
     skills.promptSection() +
     agents.promptSection();
 
+  // 目前時間注入（對標 CC）：LLM 自身沒有時鐘，凡未被告知的日期都是猜的。每回合現算宿主機當下日期＋時區，
+  // 讓長駐 server kernel 隔天也不過期（故放每回合組裝，不烘進靜態 systemPrompt）。可用 config.now/config.timezone
+  // 覆寫（測試注入固定時間、多時區部署指定時區）。精確到時分秒或嚴謹運算仍導向 shell `date` 工具。
+  const timeBlock = () => {
+    const now = config.now ? new Date(config.now) : new Date();
+    if (isNaN(now.getTime())) return '';
+    const tz = config.timezone || (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return 'UTC'; } })();
+    let date, weekday = '', off = '';
+    try {
+      const p = new Intl.DateTimeFormat('zh-TW', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long' }).formatToParts(now);
+      const g = (t) => (p.find((x) => x.type === t)?.value || '');
+      date = `${g('year')}-${g('month')}-${g('day')}`; weekday = g('weekday');
+      off = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' }).formatToParts(now).find((x) => x.type === 'timeZoneName')?.value || '';
+    } catch { date = now.toISOString().slice(0, 10); }
+    return `\n\n# 目前時間\n今天是 ${date}${weekday ? `（${weekday}）` : ''}，時區 ${tz}${off ? ` (${off})` : ''}。這是宿主機當下的日期；回答「今天／現在」與換算相對日期（明天、上週、30 天後…）一律以此為準，不要用訓練知識裡的日期。需要精確到時分秒或做嚴謹日期運算時，用 shell \`date\` 取得，別自行推算。`;
+  };
+
   const getPlanMode = config.getPlanMode || (() => false);
 
   // 漸進式放權：已信任的工具/命令簽章跨 session 累積。
@@ -473,7 +503,7 @@ export function createKernel(pack, config = {}) {
       const lang = opts.lang || config.lang || detectLang(input);
       // 自動相關性召回：把與本輪 input 最相關的過往情節注入 prompt（只 top-K,不全量倒）
       // systemPromptOverride：委派子 agent 用其類型的 prompt 取代 pack 主 prompt（仍保留語系與召回）。
-      const turnSystemPrompt = langDirectiveFor(lang) + (opts.systemPromptOverride || systemPrompt) + (config.recallEpisodes === false ? '' : episodes.recallSection(input));
+      const turnSystemPrompt = langDirectiveFor(lang) + (opts.systemPromptOverride || systemPrompt) + timeBlock() + (config.recallEpisodes === false ? '' : episodes.recallSection(input));
       // toolNames：工具白名單（委派子 agent 只拿類型允許的工具；含可寫，仍經守衛）。
       const baseTurnTools = opts.toolNames?.length ? registry.all().filter((t) => opts.toolNames.includes(t.name)) : registry.all();
       // 委派情境（systemPromptOverride）剝除 delegate/spawn——子 agent 不能再委派/派生（防遞迴，單層深度）。

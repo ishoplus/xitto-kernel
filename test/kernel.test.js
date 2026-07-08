@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createKernel } from '../src/kernel/index.js';
+import { createKernel, detectLang, langDirectiveFor } from '../src/kernel/index.js';
 import { createCodingPack } from '../src/packs/coding/index.js';
 import { createDataQueryPack } from '../src/packs/data-query/index.js';
 
@@ -126,4 +126,75 @@ test('環境門控：envNote 注入 system prompt', () => {
   const k = createKernel(pack, { caps: ['workspaceFs'], env: 'cloud', envNote: '你運行在雲端託管容器。' });
   assert.match(k.systemPrompt, /運行環境/);
   assert.match(k.systemPrompt, /雲端託管容器/);
+});
+
+// 語系偵測與語言指令 — 對標 CC：可靠字形給具體指令、長尾語系跟隨使用者、中文分簡繁。
+test('detectLang：日/韓假名諺文各自成語系', () => {
+  assert.equal(detectLang('これはテストです'), 'ja');
+  assert.equal(detectLang('안녕하세요 테스트'), 'ko');
+});
+
+test('detectLang：中文分簡/繁字體變體', () => {
+  assert.equal(detectLang('查看kernel是否符合cc的多语言实现'), 'zh-Hans'); // 簡體專用字「实现语」
+  assert.equal(detectLang('查看是否符合多語言實現'), 'zh-Hant');           // 繁體專用字「語實現」
+  assert.equal(detectLang('你好嗎'), 'zh');                                // 字形共通 → 交模型鏡像
+});
+
+test('detectLang：拉丁/長尾語系不再硬鎖英文 → auto（CC 式跟隨）', () => {
+  assert.equal(detectLang('Bonjour, peux-tu analyser ce fichier?'), 'auto'); // 法文不再變 en
+  assert.equal(detectLang('Please review this code'), 'auto');               // 英文也走鏡像
+});
+
+test('langDirectiveFor：簡體使用者拿到簡體指令、非強制繁體', () => {
+  assert.match(langDirectiveFor('zh-Hans'), /简体中文/);
+  assert.ok(!/繁體/.test(langDirectiveFor('zh-Hans')), '簡體指令不應含繁體字樣');
+  assert.match(langDirectiveFor('zh-Hant'), /繁體中文/);
+  assert.match(langDirectiveFor('auto'), /Detect the language the user writes in/);
+});
+
+test('goal 模板：中文細分語系（zh-Hans/zh-Hant）走中文腳手架、不退英文', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'k-goallang-'));
+  try {
+    const model = { id: 'x', provider: 'p', api: 'openai-completions', contextWindow: 1000 };
+    let firstUser = '';
+    const fakeStream = (_m, ctx) => {
+      // 捕獲首則 user 訊息 = goal 模板 start() 的產物 → 驗證其語言
+      const u = (ctx.messages || []).find((m) => m.role === 'user');
+      firstUser = (u?.content || []).filter?.((c) => c.type === 'text').map((c) => c.text).join('') || String(u?.content || '');
+      const fin = { role: 'assistant', content: [{ type: 'text', text: 'done' }], usage: { input: 1, output: 1 } };
+      return { async *[Symbol.asyncIterator]() { yield { type: 'done', partial: fin }; }, result: async () => fin };
+    };
+    const k = createKernel(createCodingPack({ cwd: dir }), {
+      cwd: dir, model, getApiKey: () => 'k', streamFn: fakeStream,
+      checkGoal: async () => ({ done: true }), // 一輪即收，只看首則指令語言
+    });
+    // 簡體目標 → 中文腳手架（「目標：」），非英文「Goal:」
+    await k.runGoal('幫我把这个整理成报告');
+    assert.match(firstUser, /目標：/, '簡體目標應走中文 goal 模板');
+    assert.ok(!/^Goal:/.test(firstUser), '不應退英文腳手架');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('時間注入（對標 CC）：每回合把宿主機當下日期＋時區注入 turn 的 systemPrompt；config.now/timezone 可覆寫', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'k-time-'));
+  try {
+    const model = { id: 'x', provider: 'p', api: 'openai-completions', contextWindow: 1000 };
+    let seen = '';
+    const fakeStream = (_m, ctx) => {
+      seen = ctx.systemPrompt;
+      const fin = { role: 'assistant', content: [{ type: 'text', text: 'ok' }], usage: { input: 1, output: 1 } };
+      return { async *[Symbol.asyncIterator]() { yield { type: 'done', partial: fin }; }, result: async () => fin };
+    };
+    // 固定注入時間 + 時區 → 斷言 prompt 內出現該日期與時區（不受跑測試的機器時鐘/時區影響）
+    const k = createKernel(createCodingPack({ cwd: dir }), { cwd: dir, model, getApiKey: () => 'k', streamFn: fakeStream, now: '2026-07-08T02:00:00Z', timezone: 'Asia/Taipei' });
+    await k.runTurn('現在幾點', {});
+    assert.match(seen, /# 目前時間/);
+    assert.match(seen, /今天是 2026-07-08/);
+    assert.match(seen, /Asia\/Taipei/);
+    assert.match(seen, /shell `date`/); // 導向工具取精確時間
+    // 換時區：同一 UTC 時刻在紐約仍是 07-07（前一天晚上）→ 證明時區真的生效
+    const k2 = createKernel(createCodingPack({ cwd: dir }), { cwd: dir, model, getApiKey: () => 'k', streamFn: fakeStream, now: '2026-07-08T02:00:00Z', timezone: 'America/New_York' });
+    await k2.runTurn('現在幾點', {});
+    assert.match(seen, /今天是 2026-07-07/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
