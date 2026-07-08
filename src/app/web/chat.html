@@ -1100,14 +1100,14 @@ body {
     </section>
     
     <div class="side-foot">
-      📋 <a href="/">任務台</a> · <button class="foot-link" type="button" onclick="openSkills()" title="查看/管理此工作區的技能">🧠 技能</button>
+      📋 <a href="/" data-i18n="foot.tasks">任務台</a> · <button class="foot-link" type="button" onclick="openSkills()" data-i18n-title="foot.skillsTip" title="查看/管理此工作區的技能" data-i18n="foot.skills">🧠 技能</button>
       <span class="app-ver" title="xitto-kernel 版本">v__VERSION__</span>
     </div>
   </aside>
 
   <!-- 右側主區 -->
   <main id="main-content" class="main" role="main" aria-label="對話區">
-    <button class="mobile-back" onclick="showSide()" aria-label="返回對話列表">
+    <button class="mobile-back" onclick="showSide()" aria-label="返回對話列表" data-i18n-aria="nav.backToList">
       ← 返回對話列表
     </button>
     
@@ -1123,7 +1123,7 @@ body {
     <div class="composer" id="main-input">
       <div class="composer-wrap">
         <div class="composer-box" role="form" aria-label="輸入訊息">
-          <label for="input" class="sr-only">輸入訊息</label>
+          <label for="input" class="sr-only" data-i18n="composer.srInput">輸入訊息</label>
           <div class="composer-main">
             <textarea
               id="input"
@@ -1136,11 +1136,11 @@ body {
           </div>
           <div class="composer-tools">
             <div class="tool-group">
-              <label for="pack" class="sr-only">選擇領域</label>
+              <label for="pack" class="sr-only" data-i18n="composer.srPack">選擇領域</label>
               <select id="pack" class="tool-select" aria-label="選擇領域" title="這則訊息用哪個領域包"></select>
-              <label for="model" class="sr-only">選擇模型</label>
+              <label for="model" class="sr-only" data-i18n="composer.srModel">選擇模型</label>
               <select id="model" class="tool-select" aria-label="選擇模型" title="這則訊息用哪個 AI 模型（回覆中也可切，下一則生效）"><option value="" data-i18n="composer.modelDefault">🧠 預設模型</option></select>
-              <label for="think" class="sr-only">思考模式</label>
+              <label for="think" class="sr-only" data-i18n="composer.srThink">思考模式</label>
               <select id="think" class="tool-select" aria-label="思考模式" title="這則訊息的思考強度（僅推理型模型有效；下一則生效）">
                 <option value="" data-i18n="think.default">💭 思考：預設</option>
                 <option value="off" data-i18n="think.off">💭 關閉</option>
@@ -1176,18 +1176,18 @@ body {
 <!-- 資料夾選擇 Modal（與任務台一致；position:fixed，置於 shell 外）-->
 <div id="fs-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="fs-modal-title">
   <div class="modal-box">
-    <div class="modal-title" id="fs-modal-title">選一個資料夾（就地工作）</div>
+    <div class="modal-title" id="fs-modal-title" data-i18n="fs.title">選一個資料夾（就地工作）</div>
     <div class="fs-path" id="fs-path" aria-live="polite"></div>
     <div class="fs-list" id="fs-list" role="tree" aria-label="資料夾列表"></div>
     <div class="fs-bar">
-      <button class="ghost" onclick="fsHome()">🏠 家目錄</button>
+      <button class="ghost" onclick="fsHome()" data-i18n="fs.home">🏠 家目錄</button>
       <label class="fs-hidden">
         <input type="checkbox" id="fs-hidden" onchange="fsToggleHidden()">
-        顯示隱藏資料夾
+        <span data-i18n="fs.showHidden">顯示隱藏資料夾</span>
       </label>
       <span class="spacer" aria-hidden="true"></span>
-      <button class="ghost" onclick="closeFs()">取消</button>
-      <button class="primary" onclick="chooseFs()">✓ 選這個</button>
+      <button class="ghost" onclick="closeFs()" data-i18n="fs.cancel">取消</button>
+      <button class="primary" onclick="chooseFs()" data-i18n="fs.choose">✓ 選這個</button>
     </div>
   </div>
 </div>
@@ -1195,18 +1195,21 @@ body {
 <!-- 技能管理：查看/刪除此工作區結晶的技能 -->
 <div id="sk-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="sk-modal-title" onclick="if(event.target===this)closeSkills()">
   <div class="modal-box">
-    <div class="modal-title" id="sk-modal-title">🧠 技能管理</div>
+    <div class="modal-title" id="sk-modal-title" data-i18n="skills.manage">🧠 技能管理</div>
     <div class="sk-sub" id="sk-sub"></div>
     <div class="sk-list" id="sk-list" aria-live="polite"></div>
     <div class="fs-bar">
       <span class="spacer" aria-hidden="true"></span>
-      <button class="ghost" onclick="closeSkills()">關閉</button>
+      <button class="ghost" onclick="closeSkills()" data-i18n="skills.close">關閉</button>
     </div>
   </div>
 </div>
 
 <script>
 /* ── Chat 應用邏輯 ───────────────────────────────────────── */
+
+/* i18n：套用文件標題（其餘由 applyI18n 掃 data-i18n* 屬性處理） */
+try { document.title = t("doc.title", document.title); } catch (e) { /* i18n 未載入則保留原標題 */ }
 
 /* 主題切換 */
 $("#theme").onclick = () => {
@@ -1354,15 +1357,15 @@ async function loadSkills() {
   const e = await api("/v1/workspaces/experience?ws=" + encodeURIComponent(curSpace)).then((r) => r.json()).catch(() => null);
   const skills = (e && e.skills) || [];
   if (sub) sub.textContent = "工作區「" + curSpace + "」· " + skills.length + " 個技能";
-  if (!skills.length) { list.innerHTML = '<div class="sk-empty">這個工作區還沒有技能。<br>agent 摸出可重複流程時，會用 skill_save 結晶成技能，之後即可複用。</div>'; return; }
+  if (!skills.length) { list.innerHTML = '<div class="sk-empty">' + t("skills.empty", "這個工作區還沒有技能。<br>agent 摸出可重複流程時，會用 skill_save 結晶成技能，之後即可複用。") + '</div>'; return; }
   list.innerHTML = skills.map((s, i) => {
     const sid = "skb-" + i;
     return '<div class="sk-item"><div class="sk-item-h"><span class="sk-name">⚡ ' + esc(s.name) + "</span>" +
-      (s.used ? '<span class="sk-tag">用過 ' + s.used + " 次</span>" : "") +
-      (s.stale ? '<span class="sk-tag warn">⚠ 待修</span>' : "") +
+      (s.used ? '<span class="sk-tag">' + t("skills.used", "用過 %n 次").replace("%n", s.used) + "</span>" : "") +
+      (s.stale ? '<span class="sk-tag warn">' + t("skills.stale", "⚠ 待修") + "</span>" : "") +
       '<span class="sk-pack">' + esc(s.pack || "") + '</span><span class="spacer"></span>' +
-      '<button class="sk-btn" type="button" onclick="skillView(\'' + esc(s.pack) + "','" + esc(s.name) + "','" + sid + '\')">查看</button>' +
-      '<button class="sk-btn danger" type="button" onclick="skillDel(\'' + esc(s.pack) + "','" + esc(s.name) + '\')">刪除</button></div>' +
+      '<button class="sk-btn" type="button" onclick="skillView(\'' + esc(s.pack) + "','" + esc(s.name) + "','" + sid + '\')">' + t("skills.view", "查看") + '</button>' +
+      '<button class="sk-btn danger" type="button" onclick="skillDel(\'' + esc(s.pack) + "','" + esc(s.name) + '\')">' + t("skills.del", "刪除") + '</button></div>' +
       (s.desc ? '<div class="sk-desc">' + esc(s.desc) + "</div>" : "") +
       '<pre class="sk-body" id="' + sid + '" hidden></pre></div>';
   }).join("");
@@ -1508,7 +1511,7 @@ async function loadFiles() {
     const tag = isTmp ? ` <span style="opacity:.5;font-size:.85em">（${esc(T("files.tmpTag", "暫存"))}）</span>` : "";
     const rowStyle = isTmp ? ` style="opacity:.7"` : "";
     const tmpTip = isTmp ? esc(T("files.tmpTip", "暫存資料夾：agent 的中間／草稿檔放這裡（可能被清理）")) : "";
-    return `<div class="file-item"><button class="file-row"${rowStyle} onclick="wbNav('${encodeURIComponent(full)}')" type="button" title="${tmpTip}">${icon} <span class="name">${esc(d)}</span>/${tag}</button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(d)}',true)" title="刪除資料夾" type="button">🗑</button></div>`;
+    return `<div class="file-item"><button class="file-row"${rowStyle} onclick="wbNav('${encodeURIComponent(full)}')" type="button" title="${tmpTip}">${icon} <span class="name">${esc(d)}</span>/${tag}</button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(d)}',true)" title="${esc(T("files.delDir", "刪除資料夾"))}" type="button">🗑</button></div>`;
   }).join("");
   html +=
     (r.files || []).map((f) => {
@@ -1516,7 +1519,7 @@ async function loadFiles() {
       return `<div class="file-item"><button class="file-row" onclick="wbView('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button">
     <span class="name">📄 ${esc(f.name)}</span>
     <span class="size">${fmtSize(f.size)}</span>
-  </button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(f.name)}',false)" title="刪除" type="button">🗑</button></div>`;
+  </button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(f.name)}',false)" title="${esc(T("files.del", "刪除"))}" type="button">🗑</button></div>`;
     }).join("");
 
   if (!(r.dirs || []).length && !(r.files || []).length)
@@ -1552,13 +1555,13 @@ async function wbView(encPath, name) {
     else body = `<pre class="preview-pre">${esc(txt)}</pre>`;
   }
 
-  v.innerHTML = `<div class="preview-panel" role="dialog" aria-modal="true" aria-label="檔案預覽：${esc(name)}">
+  v.innerHTML = `<div class="preview-panel" role="dialog" aria-modal="true" aria-label="${t("preview.fileLabel", "檔案預覽：%n").replace("%n", esc(name))}">
     <div class="preview-bar">
       <span class="preview-name">📄 ${esc(name)}</span>
-      <a href="${url}" target="_blank">開新分頁</a>
-      <a href="${url}&download=1">下載</a>
+      <a href="${url}" target="_blank">${t("preview.newTab", "開新分頁")}</a>
+      <a href="${url}&download=1">${t("preview.download", "下載")}</a>
       <span class="spacer" aria-hidden="true"></span>
-      <button class="ghost" onclick="closeFilePreview()" aria-label="關閉預覽" type="button">✕ 關閉</button>
+      <button class="ghost" onclick="closeFilePreview()" aria-label="${t("preview.closeAria", "關閉預覽")}" type="button">${t("preview.close", "✕ 關閉")}</button>
     </div>
     <div class="preview-body">${body}</div>
   </div>`;
