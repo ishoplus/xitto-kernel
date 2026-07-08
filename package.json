@@ -47,7 +47,8 @@
     "eval": "node eval/run.js",
     "serve": "node src/app/server.js",
     "serve:local": "node scripts/serve-local.js",
-    "start": "node bin/xitto-kernel.js"
+    "start": "node bin/xitto-kernel.js",
+    "i18n:hans": "node scripts/i18n-hans.mjs"
   },
   "exports": {
     ".": "./src/index.js",
