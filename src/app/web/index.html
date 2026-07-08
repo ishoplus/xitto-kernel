@@ -8,7 +8,12 @@
 <!-- 設計系統 + 共享工具庫 -->
 <link rel="stylesheet" href="shared/style.css">
 <!-- 設定注入：server 會替換這些佔位符（HTML 才會被替換，靜態 app.js 不會），app.js 從 window.__XITTO__ 讀 -->
-<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, version: "__VERSION__" };</script>
+<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, version: "__VERSION__", lang: "__LANG__" };</script>
+<!-- 三語字典一律全載入（供切換器即時切換，不用重整頁面），部署預設語言只決定初次顯示哪一份 -->
+<script src="shared/i18n/zh-Hant.js"></script>
+<script src="shared/i18n/zh-Hans.js"></script>
+<script src="shared/i18n/en.js"></script>
+<script src="shared/i18n.js"></script>
 <script src="shared/md.js"></script>
 <script src="shared/app.js"></script>
 <script src="shared/account.js"></script>
@@ -997,7 +1002,7 @@
 </head>
 <body>
 <!-- 跳過導航 -->
-<a href="#main-content" class="skip-link">跳到主要內容</a>
+<a href="#main-content" class="skip-link" data-i18n="board.skipToMain">跳到主要內容</a>
 
 <!-- 全幅 app-shell：左側欄（品牌/專案/歷史/檔案/底部）+ 右主區（許願/工作區），撐滿整個視窗 -->
 <div class="shell">
@@ -1006,15 +1011,20 @@
     <div class="sidebar-head">
       <div class="brand">
         <div class="brand-row">
-          <h1>📋 xitto 任務台</h1>
-          <button class="ghost theme-btn" id="theme" data-tooltip="切換主題" aria-label="切換深色/淺色模式" style="margin-left:auto">🌙</button>
+          <h1>📋 xitto <span data-i18n="nav.tasks">任務台</span></h1>
+          <select id="langSwitch" class="lang-switch" data-lang-switch aria-label="Language / 語言 / 语言" data-i18n-aria="nav.langSwitch" style="margin-left:auto" onchange="window.setLang(this.value)">
+            <option value="zh-Hant">繁體中文</option>
+            <option value="zh-Hans">简体中文</option>
+            <option value="en">English</option>
+          </select>
+          <button class="ghost theme-btn" id="theme" data-i18n-tip="nav.theme" data-tooltip="切換主題" aria-label="切換深色/淺色模式">🌙</button>
         </div>
-        <p class="brand-tagline">說出你想完成的事，做完給你成品</p>
+        <p class="brand-tagline" data-i18n="board.tagline">說出你想完成的事，做完給你成品</p>
       </div>
       <nav class="mode-nav" aria-label="切換模式" style="margin-top:10px">
-        <a href="/" class="active" aria-current="page">📋 任務台</a>
-        <a href="/chat">💬 對話</a>
-        <a href="/room">🏛 會議室</a>
+        <a href="/" class="active" aria-current="page">📋 <span data-i18n="nav.tasks">任務台</span></a>
+        <a href="/chat">💬 <span data-i18n="nav.chat">對話</span></a>
+        <a href="/room">🏛 <span data-i18n="nav.room">會議室</span></a>
       </nav>
       <div class="project-bar">
         <div class="proj-switch" id="proj-switch">
@@ -1022,22 +1032,22 @@
           <div class="proj-menu" id="proj-menu" role="listbox" hidden></div>
         </div>
       </div>
-      <button class="exp-entry" id="exp-btn" type="button" onclick="openExperience()" aria-label="查看它對你的了解（累積的記憶與技能）">
+      <button class="exp-entry" id="exp-btn" type="button" onclick="openExperience()" aria-label="查看它對你的了解（累積的記憶與技能）" data-i18n-aria="board.expEntryAria">
         <span class="exp-ic" aria-hidden="true">🧠</span>
-        <span class="exp-lbl">它對你的了解</span>
+        <span class="exp-lbl" data-i18n="board.expLabel">它對你的了解</span>
         <span class="exp-count" id="exp-count"></span>
       </button>
     </div>
 
     <!-- 歷史成品 -->
     <section class="sidebar-section" aria-label="歷史成品">
-      <h3>歷史成品</h3>
+      <h3 data-i18n="board.historyTitle">歷史成品</h3>
       <div class="scroll" id="history" role="list" aria-label="任務歷史"></div>
     </section>
 
     <!-- 檔案瀏覽器 -->
     <section class="sidebar-section" aria-label="工作區檔案">
-      <h3>📂 檔案 <button class="refresh-btn" id="files-refresh" type="button" onclick="refreshFiles()" title="刷新檔案列表" aria-label="刷新檔案列表">↻</button></h3>
+      <h3>📂 <span data-i18n="files.title">檔案</span> <button class="refresh-btn" id="files-refresh" type="button" onclick="refreshFiles()" data-i18n-title="files.refresh" title="刷新檔案列表" aria-label="刷新檔案列表">↻</button></h3>
       <div id="file-breadcrumb" class="file-breadcrumb" aria-live="polite"></div>
       <div class="scroll" id="wbfiles" role="tree" aria-label="檔案列表"></div>
     </section>
@@ -1052,20 +1062,21 @@
     <!-- 許願區 -->
     <section class="wish-zone" aria-label="許願輸入">
       <div class="wish-card">
-        <label for="goal" class="wish-label">你想完成什麼？</label>
+        <label for="goal" class="wish-label" data-i18n="board.wishLabel">你想完成什麼？</label>
         <textarea
           id="goal"
           class="wish-textarea"
           placeholder="說出你想完成的事⋯例如：把這個資料夾的 .md 整理成目錄 index.md；或抓 example.com 標題寫進 title.txt"
+          data-i18n-ph="board.wishPlaceholder"
           aria-describedby="goal-hint"
         ></textarea>
-        <div id="goal-hint" class="wish-hint">Enter 送出 · Shift+Enter 換行</div>
+        <div id="goal-hint" class="wish-hint" data-i18n="composer.hint">Enter 送出 · Shift+Enter 換行</div>
 
         <div class="wish-footer">
-          <label for="pack" class="sr-only">選擇領域</label>
+          <label for="pack" class="sr-only" data-i18n="composer.srPack">選擇領域</label>
           <select id="pack" aria-label="選擇領域"></select>
           <span class="spacer" aria-hidden="true"></span>
-          <button class="primary" id="go-btn" aria-label="交辦這個任務">交辦 →</button>
+          <button class="primary" id="go-btn" aria-label="交辦這個任務" data-i18n="board.goBtn">交辦 →</button>
         </div>
 
         <div id="route-hint" class="route-hint" role="status" aria-live="polite"></div>
@@ -1078,8 +1089,8 @@
       <div id="current-task" aria-live="polite" aria-label="當前任務">
         <div class="welcome">
           <div class="welcome-icon" aria-hidden="true">📋</div>
-          <h2 class="welcome-title">說出你想完成的事</h2>
-          <p class="welcome-sub">在上方輸入一句話，交給它去做——做完把成品給你。<br>左邊可看歷史成品與工作區檔案，點任一個在這裡展開。</p>
+          <h2 class="welcome-title" data-i18n="board.welcomeTitle">說出你想完成的事</h2>
+          <p class="welcome-sub"><span data-i18n="board.welcomeSub1">在上方輸入一句話，交給它去做——做完把成品給你。</span><br><span data-i18n="board.welcomeSub2">左邊可看歷史成品與工作區檔案，點任一個在這裡展開。</span></p>
         </div>
       </div>
       <!-- 檔案預覽 -->
@@ -1093,24 +1104,29 @@
 <!-- 資料夾選擇 Modal（position:fixed，置於 shell 外）-->
 <div id="fs-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="fs-modal-title">
   <div class="modal-box">
-    <div class="modal-title" id="fs-modal-title">選一個資料夾（就地工作）</div>
+    <div class="modal-title" id="fs-modal-title" data-i18n="fs.title">選一個資料夾（就地工作）</div>
     <div class="fs-path" id="fs-path" aria-live="polite"></div>
     <div class="fs-list" id="fs-list" role="tree" aria-label="資料夾列表"></div>
     <div class="fs-bar">
-      <button class="ghost" onclick="fsHome()">🏠 家目錄</button>
+      <button class="ghost" onclick="fsHome()" data-i18n="fs.home">🏠 家目錄</button>
       <label class="fs-hidden">
         <input type="checkbox" id="fs-hidden" onchange="fsToggleHidden()">
-        顯示隱藏資料夾
+        <span data-i18n="fs.showHidden">顯示隱藏資料夾</span>
       </label>
       <span class="spacer" aria-hidden="true"></span>
-      <button class="ghost" onclick="closeFs()">取消</button>
-      <button class="primary" onclick="chooseFs()">✓ 選這個</button>
+      <button class="ghost" onclick="closeFs()" data-i18n="fs.cancel">取消</button>
+      <button class="primary" onclick="chooseFs()" data-i18n="fs.choose">✓ 選這個</button>
     </div>
   </div>
 </div>
 
 <script>
 /* ── Task Board 應用邏輯 ──────────────────────────────────── */
+
+/* i18n：套用文件標題（其餘由 applyI18n 掃 data-i18n* 屬性處理）。
+   本檔許多函式的區域變數慣用名為 t（任務物件），會遮蔽全域 i18n 的 t()，
+   故本檔一律以 window.t(...) 呼叫，避免遮蔽誤用。 */
+try { document.title = window.t("board.docTitle", document.title); } catch (e) { /* i18n 未載入則保留原標題 */ }
 
 /* 主題切換 */
 $("#theme").onclick = () => {
@@ -1131,8 +1147,8 @@ function resetMainTask() {
   closePreview();
   $("#current-task").innerHTML = `<div class="welcome">
     <div class="welcome-icon" aria-hidden="true">📋</div>
-    <h2 class="welcome-title">說出你想完成的事</h2>
-    <p class="welcome-sub">在上方輸入一句話，交給它去做——做完把成品給你。<br>左邊可看歷史成品與工作區檔案，點任一個在這裡展開。</p>
+    <h2 class="welcome-title">${window.t("board.welcomeTitle", "說出你想完成的事")}</h2>
+    <p class="welcome-sub">${window.t("board.welcomeSub1", "在上方輸入一句話，交給它去做——做完把成品給你。")}<br>${window.t("board.welcomeSub2", "左邊可看歷史成品與工作區檔案，點任一個在這裡展開。")}</p>
   </div>`;
   const rh = $("#route-hint");
   if (rh) rh.innerHTML = "";
@@ -1154,7 +1170,7 @@ $("#go-btn").onclick = async () => {
   const rh = $("#route-hint");
   if (picked === "auto") {
     rh.classList.add("show");
-    rh.textContent = "🪄 判斷適合的領域…";
+    rh.textContent = window.t("board.routeAuto", "🪄 判斷適合的領域…");
   }
 
   const r = await api("/v1/tasks", {
@@ -1172,7 +1188,7 @@ $("#go-btn").onclick = async () => {
 
   if (r.routed && r.pack) {
     rh.classList.add("show");
-    rh.innerHTML = `🪄 已自動用「<b>${esc(packLabel(r.pack))}</b>」領域 · 不對的話可在上方下拉改選`;
+    rh.innerHTML = window.t("board.routeAutoResult", "🪄 已自動用「<b>%n</b>」領域 · 不對的話可在上方下拉改選").replace("%n", esc(packLabel(r.pack)));
   } else {
     rh.classList.remove("show");
   }
@@ -1357,41 +1373,51 @@ function statusClass(s) {
   return s === "running" ? "running" : s === "needs-input" ? "needs" : s === "done" ? "done" : s === "error" || s === "cancelled" || s === "interrupted" ? "error" : "";
 }
 
-const STATUS_TEXT = {
-  queued: "排隊中",
-  running: "進行中…",
-  "needs-input": "需要你回答",
-  done: "已完成",
-  error: "失敗",
-  cancelled: "已中斷",
-  interrupted: "已中斷(重啟)",
+const STATUS_KEYS = {
+  queued: ["board.status.queued", "排隊中"],
+  running: ["board.status.running", "進行中…"],
+  "needs-input": ["board.status.needsInput", "需要你回答"],
+  done: ["board.status.done", "已完成"],
+  error: ["board.status.error", "失敗"],
+  cancelled: ["board.status.cancelled", "已中斷"],
+  interrupted: ["board.status.interrupted", "已中斷(重啟)"],
 };
+function statusText(s) {
+  const e = STATUS_KEYS[s];
+  return e ? window.t(e[0], e[1]) : s;
+}
 
-const PHASE_ZH = {
-  starting: "啟動中",
-  thinking: "思考中",
-  acting: "執行中",
-  verifying: "驗收中",
-  verified: "驗收通過",
-  fixing: "修正中",
-  "needs-input": "等你回答",
+const PHASE_KEYS = {
+  starting: ["board.phase.starting", "啟動中"],
+  thinking: ["board.phase.thinking", "思考中"],
+  acting: ["board.phase.acting", "執行中"],
+  verifying: ["board.phase.verifying", "驗收中"],
+  verified: ["board.phase.verified", "驗收通過"],
+  fixing: ["board.phase.fixing", "修正中"],
+  "needs-input": ["board.phase.needsInput", "等你回答"],
 };
+function phaseText(p) {
+  const e = PHASE_KEYS[p];
+  return e ? window.t(e[0], e[1]) : window.t("board.phase.inProgress", "進行中");
+}
 
 function todosHtml(p) {
   if (!p || !p.todos || !p.todos.length) return "";
   const todos = p.todos;
   const done = todos.filter((t) => t.status === "completed").length;
   // 全部完成 → 收合成一行（Claude Code：全完成即清 active state）
-  if (done === todos.length) return `<div class="todos done"><div class="todos-label">☑ 待辦 · 全部完成（${todos.length}）</div></div>`;
+  if (done === todos.length) return `<div class="todos done"><div class="todos-label">${window.t("board.todosAllDone", "☑ 待辦 · 全部完成（%n）").replace("%n", todos.length)}</div></div>`;
   const icons = { completed: "☑", in_progress: "◐", pending: "☐" };
   return `<div class="todos">
-    <div class="todos-label">待辦 · ${done}/${todos.length} 完成</div>
-    ${todos.map((td) => `<div class="todo-item ${td.status}"><span class="todo-ic" aria-hidden="true">${icons[td.status] || "☐"}</span><span class="todo-text">${esc(td.content)}</span>${td.status === "in_progress" ? '<span class="todo-tag">進行中</span>' : ""}</div>`).join("")}</div>`;
+    <div class="todos-label">${window.t("board.todosProgress", "待辦 · %n1/%n2 完成").replace("%n1", done).replace("%n2", todos.length)}</div>
+    ${todos.map((td) => `<div class="todo-item ${td.status}"><span class="todo-ic" aria-hidden="true">${icons[td.status] || "☐"}</span><span class="todo-text">${esc(td.content)}</span>${td.status === "in_progress" ? `<span class="todo-tag">${window.t("board.phase.inProgress", "進行中")}</span>` : ""}</div>`).join("")}</div>`;
 }
 
 function progressHtml(t) {
   const p = t.progress || {};
-  const head = `${PHASE_ZH[p.phase] || "進行中"}${p.round ? ` · 第 ${p.round} 輪` : ""}${p.steps ? ` · ${p.steps} 個動作` : ""} · 已進行 <span id="elapsed">${elapsedOf(t)}s</span>`;
+  const roundPart = p.round ? window.t("board.roundLabel", " · 第 %n 輪").replace("%n", p.round) : "";
+  const stepsPart = p.steps ? window.t("board.stepsLabel", " · %n 個動作").replace("%n", p.steps) : "";
+  const head = `${phaseText(p.phase)}${roundPart}${stepsPart}${window.t("board.elapsedLabel", " · 已進行 ")}<span id="elapsed">${elapsedOf(t)}s</span>`;
   const think = p.thinking ? `<div class="step thinking">💭 ${esc(p.thinking)}…</div>` : "";
   const steps = (p.recent || [])
     .slice()
@@ -1402,13 +1428,13 @@ function progressHtml(t) {
 }
 
 function logHtml(p) {
-  if (!p || !(p.log || []).length) return `<div class="empty">（尚無步驟）</div>`;
+  if (!p || !(p.log || []).length) return `<div class="empty">${window.t("board.noSteps", "（尚無步驟）")}</div>`;
   return p.log
     .map((s) => {
       const path = s.diff && s.diff.path; // 有 diff 的步驟（write/edit）→ 可點開預覽該檔（過程↔工作區連動）
       const inner = `▸ ${esc(TOOL_ZH[s.name] || s.name)}${s.summary ? ` <span class="dim">${esc(s.summary)}</span>` : ""}${s.diff ? diffHtml(s.diff) : ""}`;
       return path
-        ? `<button class="log-step linked ${s.isError ? "error" : ""}" type="button" onclick="wbView('${encodeURIComponent(path)}','${jsAttr(path)}')" title="預覽 ${esc(path)}">${inner}</button>`
+        ? `<button class="log-step linked ${s.isError ? "error" : ""}" type="button" onclick="wbView('${encodeURIComponent(path)}','${jsAttr(path)}')" title="${esc(window.t("board.previewTitle", "預覽 %n").replace("%n", esc(path)))}">${inner}</button>`
         : `<div class="log-step ${s.isError ? "error" : ""}">${inner}</div>`;
     })
     .join("");
@@ -1417,10 +1443,10 @@ function logHtml(p) {
 // 驗收徽章（完成定義）：通過＝綠勾、未通過＝琥珀。null/未驗收 → 不顯示。
 function verifyBadgeWb(v) {
   if (!v || !v.ran) return "";
-  const rounds = v.rounds > 1 ? `·${v.rounds}輪` : "";
+  const rounds = v.rounds > 1 ? window.t("board.verifyRounds", "·%n輪").replace("%n", v.rounds) : "";
   return v.ok
-    ? `<span class="badge vok">✓ 驗收通過${rounds}</span>`
-    : `<span class="badge vfail">⚠ 未通過驗收${rounds}</span>`;
+    ? `<span class="badge vok">${window.t("board.verifyOk", "✓ 驗收通過%n").replace("%n", rounds)}</span>`
+    : `<span class="badge vfail">${window.t("board.verifyFail", "⚠ 未通過驗收%n").replace("%n", rounds)}</span>`;
 }
 
 function renderCurrent(t) {
@@ -1442,7 +1468,7 @@ function renderCurrent(t) {
   const logSec = nLog
     ? `<div class="log-section">
         <button class="log-toggle" onclick="toggleLog()" aria-expanded="${expandedLog}">
-          ${expandedLog ? "▾" : "▸"} 展開過程（${nLog} 步）
+          ${expandedLog ? "▾" : "▸"} ${window.t("board.expandLog", "展開過程（%n 步）").replace("%n", nLog)}
         </button>
         ${expandedLog ? `<div class="log-list">${logHtml(p)}</div>` : ""}
       </div>`
@@ -1450,15 +1476,15 @@ function renderCurrent(t) {
 
   $("#current-task").innerHTML = `<article class="task-card">
     <div class="task-header">
-      <div class="task-goal">${esc(t.goal || "任務")}</div>
+      <div class="task-goal">${esc(t.goal || window.t("board.taskFallback", "任務"))}</div>
       <div class="task-meta">
-        <span class="badge ${statusClass(t.status)}">${STATUS_TEXT[t.status] || t.status}${t.rounds ? ` · ${t.rounds} 輪` : ""}</span>
+        <span class="badge ${statusClass(t.status)}">${statusText(t.status)}${t.rounds ? window.t("board.roundsSuffix", " · %n 輪").replace("%n", t.rounds) : ""}</span>
         ${t.pack ? `<span class="badge">${t.auto ? "🪄" : "🧭"} ${esc(packLabel(t.pack))}</span>` : ""}
         <span class="badge">📁 ${esc(t.workspace || "default")}</span>
         ${verifyBadgeWb(t.result?.verify)}
       </div>
       <div class="task-actions">
-        ${CANCELLABLE.includes(t.status) ? `<button class="danger" onclick="cancelTask('${t.taskId}')">停止</button>` : ""}
+        ${CANCELLABLE.includes(t.status) ? `<button class="danger" onclick="cancelTask('${t.taskId}')">${window.t("composer.stop", "停止")}</button>` : ""}
       </div>
     </div>
 
@@ -1468,48 +1494,48 @@ function renderCurrent(t) {
 
     ${t.status === "needs-input" ? `<div class="question-box">
       <div class="question-label">❓ ${esc(t.pending?.question)}</div>
-      <label for="ans" class="sr-only">你的回答</label>
-      <input id="ans" class="question-input" placeholder="輸入你的回答，按 Enter 送出">
+      <label for="ans" class="sr-only">${window.t("board.yourAnswer", "你的回答")}</label>
+      <input id="ans" class="question-input" placeholder="${esc(window.t("board.answerPlaceholder", "輸入你的回答，按 Enter 送出"))}">
     </div>` : ""}
 
     ${t.status === "running" ? `<div class="steer-zone">
-      ${(p.steers || []).slice(-3).map((s) => `<div class="steer-note">✋ 已收到：${esc(s)}</div>`).join("")}
-      <label for="steerin" class="sr-only">補充指示</label>
-      <input id="steerin" class="steer-input" placeholder="想補充或調整方向？打字按 Enter——會在下一步納入">
+      ${(p.steers || []).slice(-3).map((s) => `<div class="steer-note">${window.t("board.steerReceived", "✋ 已收到：%n").replace("%n", esc(s))}</div>`).join("")}
+      <label for="steerin" class="sr-only">${window.t("board.steerLabel", "補充指示")}</label>
+      <input id="steerin" class="steer-input" placeholder="${esc(window.t("board.steerPlaceholder", "想補充或調整方向？打字按 Enter——會在下一步納入"))}">
     </div>` : ""}
 
     ${t.status === "done" ? `<div class="summary">
-      <div class="summary-label">摘要</div>
+      <div class="summary-label">${window.t("board.summaryLabel", "摘要")}</div>
       <div class="summary-text md">${mdRender(t.result?.text || "")}</div>
       ${t.result?.verify && t.result.verify.ran && !t.result.verify.ok && t.result.verify.output
-        ? `<details class="vbadge-wrap"><summary class="vfail-link">⚠ 驗收未通過——查看輸出</summary><pre class="vbadge-out">${esc(t.result.verify.output)}</pre></details>`
+        ? `<details class="vbadge-wrap"><summary class="vfail-link">${window.t("board.verifyFailDetails", "⚠ 驗收未通過——查看輸出")}</summary><pre class="vbadge-out">${esc(t.result.verify.output)}</pre></details>`
         : ""}
     </div>` : ""}
 
     ${t.status === "error" ? `<div class="error-msg">⚠ ${esc(t.error)}</div>` : ""}
 
     ${files.length ? `<div class="artifacts">
-      <div class="artifacts-label">📦 成品</div>
-      ${files.map(([f, k]) => `<button class="artifact-file ${k === "mod" ? "modified" : ""}" onclick="viewFile('${t.taskId}','${encodeURIComponent(f)}','${jsAttr(f)}')" aria-label="${k === "mod" ? "修改" : "新建"} ${esc(f)}">${k === "mod" ? "~" : "+"} ${esc(f)}</button>`).join("")}
+      <div class="artifacts-label">${window.t("board.artifactsLabel", "📦 成品")}</div>
+      ${files.map(([f, k]) => `<button class="artifact-file ${k === "mod" ? "modified" : ""}" onclick="viewFile('${t.taskId}','${encodeURIComponent(f)}','${jsAttr(f)}')" aria-label="${k === "mod" ? esc(window.t("board.fileModified", "修改")) : esc(window.t("board.fileNew", "新建"))} ${esc(f)}">${k === "mod" ? "~" : "+"} ${esc(f)}</button>`).join("")}
     </div>` : ""}
 
     ${t.result && t.result.workspaceDir ? `<div class="file-location">
-      📂 位置：<button class="loc-code" title="點擊複製" onclick="navigator.clipboard?.writeText('${esc(t.result.workspaceDir)}')" type="button">${esc(t.result.workspaceDir)}</button>
+      ${window.t("board.locationLabel", "📂 位置：")}<button class="loc-code" title="${esc(window.t("board.copyTitle", "點擊複製"))}" onclick="navigator.clipboard?.writeText('${esc(t.result.workspaceDir)}')" type="button">${esc(t.result.workspaceDir)}</button>
     </div>` : ""}
 
     ${(t.status === "done" && files.length) ? `<div class="export-zone">
-      <span class="export-label">📤 匯出成：</span>
+      <span class="export-label">${window.t("board.exportLabel", "📤 匯出成：")}</span>
       <button class="ghost export-btn" onclick="exportAs('pdf','${esc(t.sessionId || "")}','${esc(t.workspace || "default")}')">PDF</button>
       <button class="ghost export-btn" onclick="exportAs('docx','${esc(t.sessionId || "")}','${esc(t.workspace || "default")}')">Word</button>
-      <button class="ghost export-btn" onclick="exportAs('pptx','${esc(t.sessionId || "")}','${esc(t.workspace || "default")}')">簡報</button>
+      <button class="ghost export-btn" onclick="exportAs('pptx','${esc(t.sessionId || "")}','${esc(t.workspace || "default")}')">${window.t("board.exportPptx", "簡報")}</button>
     </div>` : ""}
 
     ${t.status === "done" ? `<div class="continue-zone">
-      <button class="ghost continue-btn" onclick="toggleFollowup()">↳ 繼續／調整這個成果</button>
+      <button class="ghost continue-btn" onclick="toggleFollowup()">${window.t("board.continueBtn", "↳ 繼續／調整這個成果")}</button>
       <div id="fubox" style="display:none" class="continue-box">
-        <label for="fugoal" class="sr-only">想怎麼調整或繼續</label>
-        <textarea id="fugoal" class="continue-textarea" placeholder="想怎麼調整或繼續深入？（會接續這次的對話與檔案）"></textarea>
-        <button class="primary" onclick="submitFollowup('${esc(t.sessionId || "")}','${esc(t.pack || "general")}','${esc(t.workspace || "default")}')">送出 →</button>
+        <label for="fugoal" class="sr-only">${window.t("board.continueLabel", "想怎麼調整或繼續")}</label>
+        <textarea id="fugoal" class="continue-textarea" placeholder="${esc(window.t("board.continuePlaceholder", "想怎麼調整或繼續深入？（會接續這次的對話與檔案）"))}"></textarea>
+        <button class="primary" onclick="submitFollowup('${esc(t.sessionId || "")}','${esc(t.pack || "general")}','${esc(t.workspace || "default")}')">${window.t("board.continueSubmit", "送出 →")}</button>
       </div>
     </div>` : ""}
   </article>`;
@@ -1644,13 +1670,13 @@ function renderTabs() {
   const el = $("#wz-tabs"); if (!el) return;
   const fixed = (id, label, onclick) =>
     `<button class="wz-tab${activeTab === id ? " active" : ""}" type="button" role="tab" aria-selected="${activeTab === id}" onclick="${onclick}"><span class="wz-tab-lbl">${label}</span></button>`;
-  let html = fixed("task", "📋 任務", "setTab('task')")
-           + fixed("exp", "🧠 記憶", "openExperience()");
+  let html = fixed("task", "📋 " + window.t("board.tabTask", "任務"), "setTab('task')")
+           + fixed("exp", "🧠 " + window.t("board.tabMemory", "記憶"), "openExperience()");
   openFiles.forEach((f, i) => {
     const on = activeTab === "file:" + f.key;
     html += `<button class="wz-tab${on ? " active" : ""}" type="button" role="tab" aria-selected="${on}" onclick="setFileTab(${i})" title="${esc(f.name)}">`
       + `<span class="wz-tab-lbl">📄 ${esc(f.name)}</span>`
-      + `<span class="wz-tab-x" role="button" tabindex="0" aria-label="關閉 ${esc(f.name)}" onclick="event.stopPropagation();closeFileAt(${i})">✕</span>`
+      + `<span class="wz-tab-x" role="button" tabindex="0" aria-label="${esc(window.t("skills.close", "關閉"))} ${esc(f.name)}" onclick="event.stopPropagation();closeFileAt(${i})">✕</span>`
       + `</button>`;
   });
   el.innerHTML = html;
@@ -1712,7 +1738,7 @@ async function renderFileBody(f) {
   const path = decodeURIComponent(f.encPath);
   const mine = () => activeTab === "file:" + f.key; // 仍是當前檔才寫入
 
-  const bar = `<div class="viewer-bar"><span>📄 ${esc(name)}</span> · <a href="${urlFn(path)}" target="_blank">開新分頁</a> · <a href="${urlFn(path, "&download=1")}">下載</a><span class="spacer" aria-hidden="true"></span><button class="ghost" onclick="closeActiveFile()" aria-label="關閉預覽">✕ 關閉</button></div>`;
+  const bar = `<div class="viewer-bar"><span>📄 ${esc(name)}</span> · <a href="${urlFn(path)}" target="_blank">${window.t("preview.newTab", "開新分頁")}</a> · <a href="${urlFn(path, "&download=1")}">${window.t("preview.download", "下載")}</a><span class="spacer" aria-hidden="true"></span><button class="ghost" onclick="closeActiveFile()" aria-label="${esc(window.t("preview.closeAria", "關閉預覽"))}">${window.t("preview.close", "✕ 關閉")}</button></div>`;
 
   if (IMG.test(name)) { v.innerHTML = bar + `<img class="viewer-img" src="${urlFn(path)}" alt="${esc(name)}">`; return; }
   if (HTMLF.test(name)) { v.innerHTML = bar + `<iframe class="viewer-iframe" sandbox src="${urlFn(path)}"></iframe>`; return; }
@@ -1758,11 +1784,11 @@ async function loadHistory() {
         .map(
           (t) => `<button class="history-item${t.taskId === activeId ? " active" : ""}" onclick="openTask('${t.taskId}')">
       <div class="g">${t.continued ? '<span aria-hidden="true">↳</span> ' : ""}${esc(t.goal || t.taskId)}</div>
-      <div class="m">${t.status ? STATUS_TEXT[t.status] || t.status : ""} · ${fmtTime(t.createdAt)}</div>
+      <div class="m">${t.status ? statusText(t.status) : ""} · ${fmtTime(t.createdAt)}</div>
     </button>`
         )
         .join("")
-    : `<div class="empty">還沒有成品<br><span class="empty-hint">在右側說出你的第一個願望 →</span></div>`;
+    : `<div class="empty">${window.t("board.historyEmpty", "還沒有成品")}<br><span class="empty-hint">${window.t("board.historyEmptyHint", "在右側說出你的第一個願望 →")}</span></div>`;
 }
 
 async function openTask(id) {
@@ -1804,7 +1830,7 @@ async function loadFiles() {
   const bc = $("#file-breadcrumb");
   bc.textContent = wbSub ? "📂 " + wbSub : "";
 
-  let html = wbSub ? `<button class="file-up" onclick="wbUp()" aria-label="上一層" type="button">⬆ 上一層</button>` : "";
+  let html = wbSub ? `<button class="file-up" onclick="wbUp()" aria-label="${esc(window.t("files.up", "上一層"))}" type="button">⬆ ${esc(window.t("files.up", "上一層"))}</button>` : "";
   html += (r.dirs || []).map((d) => `<button class="file-row" onclick="wbNav('${encodeURIComponent((wbSub ? wbSub + "/" : "") + d)}')" type="button">📁 <span class="name">${esc(d)}</span>/</button>`).join("");
   html +=
     (r.files || []).map((f) => {
@@ -1814,12 +1840,12 @@ async function loadFiles() {
       <span class="name">📄 ${esc(f.name)}</span>
       <span class="size">${fmtSize(f.size)}</span>
     </button>
-    <button class="del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button" title="刪除" aria-label="刪除 ${esc(f.name)}">🗑</button>
+    <button class="del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(f.name)}')" type="button" title="${esc(window.t("files.del", "刪除"))}" aria-label="${esc(window.t("files.del", "刪除"))} ${esc(f.name)}">🗑</button>
   </div>`;
     }).join("");
 
   if (!(r.dirs || []).length && !(r.files || []).length)
-    html += `<div class="empty">${wbSub ? "（空資料夾）" : "還沒有檔案<br><span class=\"empty-hint\">完成任務後，成品會出現在這裡</span>"}</div>`;
+    html += `<div class="empty">${wbSub ? "（" + esc(window.t("files.emptyDir", "空資料夾")) + "）" : esc(window.t("files.empty", "還沒有檔案")) + `<br><span class="empty-hint">${window.t("board.filesEmptyHint", "完成任務後，成品會出現在這裡")}</span>`}</div>`;
 
   $("#wbfiles").innerHTML = html;
 }
@@ -1849,7 +1875,9 @@ async function refreshExp() {
   const learned = (c.skills || 0) + (c.playbook || 0);
   const total = (c.memory || 0) + learned + (c.episodes || 0);
   const badge = $("#exp-count");
-  if (badge) badge.textContent = total ? `記得 ${c.memory || 0}·會 ${learned}·歷 ${c.episodes || 0}` : "尚無累積";
+  if (badge) badge.textContent = total
+    ? window.t("board.expCountText", "記得 %n1·會 %n2·歷 %n3").replace("%n1", c.memory || 0).replace("%n2", learned).replace("%n3", c.episodes || 0)
+    : window.t("board.expCountEmpty", "尚無累積");
   if (expOpen && e) renderExperience(e);
   return e;
 }
@@ -1884,7 +1912,7 @@ async function openExperience() {
 }
 
 const expBar = () =>
-  `<div class="viewer-bar"><span>🧠 它對你的了解</span> · <span class="dim">在「${esc(spaceLabel(curSpace).replace(/^📁 /, ""))}」累積，越用越懂你</span><span class="spacer" aria-hidden="true"></span><button class="ghost" onclick="closeExperience()" aria-label="關閉">✕ 關閉</button></div>`;
+  `<div class="viewer-bar"><span>🧠 ${window.t("board.expLabel", "它對你的了解")}</span> · <span class="dim">${window.t("board.expTagline", "在「%n」累積，越用越懂你").replace("%n", esc(spaceLabel(curSpace).replace(/^📁 /, "")))}</span><span class="spacer" aria-hidden="true"></span><button class="ghost" onclick="closeExperience()" aria-label="${esc(window.t("skills.close", "關閉"))}">${window.t("preview.close", "✕ 關閉")}</button></div>`;
 
 function renderExperience(e) {
   const v = $("#exp-viewer");
@@ -1892,8 +1920,8 @@ function renderExperience(e) {
   if (!((c.memory || 0) + (c.playbook || 0) + (c.skills || 0) + (c.episodes || 0) + (c.trust || 0))) {
     v.innerHTML = expBar() + `<div class="exp-body"><div class="welcome">
       <div class="welcome-icon" aria-hidden="true">🧠</div>
-      <h2 class="welcome-title">還沒有累積經驗</h2>
-      <p class="welcome-sub">多交辦幾次任務——它會記住你的偏好、學會這個專案的做法、把可重複的流程結晶成技能。<br>這些跨任務累積，讓它越用越懂你（這是 Claude Code 沒有的）。</p>
+      <h2 class="welcome-title">${window.t("board.expEmptyTitle", "還沒有累積經驗")}</h2>
+      <p class="welcome-sub">${window.t("board.expEmptySub1", "多交辦幾次任務——它會記住你的偏好、學會這個專案的做法、把可重複的流程結晶成技能。")}<br>${window.t("board.expEmptySub2", "這些跨任務累積，讓它越用越懂你（這是 Claude Code 沒有的）。")}</p>
     </div></div>`;
     return;
   }
@@ -1902,20 +1930,20 @@ function renderExperience(e) {
   const pbHtml = (e.playbook || []).map((p) => `<div class="exp-item"><div class="exp-item-t">${esc(p.topic)} <span class="exp-pack">${esc(packLabel(p.pack))}</span></div><div class="exp-item-d">${esc(p.note)}</div></div>`).join("");
   const skHtml = (e.skills || []).map((s, i) => {
     const sid = "skb-" + i;
-    return `<div class="exp-item"><div class="exp-item-t">⚡ ${esc(s.name)}${s.used ? ` <span class="exp-used">用過 ${s.used} 次</span>` : ""}${s.stale ? ` <span class="exp-stale">⚠ 待修</span>` : ""} <span class="exp-pack">${esc(packLabel(s.pack))}</span>` +
-      `<span class="sk-act"><button class="sk-btn" type="button" onclick="skillView('${esc(s.pack)}','${esc(s.name)}','${sid}')">查看</button>` +
-      `<button class="sk-btn danger" type="button" onclick="skillDel('${esc(s.pack)}','${esc(s.name)}')">刪除</button></span></div>` +
+    return `<div class="exp-item"><div class="exp-item-t">⚡ ${esc(s.name)}${s.used ? ` <span class="exp-used">${window.t("skills.used", "用過 %n 次").replace("%n", s.used)}</span>` : ""}${s.stale ? ` <span class="exp-stale">${window.t("skills.stale", "⚠ 待修")}</span>` : ""} <span class="exp-pack">${esc(packLabel(s.pack))}</span>` +
+      `<span class="sk-act"><button class="sk-btn" type="button" onclick="skillView('${esc(s.pack)}','${esc(s.name)}','${sid}')">${window.t("skills.view", "查看")}</button>` +
+      `<button class="sk-btn danger" type="button" onclick="skillDel('${esc(s.pack)}','${esc(s.name)}')">${window.t("skills.del", "刪除")}</button></span></div>` +
       `${s.desc ? `<div class="exp-item-d">${esc(s.desc)}</div>` : ""}<pre class="sk-body" id="${sid}" hidden></pre></div>`;
   }).join("");
-  const ocText = (o) => (o === "success" ? "✓ 成功" : o === "failure" ? "✗ 失敗" : esc(o));
+  const ocText = (o) => (o === "success" ? window.t("board.outcomeSuccess", "✓ 成功") : o === "failure" ? window.t("board.outcomeFailure", "✗ 失敗") : esc(o));
   const epHtml = (e.episodes || []).map((ep) => `<div class="exp-ep ${ep.outcome === "success" ? "ok" : ep.outcome === "failure" ? "fail" : ""}"><div class="exp-ep-s">${esc(ep.summary)}</div><div class="exp-ep-m">${ep.outcome ? `<span class="exp-oc">${ocText(ep.outcome)}</span>` : ""}${(ep.tags || []).map((t) => `<span class="exp-tag">${esc(t)}</span>`).join("")}<span>${fmtTime(ep.ts)}</span></div></div>`).join("");
   const trust = e.trust || { tools: [], bash: [] };
   const trHtml = [...(trust.tools || []).map((t) => ["🔧", t]), ...(trust.bash || []).map((b) => ["$", b])].map(([ic, x]) => `<span class="exp-chip">${ic} ${esc(x)}</span>`).join("");
   v.innerHTML = expBar() + `<div class="exp-body">
-    ${sec("🧠", "記得你", (e.memory || []).length, `<div class="exp-facts">${memHtml}</div>`)}
-    ${sec("📘", "學會的做法", (e.playbook || []).length + (e.skills || []).length, pbHtml + skHtml)}
-    ${sec("🗂", "做過的事", (e.episodes || []).length, epHtml)}
-    ${sec("🔓", "已放行的操作", (trust.tools || []).length + (trust.bash || []).length, `<div class="exp-chips">${trHtml}</div>`)}
+    ${sec("🧠", window.t("board.secMemory", "記得你"), (e.memory || []).length, `<div class="exp-facts">${memHtml}</div>`)}
+    ${sec("📘", window.t("board.secLearned", "學會的做法"), (e.playbook || []).length + (e.skills || []).length, pbHtml + skHtml)}
+    ${sec("🗂", window.t("board.secEpisodes", "做過的事"), (e.episodes || []).length, epHtml)}
+    ${sec("🔓", window.t("board.secTrust", "已放行的操作"), (trust.tools || []).length + (trust.bash || []).length, `<div class="exp-chips">${trHtml}</div>`)}
   </div>`;
 }
 

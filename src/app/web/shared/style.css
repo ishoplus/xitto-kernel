@@ -271,6 +271,8 @@ a:focus-visible {
 
 /* 主題切換鈕（三頁一致：側欄標題列右上）*/
 .theme-btn { flex-shrink: 0; padding: 4px 9px; font-size: 15px; line-height: 1; }
+/* 語言切換器（三頁一致：緊鄰主題切換鈕左側）*/
+.lang-switch { flex-shrink: 0; font-size: 12px; padding: 3px 6px; line-height: 1.4; width: auto; }
 /* 驗收徽章（完成定義）*/
 .badge.vok   { color: var(--ok);   border-color: color-mix(in srgb, var(--ok) 45%, var(--line));   background: color-mix(in srgb, var(--ok) 10%, transparent); }
 .badge.vfail { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: color-mix(in srgb, var(--warn) 10%, transparent); }

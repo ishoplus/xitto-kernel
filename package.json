@@ -74,6 +74,7 @@
     "react": "^19.2.7"
   },
   "devDependencies": {
-    "ink-testing-library": "^4.0.0"
+    "ink-testing-library": "^4.0.0",
+    "opencc-js": "^1.4.0"
   }
 }
