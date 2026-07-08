@@ -13,6 +13,7 @@
     root.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.getAttribute('data-i18n-title'), el.title); });
     root.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria'), el.getAttribute('aria-label'))); });
     root.querySelectorAll('[data-i18n-ph]').forEach((el) => { el.placeholder = t(el.getAttribute('data-i18n-ph'), el.placeholder); });
+    root.querySelectorAll('[data-i18n-tip]').forEach((el) => { el.setAttribute('data-tooltip', t(el.getAttribute('data-i18n-tip'), el.getAttribute('data-tooltip'))); });
   }
   window.t = t;
   window.applyI18n = applyI18n;
