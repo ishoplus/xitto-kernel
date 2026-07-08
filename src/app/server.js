@@ -909,7 +909,9 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   // 刪除 session（內存 + 落地）：關房時聯刪其對話 history，避免孤兒 session 檔累積。
   const dropSession = (id) => { if (!id) return; sessions.delete(id); try { rmSync(join(sessDir, id + '.json'), { force: true }); } catch { /* 略 */ } };
 
-  const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
+  // no-store：這些都是動態 API 回應（檔案列表／任務／模型…），絕不可被瀏覽器或企業代理快取，
+  // 否則「刷新」打同一 URL 會回舊快取（症狀：新建的檔案／資料夾刷不出來，舊的照在）。
+  const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(obj)); };
   // SSO 授權名冊（xitto 自管）：SSO 開時查它決定 admin/member/readonly；SSO 關時仍可用 master token 經 /v1/admins 預先配置。
   const roleStore = createRoleStore({ dir: join(baseDir, 'auth'), adminEmails, allowedDomain: allowedEmailDomain, openAccess: ssoOpen });
   // 認證 adapter：注入的優先（SSO），否則用 defaultAuth 封裝的現有 token 邏輯 → 未注入即與過去完全一致。

@@ -1489,7 +1489,8 @@ async function wbDelete(encFull, name, isDir) {
 }
 
 async function loadFiles() {
-  const r = await api("/v1/workspaces/files?ws=" + encodeURIComponent(curSpace) + "&sub=" + encodeURIComponent(wbSub)).then((r) => r.json()).catch(() => ({ dirs: [], files: [] }));
+  // _t 時間戳打破快取：企業代理／瀏覽器可能無視 no-store，唯一 URL 才保證每次真的重列（否則新建的檔案／資料夾刷不出來）。
+  const r = await api("/v1/workspaces/files?ws=" + encodeURIComponent(curSpace) + "&sub=" + encodeURIComponent(wbSub) + "&_t=" + Date.now(), { cache: "no-store" }).then((r) => r.json()).catch(() => ({ dirs: [], files: [] }));
 
   const bc = $("#file-breadcrumb");
   bc.textContent = wbSub ? "📂 " + wbSub : "";
