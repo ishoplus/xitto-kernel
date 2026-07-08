@@ -1139,14 +1139,14 @@ body {
               <label for="pack" class="sr-only">選擇領域</label>
               <select id="pack" class="tool-select" aria-label="選擇領域" title="這則訊息用哪個領域包"></select>
               <label for="model" class="sr-only">選擇模型</label>
-              <select id="model" class="tool-select" aria-label="選擇模型" title="這則訊息用哪個 AI 模型（回覆中也可切，下一則生效）"><option value="">🧠 預設模型</option></select>
+              <select id="model" class="tool-select" aria-label="選擇模型" title="這則訊息用哪個 AI 模型（回覆中也可切，下一則生效）"><option value="" data-i18n="composer.modelDefault">🧠 預設模型</option></select>
               <label for="think" class="sr-only">思考模式</label>
               <select id="think" class="tool-select" aria-label="思考模式" title="這則訊息的思考強度（僅推理型模型有效；下一則生效）">
-                <option value="">💭 思考：預設</option>
-                <option value="off">💭 關閉</option>
-                <option value="low">💭 低</option>
-                <option value="medium">💭 中</option>
-                <option value="high">💭 高</option>
+                <option value="" data-i18n="think.default">💭 思考：預設</option>
+                <option value="off" data-i18n="think.off">💭 關閉</option>
+                <option value="low" data-i18n="think.low">💭 低</option>
+                <option value="medium" data-i18n="think.medium">💭 中</option>
+                <option value="high" data-i18n="think.high">💭 高</option>
               </select>
             </div>
             <div class="composer-send">
@@ -1159,8 +1159,8 @@ body {
           <span id="input-hint" data-i18n="composer.hint">Enter 送出 · Shift+Enter 換行</span>
           <span class="spacer" aria-hidden="true"></span>
           <span id="status-hint" aria-live="polite"></span>
-          <button class="ghost view-toggle" id="bg-toggle" type="button" data-tooltip="前景串流／丟後台背景執行" aria-label="切換背景執行">⚡ 背景：關</button>
-          <button class="ghost view-toggle" id="view-toggle" type="button" data-tooltip="切換終端機／泡泡視圖" aria-label="切換對話視圖">⌗ 終端機</button>
+          <button class="ghost view-toggle" id="bg-toggle" type="button" data-tooltip="前景串流／丟後台背景執行" aria-label="切換背景執行" data-i18n="toggle.bgOff">⚡ 背景：關</button>
+          <button class="ghost view-toggle" id="view-toggle" type="button" data-tooltip="切換終端機／泡泡視圖" aria-label="切換對話視圖" data-i18n="toggle.viewTerminal">⌗ 終端機</button>
         </div>
       </div>
     </div>
@@ -1223,7 +1223,7 @@ function applyView(v) {
   const composer = document.getElementById("main-input");
   if (composer) composer.classList.toggle("tui", tui);   // 輸入框也跟著變終端機樣式
   const b = $("#view-toggle");
-  if (b) b.textContent = tui ? "💬 泡泡" : "⌗ 終端機";   // 顯示「切換到」的目標
+  if (b) b.textContent = tui ? t("toggle.viewBubble", "💬 泡泡") : t("toggle.viewTerminal", "⌗ 終端機");   // 顯示「切換到」的目標
 }
 applyView(localStorage.getItem("xk_chatview") || "bubble");
 
@@ -1274,7 +1274,7 @@ let bgTimer = null; // 每秒刷新 HUD 的經過時間
 function applyBgMode() {
   const b = $("#bg-toggle");
   if (!b) return;
-  b.textContent = bgMode ? "⚡ 背景：開" : "⚡ 背景：關";
+  b.textContent = bgMode ? t("toggle.bgOn", "⚡ 背景：開") : t("toggle.bgOff", "⚡ 背景：關");
   b.classList.toggle("on", bgMode);
 }
 $("#bg-toggle").onclick = () => {
@@ -1316,7 +1316,7 @@ async function loadModelSelect() {
   if (!data || !data.models) return;           // 訪客/無權 → 靜默保留「預設模型」單選
   const saved = localStorage.getItem(MODEL_KEY) || "";
   const defId = data.default;
-  sel.innerHTML = '<option value="">🧠 預設模型' + (defId ? "（" + esc(defId) + "）" : "") + "</option>" +
+  sel.innerHTML = '<option value="">' + esc(t("composer.modelDefault", "🧠 預設模型")) + (defId ? "（" + esc(defId) + "）" : "") + "</option>" +
     data.models.map((m) => '<option value="' + esc(m.id) + '">' + esc(m.name || m.id) + "</option>").join("");
   if (saved && data.models.some((m) => m.id === saved)) sel.value = saved;
   modelReasoning = Object.fromEntries(data.models.map((m) => [m.id, !!m.reasoning]));
