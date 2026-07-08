@@ -898,7 +898,10 @@ export function createRoleStore({ dir, adminEmails = [], allowedDomain = '', ope
   };
 }
 
-export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', ssoOpen = false, stt = null, sttStreamFactory = null, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', configPath, onReconfigure } = {}) {
+export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', ssoOpen = false, stt = null, sttStreamFactory = null, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', uiLang: uiLangCfg = '', configPath, onReconfigure } = {}) {
+  // UI 語言（部署期定，對標單部署單語系）：config.uiLang > 環境變數 > 預設繁體。前端字典由 shared/i18n/<lang>.js 提供。
+  const UI_LANGS = new Set(['zh-Hant', 'zh-Hans', 'en']);
+  const uiLang = UI_LANGS.has(process.env.XITTO_UI_LANG) ? process.env.XITTO_UI_LANG : (UI_LANGS.has(uiLangCfg) ? uiLangCfg : 'zh-Hant');
   // 可選 model 清單（跨 provider）：給 /v1/models 與「未知 model」錯誤訊息用；始終含當前預設 model。
   const modelList = (models && models.length) ? models : [{ id: model.id, name: model.name || model.id, provider: model.provider }];
   const knownModel = (id) => !id || id === model.id || modelList.some((m) => m.id === id);
@@ -1172,7 +1175,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (needsLogin(req)) return loginRedirect(res, path);
       let html; try { html = webHtml(); } catch { return json(res, 500, { error: 'web UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__VERSION__/g, pkgVersion()));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__VERSION__/g, pkgVersion()).replace(/__LANG__/g, uiLang));
     }
 
     // 「對話」網頁：同一 kernel 的另一個前端——對話式（mode:turn + 固定 sessionId 多輪、SSE 串流），
@@ -1181,7 +1184,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (needsLogin(req)) return loginRedirect(res, path);
       let html; try { html = chatHtml(); } catch { return json(res, 500, { error: 'chat UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__VERSION__/g, pkgVersion()));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__VERSION__/g, pkgVersion()).replace(/__LANG__/g, uiLang));
     }
 
     // 「會議室」網頁：主控台 vs 訪客兩種載入。
@@ -1194,7 +1197,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       let html; try { html = roomHtml(); } catch { return json(res, 500, { error: 'room UI 未找到' }); }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       // __PUBLIC_ORIGIN__：伺服器建議的對外網址（區網 IP / 域名）→ host 在 localhost 開頁時，邀請連結改用它。
-      return res.end(html.replace(/__SERVER_TOKEN__/g, guest ? '' : pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__STT__/g, sttEnabled ? 'true' : 'false').replace(/__VERSION__/g, pkgVersion()).replace(/__PUBLIC_ORIGIN__/g, () => publicOrigin || ''));
+      return res.end(html.replace(/__SERVER_TOKEN__/g, guest ? '' : pageToken(token)).replace(/__PACKS__/g, JSON.stringify(Object.keys(PACKS))).replace(/__LOCAL__/g, local ? 'true' : 'false').replace(/__STT__/g, sttEnabled ? 'true' : 'false').replace(/__VERSION__/g, pkgVersion()).replace(/__PUBLIC_ORIGIN__/g, () => publicOrigin || '').replace(/__LANG__/g, uiLang));
     }
 
     // ── 專案會議室（房間層授權：建房/列房需 master；房內動作憑邀請碼/成員 token）──

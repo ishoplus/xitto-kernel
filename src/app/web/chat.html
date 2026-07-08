@@ -8,7 +8,9 @@
 <!-- 設計系統 + 共享工具庫 -->
 <link rel="stylesheet" href="shared/style.css">
 <!-- 設定注入：server 會替換這些佔位符（HTML 才會被替換，靜態 app.js 不會），app.js 從 window.__XITTO__ 讀 -->
-<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, version: "__VERSION__" };</script>
+<script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, version: "__VERSION__", lang: "__LANG__" };</script>
+<script src="shared/i18n/__LANG__.js"></script>
+<script src="shared/i18n.js"></script>
 <script src="shared/md.js"></script>
 <script src="shared/app.js"></script>
 <script src="shared/account.js"></script>
@@ -1086,12 +1088,12 @@ body {
     
     <!-- 檔案列表 -->
     <section class="file-section" aria-label="工作區檔案">
-      <h3>📂 檔案 <button class="refresh-btn" id="files-refresh" type="button" onclick="refreshFiles()" title="刷新檔案列表" aria-label="刷新檔案列表">↻</button><button class="refresh-btn" id="open-folder-btn" type="button" onclick="openWsFolder()" title="在系統檔案管理器開啟工作目錄（本機模式）" aria-label="開啟資料夾" hidden>📂</button><button class="refresh-btn" id="open-term-btn" type="button" onclick="openWsTerminal()" title="在終端機開啟工作目錄（本機模式）" aria-label="開啟終端機" hidden>⌨</button></h3>
+      <h3>📂 <span data-i18n="files.title">檔案</span> <button class="refresh-btn" id="files-refresh" type="button" onclick="refreshFiles()" data-i18n-title="files.refresh" title="刷新檔案列表" aria-label="刷新檔案列表">↻</button><button class="refresh-btn" id="open-folder-btn" type="button" onclick="openWsFolder()" data-i18n-title="files.openFolder" title="在系統檔案管理器開啟工作目錄（本機模式）" aria-label="開啟資料夾" hidden>📂</button><button class="refresh-btn" id="open-term-btn" type="button" onclick="openWsTerminal()" data-i18n-title="files.openTerm" title="在終端機開啟工作目錄（本機模式）" aria-label="開啟終端機" hidden>⌨</button></h3>
       <div id="file-breadcrumb" class="file-breadcrumb" aria-live="polite"></div>
       <div class="file-actions">
-        <button type="button" onclick="wbMkdir()" title="在目前資料夾新建子資料夾">📁＋ 資料夾</button>
-        <button type="button" onclick="wbNewfile()" title="新建空檔案">＋ 檔案</button>
-        <button type="button" onclick="document.getElementById('wb-upload').click()" title="上傳到目前資料夾">⬆ 上傳</button>
+        <button type="button" onclick="wbMkdir()" data-i18n-title="files.newFolderTip" title="在目前資料夾新建子資料夾">📁＋ <span data-i18n="files.newFolder">資料夾</span></button>
+        <button type="button" onclick="wbNewfile()" data-i18n-title="files.newFileTip" title="新建空檔案">＋ <span data-i18n="files.newFile">檔案</span></button>
+        <button type="button" onclick="document.getElementById('wb-upload').click()" data-i18n-title="files.uploadTip" title="上傳到目前資料夾">⬆ <span data-i18n="files.upload">上傳</span></button>
         <input id="wb-upload" type="file" multiple hidden onchange="wbUpload(this.files)">
       </div>
       <div class="file-list" id="wbfiles" role="tree" aria-label="檔案列表"></div>
@@ -1495,15 +1497,17 @@ async function loadFiles() {
   const bc = $("#file-breadcrumb");
   bc.textContent = wbSub ? "📂 " + wbSub : "";
 
-  let html = wbSub ? `<button class="file-up" onclick="wbUp()" aria-label="上一層" type="button">⬆ 上一層</button>` : "";
+  const T = (k, f) => (window.t ? t(k, f) : f); // i18n（未載入時回退原文）
+  let html = wbSub ? `<button class="file-up" onclick="wbUp()" aria-label="${esc(T("files.up", "上一層"))}" type="button">⬆ ${esc(T("files.up", "上一層"))}</button>` : "";
   html += (r.dirs || []).map((d) => {
     const full = (wbSub ? wbSub + "/" : "") + d;
     // 根目錄的 tmp 是 agent 的暫存區：淡化 + 標「暫存」，但仍可點進去撈被誤丟的成品。
     const isTmp = !wbSub && d === "tmp";
     const icon = isTmp ? "🗂" : "📁";
-    const tag = isTmp ? ` <span style="opacity:.5;font-size:.85em">（暫存）</span>` : "";
+    const tag = isTmp ? ` <span style="opacity:.5;font-size:.85em">（${esc(T("files.tmpTag", "暫存"))}）</span>` : "";
     const rowStyle = isTmp ? ` style="opacity:.7"` : "";
-    return `<div class="file-item"><button class="file-row"${rowStyle} onclick="wbNav('${encodeURIComponent(full)}')" type="button" title="${isTmp ? '暫存資料夾：agent 的中間／草稿檔放這裡（可能被清理）' : ''}">${icon} <span class="name">${esc(d)}</span>/${tag}</button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(d)}',true)" title="刪除資料夾" type="button">🗑</button></div>`;
+    const tmpTip = isTmp ? esc(T("files.tmpTip", "暫存資料夾：agent 的中間／草稿檔放這裡（可能被清理）")) : "";
+    return `<div class="file-item"><button class="file-row"${rowStyle} onclick="wbNav('${encodeURIComponent(full)}')" type="button" title="${tmpTip}">${icon} <span class="name">${esc(d)}</span>/${tag}</button><button class="file-del" onclick="wbDelete('${encodeURIComponent(full)}','${jsAttr(d)}',true)" title="刪除資料夾" type="button">🗑</button></div>`;
   }).join("");
   html +=
     (r.files || []).map((f) => {
@@ -1515,7 +1519,7 @@ async function loadFiles() {
     }).join("");
 
   if (!(r.dirs || []).length && !(r.files || []).length)
-    html += `<div class="empty" style="padding:${8}px">（${wbSub ? "空資料夾" : "還沒有檔案"}）</div>`;
+    html += `<div class="empty" style="padding:${8}px">（${wbSub ? esc(T("files.emptyDir", "空資料夾")) : esc(T("files.empty", "還沒有檔案"))}）</div>`;
 
   $("#wbfiles").innerHTML = html;
 }
