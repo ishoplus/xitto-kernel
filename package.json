@@ -42,7 +42,7 @@
     "registry": "https://registry.npmjs.org"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "demo": "node examples/demo.js",
     "eval": "node eval/run.js",
     "serve": "node src/app/server.js",
