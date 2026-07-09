@@ -27,6 +27,11 @@ window.__I18N_DICTS__['zh-Hant'] = {
   "toggle.bgOn": "⚡ 背景：開",
   "toggle.viewTerminal": "⌗ 終端機",
   "toggle.viewBubble": "💬 泡泡",
+  "ctx.tooltip": "上下文 %p% · %u / %w · 逼近 %c% 自動壓縮",
+  "ctx.tooltipRoom": "%l 上下文 %p% · %u / %w · 逼近 %c% 自動壓縮",
+  "ctx.compacted": "✓ 已自動壓縮",
+  "compact.badge": "⊙ 已自動壓縮上下文 %r",
+  "compact.body": "較舊的 %s 則對話已摘要成 1 則、保留最近 %k 則。摘要仍在 AI 的上下文內供延續，只是上方完整原文不再逐字送給模型。",
   "worklog.title": "工作日誌",
   // 模態框 / 面板 / 預覽 / 頁尾 / 無障礙標籤
   "doc.title": "xitto · 對話",

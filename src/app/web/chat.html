@@ -525,6 +525,38 @@ body {
   opacity: .85;
 }
 
+/* 自動壓縮持久分隔標記：置中、兩側細線、可展開看細節 */
+.compact-divider {
+  margin: var(--sp-3) auto;
+  max-width: 680px;
+  width: 100%;
+}
+.compact-divider > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.compact-divider > summary::-webkit-details-marker { display: none; }
+.compact-divider .cd-rule { flex: 1; height: 1px; background: var(--line); }
+.compact-divider .cd-badge { white-space: nowrap; color: var(--ok); }
+.compact-divider > summary:hover .cd-badge { text-decoration: underline; }
+.compact-divider[open] > summary .cd-badge::after { content: " ▾"; opacity: .6; }
+.compact-divider:not([open]) > summary .cd-badge::after { content: " ▸"; opacity: .6; }
+.compact-divider .cd-body {
+  margin: var(--sp-2) auto 0;
+  max-width: 560px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--dim);
+  text-align: center;
+}
+
 .body {
   white-space: pre-wrap;
   word-wrap: break-word;
@@ -692,7 +724,6 @@ body {
 .preview-body { overflow: auto; padding: var(--sp-4); }
 .preview-pre { white-space: pre-wrap; font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 0; color: var(--fg); }
 .preview-img { max-width: 100%; border-radius: var(--r-md); display: block; margin: 0 auto; }
-
 /* ── 終端機視圖（Claude Code 風轉錄）：monospace、扁平全寬、› / ⏺ xitto / ⎿ 工具行 ── */
 .thread.tui { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .thread.tui .thread-wrap { max-width: 880px; }
@@ -912,6 +943,44 @@ body {
 }
 /* Esc 中斷提示：弱化、非主資訊 */
 #status-hint .esc-hint { color: var(--dim); font-weight: 400; }
+
+/* ── 上下文佔用指示器（對標 CC 的 context 進度）：常駐輸入區 footer，串流時即時更新，逼近門檻轉色 ── */
+#ctx-meter {
+  display: none;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: default;
+}
+#ctx-meter.on { display: inline-flex; }
+#ctx-meter .ctx-bar {
+  position: relative;
+  width: 52px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+#ctx-meter .ctx-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width var(--duration-fast) var(--ease-out), background var(--duration-fast);
+}
+/* 逼近自動壓縮門檻 → 轉琥珀；超過門檻（壓縮隨時觸發）→ 轉紅 */
+#ctx-meter.warn { color: var(--warn); }
+#ctx-meter.warn .ctx-fill { background: var(--warn); }
+#ctx-meter.crit { color: var(--danger); }
+#ctx-meter.crit .ctx-fill { background: var(--danger); }
+/* 剛自動壓縮：短暫閃一下提示文字 */
+#ctx-meter .ctx-flash { color: var(--ok); font-weight: 600; }
+@keyframes ctx-flash-fade { 0% { opacity: 1; } 100% { opacity: 1; } }
 
 /* ── 右側工作日誌軌道（寬螢幕 + 泡泡視圖：把工具/過程/diff 移出對話）── */
 .worklog {
@@ -1166,6 +1235,10 @@ body {
         <div class="composer-footer">
           <span id="input-hint" data-i18n="composer.hint">Enter 送出 · Shift+Enter 換行</span>
           <span class="spacer" aria-hidden="true"></span>
+          <span id="ctx-meter" role="status" aria-live="polite" tabindex="0">
+            <span class="ctx-bar"><span class="ctx-fill"></span></span>
+            <span class="ctx-label"></span>
+          </span>
           <span id="status-hint" aria-live="polite"></span>
           <button class="ghost view-toggle" id="bg-toggle" type="button" data-tooltip="前景串流／丟後台背景執行" aria-label="切換背景執行" data-i18n="toggle.bgOff">⚡ 背景：關</button>
           <button class="ghost view-toggle" id="view-toggle" type="button" data-tooltip="切換終端機／泡泡視圖" aria-label="切換對話視圖" data-i18n="toggle.viewTerminal">⌗ 終端機</button>
@@ -1422,6 +1495,8 @@ function saveTranscript(id, msgs) {
 let sessionId = null; // null = 尚未建立
 let messages = []; // [{role, text, tools:[], _procOpen, phase}]
 let streaming = false; // 「目前所看對話」是否有進行中的回覆（供打字游標/Esc）；由 refreshStreamingUI 同步
+const sessionCtx = new Map(); // sessionId -> { tokens, window, compactAt }：保存最近上下文佔用快照，切走再切回仍能顯示
+let ctxFlashTimer = null;     // 「剛自動壓縮」提示的淡出計時器
 
 // 前景串流改為「每對話一個 run」：切換對話不再中斷，各 run 綁自己的訊息陣列與 sessionId，可多對話並行。
 // run = { chatMsgs, sessionId, asst, abort, startedAt, tokens, firstUserText, space, pack }
@@ -1774,7 +1849,24 @@ function verifyBadge(v) {
   return `<details class="vbadge-wrap"><summary class="vbadge fail">⚠ 未通過驗收${rounds}</summary>${ev}</details>`;
 }
 
+/* 自動壓縮的「持久」分隔標記（對齊 TUI/CC：事後回看、重整頁面都還在，不像 footer 提示只閃 2.6s）。
+   可展開看壓了多少、保留多少。措辭說明「摘要仍在上下文、只是上方原文不再逐字送模型」，避免使用者誤以為 AI 忘了。 */
+function compactDividerHtml(c) {
+  const T = (k, f) => (window.t ? t(k, f) : f);
+  const range = (c.pct0 != null && c.pct1 != null)
+    ? `${c.pct0}% → ${c.pct1}%`
+    : `${fmtTokens(c.before)} → ${fmtTokens(c.after)} tokens`;
+  const badge = T("compact.badge", "⊙ 已自動壓縮上下文 %r").replace("%r", range);
+  const body = T("compact.body", "較舊的 %s 則對話已摘要成 1 則、保留最近 %k 則。摘要仍在 AI 的上下文內供延續，只是上方完整原文不再逐字送給模型。")
+    .replace("%s", c.summarized).replace("%k", c.kept);
+  return `<details class="compact-divider" role="note" aria-label="${esc(badge)}">
+    <summary><span class="cd-rule"></span><span class="cd-badge">${esc(badge)}</span><span class="cd-rule"></span></summary>
+    <div class="cd-body">${esc(body)}</div>
+  </details>`;
+}
+
 function msgHtml(m, idx) {
+  if (m.role === "divider" && m._compact) return compactDividerHtml(m._compact);
   const isUser = m.role === "user";
   const bodyHtml = isUser ? esc(m.text) : m.text ? mdRender(m.text) : "";
   const cursor =
@@ -2060,12 +2152,16 @@ function handleEvent(ev, asst) {
 function onRunEvent(run, ev) {
   // 串流首事件：拿到 sessionId → 全新對話立刻登進側欄（含進行中指示），切走後仍能切回看它續播
   if (ev.type === "session" && ev.sessionId) {
+    // 上下文視窗與自動壓縮門檻：串流首事件帶來 → 存到 run，供佔用指示器算 %（切走再切回仍可查 sessionCtx）
+    run.ctxWindow = ev.contextWindow || run.ctxWindow || null;
+    run.ctxCompactAt = ev.compactAt || run.ctxCompactAt || null;
     if (!run.sessionId) {
       run.sessionId = ev.sessionId;
       if (run.chatMsgs === messages) sessionId = ev.sessionId;
       upsertChat({ id: ev.sessionId, title: run.firstUserText.slice(0, 40), ts: Date.now(), space: run.space, pack: run.pack });
       renderChats();
     }
+    if (run.chatMsgs === messages) refreshCtxMeter();
     return;
   }
   // 插話已被 agent 套用 → 當前回合已收尾，為插話後的回覆開一個新的 assistant 泡泡（避免和前一輪的字混在一起）
@@ -2078,7 +2174,32 @@ function onRunEvent(run, ev) {
   }
   handleEvent(ev, run.asst);
   if (ev.type === "done" || ev.type === "error") run.gotDone = true; // 收到收尾事件 → 非連線中斷
-  if (ev.type === "usage") run.tokens += (ev.input || 0) + (ev.output || 0);
+  if (ev.type === "usage") {
+    run.tokens += (ev.input || 0) + (ev.output || 0);        // 本輪累計（↑ N tokens 顯示用）
+    // 上下文佔用取「最新快照」而非累加：每步 input 已含整段歷史，最新一步＝當前佔用（壓縮後會回落）
+    if (ev.contextTokens != null) run.ctxTokens = ev.contextTokens;
+    if (run.chatMsgs === messages) refreshCtxMeter();
+  }
+  if (ev.type === "compact") {
+    // 回合內自動壓縮已觸發：① footer 指示器記回落值 + 閃一下提示 ② 往對話流插一條「持久」分隔標記
+    // （對齊 TUI/CC：footer 只閃 2.6s 且易錯過，這條在轉錄裡永久保留，重整/事後回看都在）
+    run.ctxTokens = ev.tokensAfter || run.ctxTokens;
+    run.ctxJustCompacted = ev.tokensBefore || true;
+    const win = run.ctxWindow || null;
+    const divider = { role: "divider", _compact: {
+      before: ev.tokensBefore || 0, after: ev.tokensAfter || 0,
+      summarized: ev.summarized || 0, kept: ev.kept || 0,
+      pct0: win ? Math.round(((ev.tokensBefore || 0) / win) * 100) : null,
+      pct1: win ? Math.round(((ev.tokensAfter || 0) / win) * 100) : null,
+    } };
+    // 插在「本回合的 user 訊息」之前：讀起來就是「…較舊對話… ⊙已壓縮─── 🙂本輪提問 🤖回覆」
+    const ai = run.chatMsgs.indexOf(run.asst);
+    let at = ai >= 0 ? ai : run.chatMsgs.length;
+    if (ai > 0 && run.chatMsgs[ai - 1] && run.chatMsgs[ai - 1].role === "user") at = ai - 1;
+    run.chatMsgs.splice(at, 0, divider);
+    // 落地在 finalizeRun 的 saveTranscript（已含 _compact 欄位）；此處僅即時重繪
+    if (run.chatMsgs === messages) { render(); scrollDown(); refreshCtxMeter(); }
+  }
   if (ev.type === "done" && ev.sessionId) {
     run.sessionId = ev.sessionId;
     if (run.chatMsgs === messages) sessionId = ev.sessionId; // 該對話仍開著才同步全局
@@ -2096,7 +2217,7 @@ function finalize(asst, firstUserText) {
   if (!sessionId) return; // 沒拿到 sessionId → 不落地
   const title = (allChats().find((c) => c.id === sessionId)?.title) || firstUserText.slice(0, 40);
   upsertChat({ id: sessionId, title, ts: Date.now(), space: curSpace, pack: $("#pack").value });
-  saveTranscript(sessionId, messages.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, _steer: m._steer, _afterSteer: m._afterSteer })));
+  saveTranscript(sessionId, messages.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, _steer: m._steer, _afterSteer: m._afterSteer, _compact: m._compact })));
   renderChats();
 }
 
@@ -2122,7 +2243,7 @@ function finalizeRun(run) {
   if (!sid) { renderChats(); return; }                          // 沒拿到 sessionId → 不落地（僅刷新列表）
   const title = (allChats().find((c) => c.id === sid)?.title) || run.firstUserText.slice(0, 40);
   upsertChat({ id: sid, title, ts: Date.now(), space: run.space, pack: run.pack });
-  saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, note: m.note, _steer: m._steer, _afterSteer: m._afterSteer })));
+  saveTranscript(sid, run.chatMsgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools || [], verify: m.verify, note: m.note, _steer: m._steer, _afterSteer: m._afterSteer, _compact: m._compact })));
   renderChats();
   // 佇列：本輪結束後，若仍在同一對話且非使用者中止 → 自動送出下一則排隊訊息。
   const q = run.chatMsgs && run.chatMsgs._queue;
@@ -2149,6 +2270,7 @@ function refreshStreamingUI() {
   $("#stop-btn").style.display = run ? "" : "none";
   if (run) { updateStreamStatus(run); ensureTicker(); }
   else $("#status-hint").innerHTML = "";
+  refreshCtxMeter(); // 同步當前對話的上下文佔用指示器（切換對話/新對話/串流起停都會經過這裡）
 }
 
 /* 每秒刷新狀態列經過時間；只要還有任一 run 就持續（切到哪個對話就顯示哪個的計時）。 */
@@ -2165,6 +2287,46 @@ function ensureTicker() {
 function fmtTokens(n) {
   if (n < 1000) return String(n);
   return (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, "") + "k";
+}
+
+/* 上下文佔用指示器（對標 Claude Code 的 context 進度）：顯示當前對話佔用模型視窗的百分比。
+   來源優先取「所看對話」進行中的 run（即時），否則回退 sessionCtx（此對話上次快照）。
+   逼近自動壓縮門檻（compactAt＝視窗−reserve）轉琥珀、達門檻轉紅；剛壓縮時閃一下提示。
+   無視窗（模型未設 contextWindow）或尚無用量數據 → 隱藏（誠實：算不出就不假裝）。 */
+function refreshCtxMeter() {
+  const el = $("#ctx-meter");
+  if (!el) return;
+  const T = (k, f) => (window.t ? t(k, f) : f);
+  const run = currentRun();
+  let win = null, tokens = null, compactAt = null, justCompacted = false;
+  if (run && run.ctxWindow) {
+    win = run.ctxWindow; tokens = run.ctxTokens || 0; compactAt = run.ctxCompactAt || null; justCompacted = !!run.ctxJustCompacted;
+    if (run.sessionId) sessionCtx.set(run.sessionId, { tokens, window: win, compactAt }); // 落快照供之後切回顯示
+  } else if (sessionId && sessionCtx.has(sessionId)) {
+    const s = sessionCtx.get(sessionId); win = s.window; tokens = s.tokens; compactAt = s.compactAt;
+  }
+  const fill = el.querySelector(".ctx-fill");
+  const label = el.querySelector(".ctx-label");
+  if (!win || tokens == null || !(tokens > 0)) { el.classList.remove("on", "warn", "crit"); return; }
+  const pct = Math.min(100, Math.round((tokens / win) * 100));
+  const warnPct = compactAt ? (compactAt / win) * 100 : 80; // 逼近壓縮門檻的百分位（實際觸發點）
+  el.classList.add("on");
+  el.classList.toggle("crit", pct >= warnPct);                 // 達門檻：壓縮隨時觸發
+  el.classList.toggle("warn", pct >= warnPct - 10 && pct < warnPct); // 逼近門檻：預警
+  if (fill) fill.style.width = pct + "%";
+  const tip = T("ctx.tooltip", "上下文 %p% · %u / %w · 逼近 %c% 自動壓縮")
+    .replace("%p", pct).replace("%u", fmtTokens(tokens)).replace("%w", fmtTokens(win)).replace("%c", Math.round(warnPct));
+  el.title = tip;
+  el.setAttribute("aria-label", tip);
+  if (justCompacted && run) {
+    label.textContent = T("ctx.compacted", "✓ 已自動壓縮");
+    label.classList.add("ctx-flash");
+    clearTimeout(ctxFlashTimer);
+    ctxFlashTimer = setTimeout(() => { if (run) run.ctxJustCompacted = false; refreshCtxMeter(); }, 2600);
+  } else {
+    label.textContent = pct + "%";
+    label.classList.remove("ctx-flash");
+  }
 }
 
 /* 狀態列（針對給定 run）：跳動點 + 當前階段 + 經過時間 + 累計 token + Esc 中斷提示。 */
