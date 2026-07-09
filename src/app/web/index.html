@@ -7,6 +7,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- 設計系統 + 共享工具庫 -->
 <link rel="stylesheet" href="shared/style.css">
+<link rel="stylesheet" href="shared/office-preview.css">
 <!-- 設定注入：server 會替換這些佔位符（HTML 才會被替換，靜態 app.js 不會），app.js 從 window.__XITTO__ 讀 -->
 <script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, version: "__VERSION__", lang: "__LANG__" };</script>
 <!-- 三語字典一律全載入（供切換器即時切換，不用重整頁面），部署預設語言只決定初次顯示哪一份 -->
@@ -16,6 +17,7 @@
 <script src="shared/i18n.js"></script>
 <script src="shared/md.js"></script>
 <script src="shared/app.js"></script>
+<script src="shared/office-preview.js"></script>
 <script src="shared/account.js"></script>
 <style>
 /* ── Task Board 頁面樣式 ──────────────────────────────────── */
@@ -768,7 +770,6 @@
   overflow: auto;
   max-height: 420px;
 }
-
 /* ── 經驗入口（側欄）＋ 經驗面板（主區）：讓「越用越懂你」可見 ── */
 .exp-entry {
   display: flex; align-items: center; gap: var(--sp-2); width: 100%;
@@ -1653,7 +1654,7 @@ const IMG = /\.(png|jpe?g|gif|webp|svg)$/i;
 const MD = /\.(md|markdown)$/i;
 const HTMLF = /\.html?$/i;
 const JSONF = /\.json$/i;
-const DOC = /\.(docx|pptx|xlsx|odt|odp|ods|rtf|pdf)$/i; // Word/Excel/PPT/PDF：伺服器萃取成文字（?as=text）
+const DOC = /\.(docx|pptx|xlsx|odt|odp|ods|rtf|pdf)$/i; // Word/Excel/PPT/PDF：伺服器萃取成預覽資料（回退 ?as=text）
 
 // 取檔 URL 產生器：任務成品走 /v1/tasks/<id>/file，工作區檔走 /v1/workspaces/file?ws=
 const taskFileUrl = (taskId) => (p, extra = "") =>
@@ -1745,9 +1746,17 @@ async function renderFileBody(f) {
 
   v.innerHTML = bar + `<div class="empty">載入中…</div>`;
   const isDoc = DOC.test(name);
-  const resp = await fetch(urlFn(path, isDoc ? "&as=text" : "")).catch(() => null);
+  let officeDoc = null;
+  let resp = null;
+  if (isDoc) {
+    const pr = await fetch(urlFn(path, "&as=preview")).catch(() => null);
+    if (pr && pr.ok) officeDoc = await pr.json().catch(() => null);
+    if (!officeDoc) resp = await fetch(urlFn(path, "&as=text")).catch(() => null);
+  } else {
+    resp = await fetch(urlFn(path, "")).catch(() => null);
+  }
   if (!mine()) return; // 已切到別的檔
-  const txt = resp && resp.ok ? await resp.text() : null;
+  const txt = officeDoc ? officeDoc.text : (resp && resp.ok ? await resp.text() : null);
   if (!mine()) return;
 
   if (txt == null) {
@@ -1757,7 +1766,7 @@ async function renderFileBody(f) {
   }
 
   let body;
-  if (isDoc) body = `<pre class="viewer-pre">${esc(txt)}</pre>`;
+  if (isDoc) body = officeDoc ? renderOfficePreview(officeDoc, "viewer-pre") : `<pre class="viewer-pre">${esc(txt)}</pre>`;
   else if (MD.test(name)) body = `<div class="md">${mdRender(txt)}</div>`;
   else if (JSONF.test(name)) {
     try { body = `<pre class="viewer-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`; }

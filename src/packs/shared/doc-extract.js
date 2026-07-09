@@ -27,17 +27,26 @@ export function isDocFile(path) {
  * @returns {string}
  */
 export function extractDocText(path) {
+  return extractDoc(path).text;
+}
+
+/**
+ * 把文件萃取成結構化資料。預設呼叫端可直接取 text；structured 欄位供 Office-aware tools 使用。
+ * @param {string} path 絕對或相對路徑（呼叫端先解析好）
+ * @returns {{ kind:string, text:string, blocks?:Array, slides?:Array, sheets?:Array }}
+ */
+export function extractDoc(path) {
   const kind = EXT[extname(path).toLowerCase()];
   if (!kind) throw new Error(`不支援的文件類型：${extname(path)}`);
-  if (kind === 'pdf') return extractPdf(path);
+  if (kind === 'pdf') return { kind, text: extractPdf(path) };
   const buf = readFileSync(path);
-  if (kind === 'rtf') return tidy(rtfToText(buf.toString('latin1')));
+  if (kind === 'rtf') return { kind, text: tidy(rtfToText(buf.toString('latin1'))) };
   // 其餘皆為 ZIP 容器（OOXML / ODF）
   const zip = readZip(buf);
-  if (kind === 'docx') return tidy(docxText(zip));
-  if (kind === 'pptx') return tidy(pptxText(zip));
-  if (kind === 'xlsx') return tidy(xlsxText(zip));
-  if (kind === 'odf') return tidy(odfText(zip));
+  if (kind === 'docx') return docxDoc(zip);
+  if (kind === 'pptx') return pptxDoc(zip);
+  if (kind === 'xlsx') return xlsxDoc(zip);
+  if (kind === 'odf') return { kind, text: tidy(odfText(zip)) };
   throw new Error(`未處理的類型：${kind}`);
 }
 
@@ -63,8 +72,8 @@ function readZip(buf) {
     entries.set(name, { method, compSize, localOff });
     off += 46 + nameLen + extraLen + commentLen;
   }
-  // 取出某個 entry 的解壓內容（utf8 文字）
-  const read = (name) => {
+  // 取出某個 entry 的解壓內容（二進位）；文字 entry 再轉 utf8。
+  const readBuffer = (name) => {
     const e = entries.get(name);
     if (!e) return null;
     const lo = e.localOff;
@@ -75,9 +84,10 @@ function readZip(buf) {
     const data = buf.subarray(start, start + e.compSize);
     const out = e.method === 0 ? data : e.method === 8 ? inflateRawSync(data) : null;
     if (out == null) throw new Error(`不支援的 ZIP 壓縮方式 ${e.method}`);
-    return out.toString('utf8');
+    return Buffer.from(out);
   };
-  return { names: () => [...entries.keys()], read };
+  const read = (name) => readBuffer(name)?.toString('utf8') ?? null;
+  return { names: () => [...entries.keys()], read, readBuffer };
 }
 
 // ── XML 工具 ───────────────────────────────────────────────────────────────
@@ -104,48 +114,226 @@ function tidy(s) {
 }
 
 // ── 各格式 ─────────────────────────────────────────────────────────────────
-function docxText(zip) {
+function docxDoc(zip) {
   const xml = zip.read('word/document.xml');
   if (xml == null) throw new Error('docx 缺少 word/document.xml');
-  return xmlToText(xml, { para: ['w:p'], br: ['w:br', 'w:cr'], tab: ['w:tab'] });
+  const blocks = [];
+  for (const m of xml.matchAll(/<w:p\b[\s\S]*?<\/w:p>|<w:tbl\b[\s\S]*?<\/w:tbl>/g)) {
+    const node = m[0];
+    if (node.startsWith('<w:tbl')) {
+      const rows = [...node.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)].map(([row]) =>
+        [...row.matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map(([cell]) => tidy(xmlToText(cell, { para: ['w:p'], br: ['w:br', 'w:cr'], tab: ['w:tab'] })))
+      );
+      blocks.push({ type: 'table', rows });
+    } else {
+      const text = tidy(xmlToText(node, { para: ['w:p'], br: ['w:br', 'w:cr'], tab: ['w:tab'] }));
+      if (text) blocks.push({ type: 'paragraph', text });
+    }
+  }
+  const text = tidy(blocks.map((b) => b.type === 'table' ? tableToText(b.rows) : b.text).join('\n'));
+  return { kind: 'docx', text, blocks };
 }
 
-function pptxText(zip) {
+function pptxDoc(zip) {
   const slides = zip.names()
     .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
     .sort((a, b) => slideNo(a) - slideNo(b));
   if (!slides.length) throw new Error('pptx 找不到任何投影片');
-  return slides.map((n, i) => {
-    const body = xmlToText(zip.read(n) || '', { para: ['a:p'], br: ['a:br'] });
-    return `--- 投影片 ${i + 1} ---\n${body.trim()}`;
-  }).join('\n\n');
+  const out = slides.map((n, i) => {
+    const xml = zip.read(n) || '';
+    const blocks = pptxBlocks(xml);
+    const tables = pptxTables(xml);
+    const charts = pptxCharts(zip, n);
+    const structuredText = [
+        blocks.map((b) => b.paragraphs.join('\n')).join('\n'),
+        ...tables.map((t) => tableToText(t.rows)),
+        ...charts.map((c) => chartToText(c)),
+      ].filter(Boolean).join('\n');
+    const text = tidy(structuredText || xmlToText(xml, { para: ['a:p'], br: ['a:br'] }));
+    const title = blocks.find((b) => ['title', 'ctrTitle'].includes(b.role))?.paragraphs.join('\n') || '';
+    const body = blocks.filter((b) => !['title', 'ctrTitle'].includes(b.role)).flatMap((b) => b.paragraphs);
+    const images = pptxImages(zip, n);
+    return { index: i + 1, path: n, text, title, body, blocks, images, tables, charts };
+  });
+  return { kind: 'pptx', text: out.map((s) => `--- 投影片 ${s.index} ---\n${s.text}`).join('\n\n'), slides: out };
 }
 function slideNo(n) { return +(n.match(/slide(\d+)\.xml$/) || [])[1] || 0; }
+function pptxBlocks(xml) {
+  return [...xml.matchAll(/<p:sp\b[\s\S]*?<\/p:sp>/g)].map(([shape]) => {
+    const role = (shape.match(/<p:ph\b[^>]*\btype="([^"]+)"/) || [])[1] || 'text';
+    const paragraphs = [...shape.matchAll(/<a:p\b[\s\S]*?<\/a:p>/g)]
+      .map(([p]) => tidy(xmlToText(p, { br: ['a:br'] })))
+      .filter(Boolean);
+    return paragraphs.length ? { role, paragraphs } : null;
+  }).filter(Boolean);
+}
+function pptxTables(xml) {
+  return [...xml.matchAll(/<a:tbl\b[\s\S]*?<\/a:tbl>/g)].map(([tbl], i) => {
+    const rows = [...tbl.matchAll(/<a:tr\b[\s\S]*?<\/a:tr>/g)].map(([tr]) =>
+      [...tr.matchAll(/<a:tc\b[\s\S]*?<\/a:tc>/g)].map(([tc]) => tidy(xmlToText(tc, { para: ['a:p'], br: ['a:br'] })))
+    );
+    return rows.length ? { index: i + 1, rows } : null;
+  }).filter(Boolean);
+}
+const PPTX_IMAGE_MAX_BYTES = 1_500_000;
+const PPTX_IMAGE_MAX_COUNT = 6;
+function pptxImages(zip, slidePath) {
+  const relsPath = slidePath.replace(/^(.+\/)([^/]+)$/, '$1_rels/$2.rels');
+  const rels = zip.read(relsPath) || '';
+  const images = [];
+  for (const [, attrs] of rels.matchAll(/<Relationship\b([^>]*)\/?>/g)) {
+    if (!/\bType="[^"]*\/image"/.test(attrs)) continue;
+    const target = (attrs.match(/\bTarget="([^"]+)"/) || [])[1];
+    if (!target) continue;
+    const path = normalizePptxRel(slidePath, decodeEntities(target));
+    const data = zip.readBuffer(path);
+    if (!data || data.length > PPTX_IMAGE_MAX_BYTES) continue;
+    const mime = imageMime(path);
+    if (!mime) continue;
+    images.push({
+      name: path.split('/').pop() || path,
+      path,
+      mime,
+      size: data.length,
+      dataUrl: `data:${mime};base64,${data.toString('base64')}`,
+    });
+    if (images.length >= PPTX_IMAGE_MAX_COUNT) break;
+  }
+  return images;
+}
+function normalizePptxRel(sourcePath, target) {
+  if (target.startsWith('/')) return target.replace(/^\//, '');
+  const parts = sourcePath.split('/').slice(0, -1);
+  for (const part of target.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return parts.join('/');
+}
+function imageMime(path) {
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  return { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }[ext] || '';
+}
 
-function xlsxText(zip) {
+function pptxCharts(zip, slidePath) {
+  const relsPath = slidePath.replace(/^(.+\/)([^/]+)$/, '$1_rels/$2.rels');
+  const rels = zip.read(relsPath) || '';
+  const charts = [];
+  for (const [, attrs] of rels.matchAll(/<Relationship\b([^>]*)\/?>/g)) {
+    if (!/\bType="[^"]*\/chart"/.test(attrs)) continue;
+    const target = (attrs.match(/\bTarget="([^"]+)"/) || [])[1];
+    if (!target) continue;
+    const path = normalizePptxRel(slidePath, decodeEntities(target));
+    const xml = zip.read(path);
+    if (!xml) continue;
+    charts.push(parsePptxChart(xml, path));
+  }
+  return charts;
+}
+function parsePptxChart(xml, path) {
+  const type = xml.includes('<c:lineChart') ? 'line' : xml.includes('<c:pieChart') ? 'pie' : xml.includes('<c:barChart') ? 'bar' : 'chart';
+  const title = tidy(xmlToText((xml.match(/<c:title\b[\s\S]*?<\/c:title>/) || [])[0] || '', { para: ['a:p'] })) || path.split('/').pop() || 'chart';
+  const series = [...xml.matchAll(/<c:ser\b[\s\S]*?<\/c:ser>/g)].map(([ser], i) => {
+    const name = stripTags((ser.match(/<c:tx>[\s\S]*?<c:v>([\s\S]*?)<\/c:v>[\s\S]*?<\/c:tx>/) || [])[1] || `Series ${i + 1}`);
+    const categories = chartPts((ser.match(/<c:cat\b[\s\S]*?<\/c:cat>/) || [])[0] || '');
+    const values = chartPts((ser.match(/<c:val\b[\s\S]*?<\/c:val>/) || [])[0] || '').map((v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : v;
+    });
+    return { name, categories, values };
+  });
+  return { path, type, title, series };
+}
+function chartPts(xml) {
+  return [...xml.matchAll(/<c:pt\b[\s\S]*?<c:v>([\s\S]*?)<\/c:v>[\s\S]*?<\/c:pt>/g)].map(([, v]) => decodeEntities(stripTags(v)));
+}
+function chartToText(chart) {
+  const lines = [`圖表：${chart.title} (${chart.type})`];
+  for (const s of chart.series || []) {
+    const pairs = (s.categories || []).map((c, i) => `${c}:${s.values?.[i] ?? ''}`).join(', ');
+    lines.push(`${s.name}: ${pairs}`);
+  }
+  return lines.join('\n');
+}
+
+function xlsxDoc(zip) {
   // 共用字串表：每個 <si> 串接其底下所有 <t>
   const ssXml = zip.read('xl/sharedStrings.xml') || '';
   const shared = [...ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(
     ([, si]) => [...si.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((m) => decodeEntities(m[1])).join('')
   );
-  const sheets = zip.names()
-    .filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
-    .sort((a, b) => sheetNo(a) - sheetNo(b));
+  const sheets = workbookSheets(zip);
   if (!sheets.length) throw new Error('xlsx 找不到任何工作表');
-  return sheets.map((n, i) => {
-    const xml = zip.read(n) || '';
-    const rows = [...xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].map(([, rowXml]) => {
-      const cells = [...rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)].map(([, attrs, inner]) => {
+  const out = sheets.map((sheet, i) => {
+    const xml = zip.read(sheet.path) || '';
+    const merges = [...xml.matchAll(/<mergeCell\b[^>]*\bref="([^"]+)"/g)].map(([, ref]) => decodeEntities(ref));
+    const rows = [...xml.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)].map(([, rowAttrs, rowXml], rowIdx) => {
+      const rowNo = +(rowAttrs.match(/\br="(\d+)"/) || [])[1] || rowIdx + 1;
+      const cells = [];
+      for (const [, attrs, inner] of rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+        const ref = (attrs.match(/\br="([A-Z]+)(\d+)"/i) || [])[1];
+        const col = ref ? colToIndex(ref) : cells.length;
         const t = (attrs.match(/t="([^"]+)"/) || [])[1];
-        if (t === 's') { const v = (inner.match(/<v>([\s\S]*?)<\/v>/) || [])[1]; return shared[+v] ?? ''; }
-        if (t === 'inlineStr' || t === 'str') return stripTags(inner);
-        const v = (inner.match(/<v>([\s\S]*?)<\/v>/) || [])[1] || '';
-        return decodeEntities(v);
-      });
-      return cells.join('\t');
+        const formula = stripTags((inner.match(/<f\b[^>]*>([\s\S]*?)<\/f>/) || [])[1] || '').trim();
+        let value = '';
+        if (t === 's') { const v = (inner.match(/<v>([\s\S]*?)<\/v>/) || [])[1]; value = shared[+v] ?? ''; }
+        else if (t === 'inlineStr' || t === 'str') value = stripTags(inner);
+        else if (t === 'b') value = ((inner.match(/<v>([\s\S]*?)<\/v>/) || [])[1] === '1') ? 'TRUE' : 'FALSE';
+        else if (t === 'e') value = (inner.match(/<v>([\s\S]*?)<\/v>/) || [])[1] || '';
+        else {
+          const v = (inner.match(/<v>([\s\S]*?)<\/v>/) || [])[1] || '';
+          value = decodeEntities(v);
+        }
+        if (!value && formula) value = `=${formula}`;
+        cells[col] = { ref: ref ? `${ref}${rowNo}` : '', value, formula };
+      }
+      const width = cells.length;
+      const values = Array.from({ length: width }, (_, k) => cells[k]?.value || '');
+      return { number: rowNo, cells: values };
     });
-    return `--- 工作表 ${i + 1} ---\n${rows.join('\n')}`;
-  }).join('\n\n');
+    const formulas = [...xml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)].map(([, attrs, inner]) => {
+      const ref = (attrs.match(/\br="([A-Z]+\d+)"/i) || [])[1] || '';
+      const formula = stripTags((inner.match(/<f\b[^>]*>([\s\S]*?)<\/f>/) || [])[1] || '').trim();
+      const value = decodeEntities((inner.match(/<v>([\s\S]*?)<\/v>/) || [])[1] || '');
+      return formula ? { ref, formula, value } : null;
+    }).filter(Boolean);
+    return { index: i + 1, name: sheet.name || `工作表 ${i + 1}`, path: sheet.path, rows, merges, formulas };
+  });
+  return {
+    kind: 'xlsx',
+    text: out.map((s) => `--- ${s.name} ---\n${s.rows.map((r) => r.cells.join('\t')).join('\n')}`).join('\n\n'),
+    sheets: out,
+  };
+}
+function workbookSheets(zip) {
+  const workbook = zip.read('xl/workbook.xml') || '';
+  const rels = zip.read('xl/_rels/workbook.xml.rels') || '';
+  const relMap = new Map([...rels.matchAll(/<Relationship\b([^>]*)\/?>/g)].map(([, attrs]) => {
+    const id = (attrs.match(/\bId="([^"]+)"/) || [])[1];
+    const target = (attrs.match(/\bTarget="([^"]+)"/) || [])[1];
+    if (!id || !target) return null;
+    return [id, target.startsWith('/') ? target.replace(/^\//, '') : `xl/${target}`.replace(/\/[^/]+\/\.\.\//g, '/')];
+  }).filter(Boolean));
+  const named = [...workbook.matchAll(/<sheet\b([^>]*)\/?>/g)].map(([, attrs], i) => {
+    const name = decodeEntities((attrs.match(/\bname="([^"]*)"/) || [])[1] || `工作表 ${i + 1}`);
+    const rid = (attrs.match(/\br:id="([^"]+)"/) || [])[1];
+    const path = relMap.get(rid) || `xl/worksheets/sheet${i + 1}.xml`;
+    return { name, path };
+  }).filter((s) => zip.read(s.path) != null);
+  if (named.length) return named;
+  return zip.names()
+    .filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
+    .sort((a, b) => sheetNo(a) - sheetNo(b))
+    .map((path, i) => ({ name: `工作表 ${i + 1}`, path }));
+}
+function tableToText(rows) {
+  return rows.map((r) => r.join('\t')).join('\n');
+}
+function colToIndex(col) {
+  let n = 0;
+  for (const ch of col.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return Math.max(0, n - 1);
 }
 function sheetNo(n) { return +(n.match(/sheet(\d+)\.xml$/) || [])[1] || 0; }
 

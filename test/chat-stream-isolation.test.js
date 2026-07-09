@@ -37,6 +37,7 @@ function makeHarness() {
     function updateStreamStatus() { statusUpdates++; }
     function renderChats() { renderChatsCount++; }
     function upsertChat(c) { upserts.push(c); }
+    function refreshCtxMeter() {} // 上下文佔用指示器（真實 onRunEvent 會於 session/usage/compact 呼叫）
     return {
       onRunEvent, handleEvent, ensureReply,
       setMessages: (m) => { messages = m; },

@@ -166,6 +166,7 @@ async function runServe(args) {
     else if (a === '--no-sandbox') o.sandbox = false;
     else if (a === '--concurrency') o.concurrency = Number(args[++i]);
     else if (a === '--model') o.modelId = args[++i];
+    else if (a === '--tls' || a === '--https') o.tls = true;
   }
   let model, getApiKey, resolveModel;
   try { ({ model, getApiKey, resolveModel } = loadModel(o.modelId)); }
@@ -186,10 +187,11 @@ function printServeHelp() {
     'xitto-kernel serve — 啟動 Web 前端（📋 任務台 + 對話頁 /chat）',
     '',
     '用法:',
-    '  xitto-kernel serve [--port <n>] [--local] [--token <t>] [--no-sandbox] [--concurrency <n>] [--model <id>]',
+    '  xitto-kernel serve [--port <n>] [--local] [--tls] [--token <t>] [--no-sandbox] [--concurrency <n>] [--model <id>]',
     '',
     '  --port, -p <n>     監聽埠（預設 8787）',
     '  --local            本地模式：可瀏覽/選真實資料夾、顯示檔案位置',
+    '  --tls, --https     以 HTTPS 起服務（自簽憑證，快取於 <dir>/tls）→ 讓會議室錄音等需安全上下文的瀏覽器 API 可用；正式憑證用 XITTO_TLS_CERT/KEY',
     '  --token <t>        API token（預設 dev-token；對外請務必設定）',
     '  --no-sandbox       關閉沙箱（預設開；macOS=Seatbelt 真隔離）',
     '  --concurrency <n>  背景任務同時數（預設 2）',

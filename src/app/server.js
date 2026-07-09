@@ -3,14 +3,16 @@
 // JSON 或 SSE 串流，以及「背景任務 + 完成通知（webhook）」—— 派任務出去、做完回呼，不用一直盯著。
 // 這是「另一個 app 消費同一組 kernel 事件」—— 不動 kernel 核心。
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, isAbsolute, relative, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, networkInterfaces } from 'node:os';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { createKernel } from '../kernel/index.js';
 import { cacheRetentionFor } from '../kernel/provider.js';
+import { resolveCompactionSettings } from '../kernel/compaction.js';
 import { createMemory } from '../kernel/memory.js';
 import { createEpisodes } from '../kernel/episodes.js';
 import { createSkills, globalSkillsDir } from '../kernel/skills.js';
@@ -18,6 +20,8 @@ import { createPlaybook } from '../kernel/playbook.js';
 import { fileAllowStore } from '../kernel/security/allow-store.js';
 import { loadModel, buildModel, providersConfigPath, loadProvidersConfig } from './providers.js';
 import { oauth2Auth, parseTtl } from './auth-oauth2.js';
+import { sttFormat, buildChatBody, parseChatTranscript, transcodeToWav, hasFfmpeg } from './stt.js';
+import { loadSources, createDriver } from '../packs/shared/db.js';
 import { attachUpgrade } from './ws.js';
 import { isMutating } from '../kernel/tool-registry.js';
 import { createCodingPack } from '../packs/coding/index.js';
@@ -27,7 +31,8 @@ import { createGeneralPack } from '../packs/general/index.js';
 import { createDeepResearchPack } from '../packs/deep-research/index.js';
 import { createDevopsPack } from '../packs/devops/index.js';
 import { createPatentPack } from '../packs/patent/index.js';
-import { isDocFile, extractDocText } from '../packs/shared/doc-extract.js';
+import { isDocFile, extractDoc, extractDocText } from '../packs/shared/doc-extract.js';
+import { readArtifactMetadata } from '../packs/shared/artifact-metadata.js';
 import { createUiuxPack } from '../packs/uiux/index.js';
 import { createDocgenPack } from '../packs/docgen/index.js';
 
@@ -229,8 +234,9 @@ const pkgVersion = () => (_pkgVer ??= (() => { try { return JSON.parse(readFileS
 
 // 把原始 kernel 事件壓成精簡的對外事件（串流端與背景任務共用，避免重複映射）
 export const mapEvent = (ev) => {
-  // 串流一開始就送 sessionId → 前端可即時把「全新對話」登進側欄，切走後仍能切回看它續播
-  if (ev.type === 'session_start') return { type: 'session', sessionId: ev.sessionId };
+  // 串流一開始就送 sessionId → 前端可即時把「全新對話」登進側欄，切走後仍能切回看它續播。
+  // 一併帶模型視窗與自動壓縮門檻，讓前端能算「上下文佔用 %」並標示逼近壓縮的位置（對標 CC）。
+  if (ev.type === 'session_start') return { type: 'session', sessionId: ev.sessionId, contextWindow: ev.contextWindow || null, compactAt: ev.compactAt || null };
   if (ev.type === 'tool_execution_start') return { type: 'tool', name: ev.toolName, args: ev.args };
   if (ev.type === 'tool_execution_end') return { type: 'tool_end', name: ev.toolName, isError: !!ev.isError, diff: ev.result?._diff || undefined };
   // 子 agent（spawn_agent）內部工具活動：嵌套顯示在父步驟底下
@@ -260,8 +266,15 @@ export const mapEvent = (ev) => {
   if (ev.type === 'round') return { type: 'round', round: ev.round, maxRounds: ev.maxRounds };
   if (ev.type === 'verify_start') return { type: 'phase', phase: 'verifying' };
   if (ev.type === 'verify_end') return { type: 'phase', phase: ev.ok ? 'verified' : 'fixing' };
-  // token 用量（每則訊息結束結算）：給 UI 即時顯示累計 token（像 Claude Code 的進度列）
-  if (ev.type === 'message_end' && ev.message?.usage) return { type: 'usage', input: ev.message.usage.input || 0, output: ev.message.usage.output || 0 };
+  // token 用量（每則訊息結束結算）：input/output 供「本輪累計 token」顯示；contextTokens 是「當前上下文佔用」
+  // ＝這次請求送出的 prompt（input+cache 讀寫）＋剛產出的 output（下輪會併回歷史），供上下文佔用 % 指示器取最新快照。
+  if (ev.type === 'message_end' && ev.message?.usage) {
+    const u = ev.message.usage;
+    const contextTokens = (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0) + (u.output || 0);
+    return { type: 'usage', input: u.input || 0, output: u.output || 0, contextTokens };
+  }
+  // 回合內自動壓縮已發生：把「壓縮前/後 token、摘掉/保留輪數」透給前端，顯示提示並讓佔用指示器回落。
+  if (ev.type === 'compact') return { type: 'compact', tokensBefore: ev.tokensBefore || 0, tokensAfter: ev.tokensAfter || 0, summarized: ev.summarized || 0, kept: ev.kept || 0 };
   return null;
 };
 
@@ -499,7 +512,8 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
   // 完整逐字稿（append-only）：replay buffer（r.messages）為省記憶體硬砍最近 maxMessages 則，
   // 但紀要需要「整場」內容。每則訊息在此另 append 進 <persistDir>/<id>.transcript.jsonl（不進記憶體、不砍）。
   const transcriptPath = (r) => join(persistDir, r.id + '.transcript.jsonl');
-  const appendTranscript = (r, m) => { if (!persistDir) return; try { mkdirSync(persistDir, { recursive: true }); appendFileSync(transcriptPath(r), JSON.stringify({ ts: m.ts, kind: m.kind, name: m.name || m.kind, text: m.text }) + '\n'); } catch { /* 略 */ } };
+  // source（'voice'＝語音轉錄）也落檔 → 完整存檔可永久區分語音/打字，重啟或超過 replay 上限仍保留 🎙 標記。
+  const appendTranscript = (r, m) => { if (!persistDir) return; try { mkdirSync(persistDir, { recursive: true }); appendFileSync(transcriptPath(r), JSON.stringify({ ts: m.ts, kind: m.kind, name: m.name || m.kind, text: m.text, ...(m.source ? { source: m.source } : {}) }) + '\n'); } catch { /* 略 */ } };
   // 取整場逐字稿：優先讀 append-only 檔（含被 replay buffer 砍掉的前段）；無持久化/無檔則退回 r.messages。
   const fullTranscript = (r) => {
     if (persistDir) { try { const raw = readFileSync(transcriptPath(r), 'utf8'); const lines = raw.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); if (lines.length) return lines; } catch { /* 無檔 → 退回 */ } }
@@ -810,6 +824,8 @@ export function createRoomStore({ runAiTurn, runMinutes, persistDir, maxMessages
       fanout(r, { type: 'caption', name: m.name, by: memberId, text: String(text || ''), final: !!final });
       return { ok: true };
     },
+    // 整場逐字稿（含被 replay buffer 砍掉的前段）：讀 append-only 檔，供匯出/下載。無此房回 null。
+    transcript: (id) => { const r = rooms.get(id); return r ? fullTranscript(r) : null; },
     stats: () => ({ roomCount: rooms.size }),
   };
 }
@@ -898,7 +914,7 @@ export function createRoleStore({ dir, adminEmails = [], allowedDomain = '', ope
   };
 }
 
-export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', ssoOpen = false, stt = null, sttStreamFactory = null, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', uiLang: uiLangCfg = '', configPath, onReconfigure } = {}) {
+export function createServerApp({ model, getApiKey, resolveModel, models = [], token, auth, adminEmails = [], allowedEmailDomain = '', ssoOpen = false, stt = null, sttStreamFactory = null, baseDir = '.xitto-server', sandbox = true, concurrency = 2, local = false, publicOrigin = '', uiLang: uiLangCfg = '', configPath, onReconfigure, tls = null } = {}) {
   // UI 語言（部署期定，對標單部署單語系）：config.uiLang > 環境變數 > 預設繁體。前端字典由 shared/i18n/<lang>.js 提供。
   const UI_LANGS = new Set(['zh-Hant', 'zh-Hans', 'en']);
   const uiLang = UI_LANGS.has(process.env.XITTO_UI_LANG) ? process.env.XITTO_UI_LANG : (UI_LANGS.has(uiLangCfg) ? uiLangCfg : 'zh-Hant');
@@ -936,7 +952,11 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
   const authedAdmin = (req) => (authAdapter.authedAdmin || authAdapter.authed)(req);
   const roomAuth = (req, room, need) => authAdapter.roomAuth(req, room, need);
   // 管理端點守門：非 admin 一律擋。未認證 → 401（無憑證）；已認證但非 admin（如 SSO member）→ 403（已登入、權限不足，符合「登入後不 401」）。
+  // 本地自用（--local 且非 SSO）：操作者就是本機使用者，token（預設 dev-token）純屬摩擦 → 直接放行，讓 /settings 等管理頁免帶 ?token= 就能開。
+  // 一旦掛上 SSO（ssoActive）則不豁免，仍限 admin，避免對外部署誤開後門。
+  const localOpen = local && !ssoActive;
   const adminOnly = (req, res) => {
+    if (localOpen) return false;
     if (authedAdmin(req)) return false;
     if (authed(req)) { json(res, 403, { error: 'forbidden（需 admin）' }); return true; }
     json(res, 401, { error: 'unauthorized' }); return true;
@@ -958,33 +978,100 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     req.on('error', () => finish({ over }));
   });
   const sseHead = (res) => res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
-  // 語音轉文字（STT）：打 OpenAI 相容的 /v1/audio/transcriptions（本地 faster-whisper-server 等）。停用（未設 endpoint）回 null。
+  // 語音轉文字（STT）：兩種 OpenAI 相容協定，由 cfg.mode 分流（見 src/app/stt.js）。停用（未設 endpoint）回 null。
+  //   - 預設 / 'transcriptions'：Whisper 風格 multipart /v1/audio/transcriptions（faster-whisper-server 等）。
+  //   - 'chat'：/v1/chat/completions 音頻理解（Qwen3-ASR-1.7B 等）——音頻走 input_audio(base64)。
   const sttEnabled = !!(stt && stt.endpoint);
+  // STT 端點回非 2xx 時，把「狀態碼 + 回應內文摘要」帶進錯誤 → 前端與日誌看得到真正原因（模型名錯/不吃 input_audio/超限…）。
+  // 若音訊非 wav 又沒 ffmpeg 可轉（多數 chat-ASR 端點只吃 wav）→ 附上「裝 ffmpeg」的可行提示。
+  const httpErrDetail = async (r, format) => {
+    let body = ''; try { body = (await r.text()).replace(/\s+/g, ' ').trim().slice(0, 300); } catch { /* 略 */ }
+    const ffHint = (format && format !== 'wav' && !hasFfmpeg()) ? '（伺服器無 ffmpeg，webm 未轉 wav；多數 ASR 端點只吃 wav → 請在伺服器安裝 ffmpeg）' : '';
+    return `STT HTTP ${r.status}${body ? '：' + body : ''}${ffHint}`;
+  };
   // cfg 預設用啟用中的 stt；/v1/stt/test 傳入未儲存的表單設定來試連線。
   const transcribe = async (buffer, contentType, cfg = stt) => {
     if (!cfg || !cfg.endpoint) return null;
-    const form = new FormData();
-    form.append('file', new Blob([buffer], { type: contentType || 'audio/webm' }), 'audio.webm');
-    form.append('model', cfg.model || 'Systran/faster-whisper-large-v3');
-    if (cfg.language) form.append('language', cfg.language);
-    form.append('response_format', 'json');
     const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), cfg.timeoutMs || 30000);
     try {
+      if (cfg.mode === 'chat') {
+        // Qwen3-ASR chat 端點官方只文檔化 wav；瀏覽器錄的是 webm/opus → 有 ffmpeg 先轉 wav，否則原格式透傳。
+        let buf = buffer, format = sttFormat(contentType);
+        if (format !== 'wav' && cfg.transcodeWav !== false) { const w = transcodeToWav(buffer); if (w) { buf = w; format = 'wav'; } }
+        const body = buildChatBody(cfg, Buffer.from(buf).toString('base64'), format);
+        const r = await fetch(cfg.endpoint, { method: 'POST', headers: { 'content-type': 'application/json', ...(cfg.apiKey ? { authorization: 'Bearer ' + cfg.apiKey } : {}) }, body: JSON.stringify(body), signal: ac.signal });
+        if (!r.ok) throw new Error(await httpErrDetail(r, format));
+        return parseChatTranscript(await r.json().catch(() => ({})));
+      }
+      const form = new FormData();
+      form.append('file', new Blob([buffer], { type: contentType || 'audio/webm' }), 'audio.webm');
+      form.append('model', cfg.model || 'Systran/faster-whisper-large-v3');
+      if (cfg.language) form.append('language', cfg.language);
+      form.append('response_format', 'json');
       const r = await fetch(cfg.endpoint, { method: 'POST', headers: cfg.apiKey ? { authorization: 'Bearer ' + cfg.apiKey } : {}, body: form, signal: ac.signal });
-      if (!r.ok) throw new Error('STT HTTP ' + r.status);
+      if (!r.ok) throw new Error(await httpErrDetail(r, sttFormat(contentType)));
       const j = await r.json().catch(() => ({}));
       return String(j.text || '').trim();
     } finally { clearTimeout(timer); }
   };
+  const PREVIEW_JSON_MAX_BYTES = +(process.env.XITTO_PREVIEW_JSON_MAX_BYTES || 2_000_000);
+  const officePreviewPayload = (rel, full, root) => {
+    const meta = root ? readArtifactMetadata(root, full) : null;
+    const payload = {
+      ok: true,
+      name: basename(rel || full),
+      ...extractDoc(full),
+      ...(meta ? {
+        artifactMeta: {
+          artifact: meta.artifact,
+          format: meta.format,
+          path: meta.path,
+          updatedAt: meta.updatedAt,
+        },
+        quality: meta.quality,
+        verify: meta.verify,
+        repairs: meta.repairs,
+        repaired: meta.repaired,
+      } : {}),
+    };
+    let body = JSON.stringify(payload);
+    if (Buffer.byteLength(body, 'utf8') <= PREVIEW_JSON_MAX_BYTES) return body;
+    let omitted = 0;
+    const slim = JSON.parse(body);
+    if (Array.isArray(slim.slides)) {
+      for (const slide of slim.slides) {
+        if (!Array.isArray(slide.images)) continue;
+        slide.images = slide.images.map((img) => {
+          if (!img?.dataUrl) return img;
+          omitted++;
+          const { dataUrl, ...rest } = img;
+          return { ...rest, omitted: true, reason: 'preview-json-size-limit' };
+        });
+      }
+    }
+    if (omitted) {
+      slim.warnings = [...(slim.warnings || []), `已略過 ${omitted} 張投影片圖片，以避免預覽資料過大`];
+      slim.previewLimited = true;
+    }
+    body = JSON.stringify(slim);
+    return body;
+  };
   // 依副檔名給 content-type 回傳檔案（圖片顯示/md 渲染/下載皆走這）。
-  const serveFile = (res, full, rel, download, asText) => {
+  const serveFile = (res, full, rel, download, asMode, root) => {
     if (!existsSync(full)) return json(res, 404, { error: '檔案不存在' });
     try {
       // ?as=text 且為 Word/Excel/PPT/PDF 等文件 → 萃取成純文字回傳（給網頁預覽；下載仍走原檔）
-      if (asText && !download && isDocFile(full)) {
+      if (asMode === 'text' && !download && isDocFile(full)) {
         try {
           res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
           return res.end(extractDocText(full));
+        } catch (e) { return json(res, 422, { error: '文件解析失敗', detail: e.message }); }
+      }
+      if (asMode === 'preview' && !download && isDocFile(full)) {
+        try {
+          const body = officePreviewPayload(rel, full, root);
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(body);
         } catch (e) { return json(res, 422, { error: '文件解析失敗', detail: e.message }); }
       }
       const ct = contentTypeFor(rel);
@@ -1029,7 +1116,10 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     const sess = sessions.get(sessionId) || { history: [] };
     // readOnly（L2）：剝除 pack 的 mutating 工具（write/edit/bash/gen_doc…）→ agent 只能讀/查/答，不能改動共享 workspace。
     // 同時 getPlanMode:true 擋下 kernel 內建的 mutating 工具（memory_save/bash_bg 等殘留）。
-    let pack = make({ cwd: workdir });
+    // data-query：若設了服務全域資料源（<baseDir>/data-sources.json，由 /settings 資料庫頁管理）→ 注入。
+    // 每次 run 現讀檔 → 增刪改連線即時生效，免重啟。未設 → pack 回落 workspace 檔或預設 sqlite。
+    const dsFile = join(baseDir, 'data-sources.json');
+    let pack = make((spec.pack === 'data-query' && existsSync(dsFile)) ? { cwd: workdir, sourcesPath: dsFile } : { cwd: workdir });
     if (spec.readOnly) pack = { ...pack, tools: () => pack.tools().filter((t) => !isMutating(t)), mutatingTools: [] };
     // 環境能力畫像：雲端託管容器 vs 使用者本機。決定哪些工具/技能對 agent 可見，並提示它環境邊界。
     //   workspaceFs：可讀寫「被分配的工作目錄」（雲端也有 → 雲端 agent 能查看自己的檔案目錄）。
@@ -1042,7 +1132,11 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     const thinkingLevel = resolveThinking(spec.thinking) ?? defaultThinking;
     const kernel = createKernel(pack, { cwd: workdir, model: runModel, getApiKey, resolveModel, sandbox: { enabled: sandbox }, getSandbox: () => sandbox, env: local ? 'local' : 'cloud', caps, envNote, confirm: async () => 'yes', autoExtractMemory: true, ...(thinkingLevel ? { thinkingLevel } : {}), ...(spec.readOnly ? { getPlanMode: () => true } : {}), ...(ask ? { askUser: ask } : {}) });
     const usage = { input: 0, output: 0 };
-    onEvent?.({ type: 'session_start', sessionId }); // 串流首事件：讓前端立刻知道此輪的 sessionId
+    // 上下文佔用指示器所需的窗口與壓縮門檻：與 kernel 內建 maybeCompactInTurn 用同一組 resolveCompactionSettings，
+    // 確保前端標示的「逼近自動壓縮」位置＝實際觸發點（compactAt＝窗口 − reserveTokens）。
+    const ctxWindow = Number(runModel.contextWindow) > 0 ? Number(runModel.contextWindow) : null;
+    const compactAt = ctxWindow ? Math.max(0, ctxWindow - resolveCompactionSettings(undefined, ctxWindow).reserveTokens) : null;
+    onEvent?.({ type: 'session_start', sessionId, contextWindow: ctxWindow, compactAt }); // 串流首事件：讓前端立刻知道此輪的 sessionId ＋ 上下文視窗
     const wrapped = (ev) => { if (ev.type === 'message_end' && ev.message?.usage) { usage.input += ev.message.usage.input || 0; usage.output += ev.message.usage.output || 0; } onEvent?.(ev); };
     if (spec.mode === 'goal') {
       // 結果導向：回傳交付物（做了什麼 + 產出的檔案 + 是否達成），對話只是過程
@@ -1137,7 +1231,9 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     return true;
   };
 
-  const app = createServer(async (req, res) => {
+  // TLS（HTTPS）：帶入 { key, cert } 即以 https 起服務。麥克風/剪貼簿等需要安全上下文的瀏覽器 API 於是可用（見 room 錄音）。
+  // https.Server 是 http.Server 子類 → attachUpgrade（WebSocket 音訊串流）與 listen 皆沿用，其餘程式零改動。
+  const handler = async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
     // SSO adapter 先攔（擁有 /auth/login|callback|logout 等）；defaultAuth 無 handle → 直接略過，零影響。
@@ -1269,7 +1365,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         }));
       } catch { /* 尚無檔 → 空清單 */ }
       // STT 現況注入頁面（不含 apiKey；hasKey 標記是否已設）→ UI 預填、可就地改。
-      const sttPage = { endpoint: stt?.endpoint || '', model: stt?.model || '', language: stt?.language || '', hasKey: !!stt?.apiKey, enabled: !!(stt && stt.endpoint) };
+      const sttPage = { endpoint: stt?.endpoint || '', model: stt?.model || '', language: stt?.language || '', mode: stt?.mode || '', prompt: stt?.prompt || '', hasKey: !!stt?.apiKey, enabled: !!(stt && stt.endpoint) };
       // 標題/簡介由前端依 EXISTING 切換（首次引導 vs 設定模式），此處只注入資料。
       const html = SETUP_HTML
         .replace('/*EXISTING*/null', JSON.stringify(existing))
@@ -1329,10 +1425,13 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const body = await readBody(req);
       const sttFile = join(baseDir, 'stt.json');
       let cur = {}; try { cur = JSON.parse(readFileSync(sttFile, 'utf8')); } catch { /* 尚無檔 */ }
+      const modeRaw = String(body.mode ?? cur.mode ?? '').trim().toLowerCase();
       const next = {
         endpoint: String(body.endpoint ?? cur.endpoint ?? '').trim(),
         model: String(body.model ?? cur.model ?? '').trim(),
         language: String(body.language ?? cur.language ?? '').trim(),
+        mode: modeRaw === 'chat' ? 'chat' : '',           // '' = 預設 Whisper transcriptions；'chat' = /v1/chat/completions
+        prompt: String(body.prompt ?? cur.prompt ?? '').trim(),  // chat 模式的 system 偏置提示（可空）
         apiKey: (body.apiKey != null && body.apiKey !== '') ? String(body.apiKey) : (cur.apiKey || ''),
       };
       if (next.endpoint && !/^https?:\/\//.test(next.endpoint)) return json(res, 400, { error: 'endpoint 需為 http(s) 網址' });
@@ -1355,6 +1454,8 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         endpoint,
         model: String(body.model || '').trim() || undefined,
         language: String(body.language || '').trim() || undefined,
+        mode: (String(body.mode || '').trim().toLowerCase() === 'chat') ? 'chat' : (saved.mode || (stt && stt.mode) || ''),
+        prompt: String(body.prompt || '').trim() || saved.prompt || (stt && stt.prompt) || '',
         // apiKey 留空＝沿用已存的（避免在測試時要重填）
         apiKey: (body.apiKey != null && body.apiKey !== '') ? String(body.apiKey) : (saved.apiKey || (stt && stt.apiKey) || ''),
         timeoutMs: 15000,
@@ -1367,6 +1468,94 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       wav.write('data', 36); wav.writeUInt32LE(dataSize, 40);
       try { const text = await transcribe(wav, 'audio/wav', cfg); return json(res, 200, { ok: true, sample: text || '' }); }
       catch (e) { return json(res, 502, { ok: false, error: e.message }); }
+    }
+
+    // ───────── 資料庫連線管理（master only）：服務全域 <baseDir>/data-sources.json，供 data-query pack 注入。
+    // 每次 run 現讀檔 → 增刪改即時生效免重啟。密碼可存檔（password）或指名環境變數（passwordEnv，推薦）。
+    if (path === '/v1/data-sources' || path.startsWith('/v1/data-sources/')) {
+      if (adminOnly(req, res)) return;
+      const dsFile = join(baseDir, 'data-sources.json');
+      const readDs = () => { try { const c = JSON.parse(readFileSync(dsFile, 'utf8')); return { sources: c.sources || {}, defaultSource: c.defaultSource || '' }; } catch { return { sources: {}, defaultSource: '' }; } };
+      const writeDs = (c) => { mkdirSync(baseDir, { recursive: true }); writeFileSync(dsFile, JSON.stringify(c, null, 2)); };
+      const DRIVERS = ['sqlite', 'postgres', 'mysql'], MODES = ['read', 'write', 'admin'];
+      // 對外檢視：抹去密碼、標 hasPassword。
+      const publicView = (name, sc) => ({ name, driver: sc.driver, mode: sc.mode || 'read', file: sc.file || '', url: sc.url || '', host: sc.host || '', port: sc.port ?? '', database: sc.database || '', user: sc.user || '', passwordEnv: sc.passwordEnv || '', hasPassword: !!sc.password, maxRows: sc.maxRows ?? '' });
+      // 從請求體建一份 source 設定（save/test 共用）。password 留空＝沿用既有（editing）。
+      const fromBody = (b, prev = {}) => {
+        const driver = String(b.driver || 'sqlite').toLowerCase();
+        const sc = { driver, mode: MODES.includes(String(b.mode)) ? String(b.mode) : 'read' };
+        if (b.maxRows) sc.maxRows = Math.max(1, parseInt(b.maxRows, 10) || 1000);
+        if (driver === 'sqlite') { sc.file = String(b.file || '').trim(); }
+        else {
+          if (String(b.url || '').trim()) sc.url = String(b.url).trim();
+          sc.host = String(b.host || '').trim() || undefined;
+          if (b.port) sc.port = parseInt(b.port, 10) || undefined;
+          sc.database = String(b.database || '').trim() || undefined;
+          sc.user = String(b.user || '').trim() || undefined;
+          sc.passwordEnv = String(b.passwordEnv || '').trim() || undefined;
+          sc.password = (b.password != null && b.password !== '') ? String(b.password) : (prev.password || undefined);
+        }
+        return sc;
+      };
+      const validate = (name, sc) => {
+        if (!/^[A-Za-z0-9_.-]+$/.test(name || '')) return '連線名稱只能含英數 . _ -';
+        if (!DRIVERS.includes(sc.driver)) return `未知驅動 ${sc.driver}（支援 ${DRIVERS.join('/')}）`;
+        if (sc.driver === 'sqlite' && !sc.file) return 'sqlite 需填資料庫檔路徑';
+        if (sc.driver !== 'sqlite' && !sc.url && !sc.host) return '需填連線串（url）或主機 host';
+        // PostgreSQL 一連接一庫、不能跨庫查 → database 必填；MySQL 可留空（跨庫用「庫名.表名」查看全部）。
+        if (sc.driver === 'postgres' && !sc.url && !sc.database) return 'PostgreSQL 需指定 database（一連接一庫，不能跨庫查詢）';
+        return null;
+      };
+
+      // 列表
+      if (req.method === 'GET' && path === '/v1/data-sources') {
+        const { sources, defaultSource } = readDs();
+        return json(res, 200, { sources: Object.entries(sources).map(([n, sc]) => ({ ...publicView(n, sc), isDefault: n === defaultSource })), defaultSource });
+      }
+      // 新增/更新
+      if (req.method === 'POST' && path === '/v1/data-sources') {
+        const b = await readBody(req);
+        const name = String(b.name || '').trim();
+        const cur = readDs();
+        const sc = fromBody(b, cur.sources[name] || {});
+        const err = validate(name, sc);
+        if (err) return json(res, 400, { error: err });
+        cur.sources[name] = sc;
+        if (b.makeDefault || !cur.defaultSource) cur.defaultSource = name;
+        try { writeDs(cur); } catch (e) { return json(res, 500, { error: '寫入失敗：' + e.message }); }
+        log({ action: 'data-source-save', name, driver: sc.driver, mode: sc.mode });
+        return json(res, 200, { ok: true, name });
+      }
+      // 刪除
+      if (req.method === 'POST' && path === '/v1/data-sources/delete') {
+        const b = await readBody(req);
+        const name = String(b.name || '').trim();
+        const cur = readDs();
+        if (!cur.sources[name]) return json(res, 404, { error: `無此連線「${name}」` });
+        delete cur.sources[name];
+        if (cur.defaultSource === name) cur.defaultSource = Object.keys(cur.sources)[0] || '';
+        try { writeDs(cur); } catch (e) { return json(res, 500, { error: '寫入失敗：' + e.message }); }
+        log({ action: 'data-source-delete', name });
+        return json(res, 200, { ok: true });
+      }
+      // 測試連線：以表單設定（或既有密碼）實連一次，跑 list_tables。
+      if (req.method === 'POST' && path === '/v1/data-sources/test') {
+        const b = await readBody(req);
+        const name = String(b.name || 'test').trim() || 'test';
+        const cur = readDs();
+        const sc = fromBody(b, cur.sources[name] || {});
+        sc.timeout = 12000;
+        const err = validate(name, sc);
+        if (err) return json(res, 400, { ok: false, error: err });
+        try {
+          const { sources } = loadSources({ cwd: baseDir, sources: { [name]: sc } });
+          const drv = await createDriver(sources.get(name));
+          const r = await drv.listTables();
+          if (r.error) return json(res, 200, { ok: false, error: r.error });
+          return json(res, 200, { ok: true, native: !!drv.native, tables: (r.tables || []).slice(0, 50), tableCount: (r.tables || []).length });
+        } catch (e) { return json(res, 200, { ok: false, error: e.message }); }
+      }
+      return json(res, 404, { error: 'not found' });
     }
 
     // 測試對話（admin only）：真打一次極短 LLM 呼叫，確認某 model 的 provider/baseUrl/key 端到端可用。
@@ -1616,6 +1805,18 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const dir = workspaceDir(baseDir, room.workspace, local);
       return json(res, 200, listDir(dir, url.searchParams.get('sub') || '') || { sub: '', dirs: [], files: [] });
     }
+    // 匯出整場逐字稿（會議語音文字：發言人＋時序＋內容）為 markdown 下載。讀 append-only 完整存檔（不受 replay 上限影響）。
+    const mRoomTr = path.match(/^\/v1\/rooms\/([^/]+)\/transcript$/);
+    if (req.method === 'GET' && mRoomTr) {
+      const room = rooms.get(mRoomTr[1]); if (!room) return json(res, 404, { error: 'room not found' });
+      if (!roomAuth(req, room, 'read').ok) return json(res, 401, { error: '需要邀請碼或成員 token' });
+      const msgs = (rooms.transcript(mRoomTr[1]) || []).filter((m) => m.kind === 'user'); // 人類發言（含語音轉錄）
+      const title = room.name || room.workspace || mRoomTr[1];
+      const lines = msgs.map((m) => `- \`${String(m.ts || '').slice(0, 19).replace('T', ' ')}\` **${m.name || '—'}**${m.source === 'voice' ? ' 🎙' : ''}：${String(m.text || '').replace(/\s*\n\s*/g, ' ')}`);
+      const md = `# ${title} — 逐字稿\n\n> 共 ${msgs.length} 則發言（🎙＝語音轉文字）。時間為 UTC。\n\n${lines.join('\n')}\n`;
+      res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(title + '-逐字稿.md')}`, 'cache-control': 'no-store' });
+      return res.end(md);
+    }
     // 取房間工作區單檔（看/下載；憑邀請碼/成員 token，防穿越，限本房 workspace）。
     const mRoomFile = path.match(/^\/v1\/rooms\/([^/]+)\/file$/);
     if (req.method === 'GET' && mRoomFile) {
@@ -1624,7 +1825,8 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const rel = url.searchParams.get('path');
       const full = resolveArtifact(workspaceDir(baseDir, room.workspace, local), rel);
       if (!full) return json(res, 400, { error: 'path 不合法' });
-      return serveFile(res, full, rel, url.searchParams.get('download'), url.searchParams.get('as') === 'text');
+      const root = workspaceDir(baseDir, room.workspace, local);
+      return serveFile(res, full, rel, url.searchParams.get('download'), url.searchParams.get('as'), root);
     }
     // 新建資料夾（寫入 → 需成員 token）：在當前瀏覽的子目錄 sub 下建一層 name。
     const mRoomMkdir = path.match(/^\/v1\/rooms\/([^/]+)\/mkdir$/);
@@ -1684,7 +1886,11 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       if (!r.buffer || !r.buffer.length) return json(res, 200, { ok: true, text: '' });
       let text = '';
       try { text = await transcribe(r.buffer, req.headers['content-type']); }
-      catch (e) { return json(res, 502, { error: 'STT 失敗：' + (e?.message || String(e)) }); }
+      catch (e) {
+        const detail = e?.name === 'AbortError' ? 'STT 逾時（端點無回應）' : (e?.message || String(e));
+        log({ room: mAudio[1], action: 'voice', error: detail, endpoint: stt?.endpoint, mode: stt?.mode || 'transcriptions', ffmpeg: hasFfmpeg() });
+        return json(res, 502, { error: 'STT 失敗：' + detail });
+      }
       // 只在轉出「有實質內容」時才發言（過濾靜音/雜訊的空轉錄）。
       if (!text || !/[\p{L}\p{N}]/u.test(text)) return json(res, 200, { ok: true, text: '' });
       const said = rooms.say(mAudio[1], { memberId, text, writeAllowed: !room.readonly || !!authA.master, source: 'voice' });
@@ -1804,7 +2010,8 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const rel = url.searchParams.get('path');
       const full = resolveArtifact(workspaceDir(baseDir, ws, local), rel);
       if (!full) return json(res, 400, { error: 'path 不合法' });
-      return serveFile(res, full, rel, url.searchParams.get('download'), url.searchParams.get('as') === 'text');
+      const root = workspaceDir(baseDir, ws, local);
+      return serveFile(res, full, rel, url.searchParams.get('download'), url.searchParams.get('as'), root);
     }
 
     // 資料夾瀏覽器（僅本地模式）：列某路徑下的子資料夾,給網頁「用選的」挑真實資料夾
@@ -1890,7 +2097,7 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
         try { if (existsSync(full)) rmSync(full, { recursive: true, force: true }); log({ action: 'delete', path: rel }); return json(res, 200, { ok: true }); } // recursive → 也能刪資料夾
         catch (e) { return json(res, 500, { error: e.message }); }
       }
-      return serveFile(res, full, rel, url.searchParams.get('download'), url.searchParams.get('as') === 'text');
+      return serveFile(res, full, rel, url.searchParams.get('download'), url.searchParams.get('as'), dir);
     }
     // 工作台：上傳檔（?ws=&sub=&name=，body 為檔案二進位）
     if (req.method === 'POST' && path === '/v1/workspaces/upload') {
@@ -1938,10 +2145,38 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
     }
 
     json(res, 404, { error: 'not found' });
-  });
+  };
+  const app = (tls && tls.key && tls.cert) ? createHttpsServer({ key: tls.key, cert: tls.cert }, handler) : createServer(handler);
   // P2 即時字幕：接上 WebSocket 音訊串流升級（handleAudioStream 未啟用/鑑權失敗會回 false 收線）。
   attachUpgrade(app, handleAudioStream);
   return app;
+}
+
+// 自簽 TLS 憑證：私有化/區網部署免額外架反向代理即可跑 HTTPS（讓瀏覽器把此源視為安全上下文 → 麥克風/剪貼簿可用）。
+// 快取於 <baseDir>/tls/{cert.pem,key.pem}；SAN 涵蓋 localhost + 本機所有區網 IP + 指定主機名，讓別台機器也能連。
+// 憑證仍是自簽 → 瀏覽器首次會警示，使用者按「繼續前往」接受後即成安全上下文（企業可改用 XITTO_TLS_CERT/KEY 帶正式憑證）。
+export function ensureSelfSignedCert(baseDir, { hosts = [], ips = [] } = {}) {
+  const dir = join(baseDir, 'tls');
+  const certPath = join(dir, 'cert.pem');
+  const keyPath = join(dir, 'key.pem');
+  if (existsSync(certPath) && existsSync(keyPath)) {
+    return { cert: readFileSync(certPath), key: readFileSync(keyPath), certPath, keyPath, generated: false };
+  }
+  mkdirSync(dir, { recursive: true });
+  // SAN：DNS 名（localhost + 傳入主機名）與 IP（迴環 + 區網）分別列項；去重、過濾空值。
+  const dnsSet = [...new Set(['localhost', ...hosts.filter((h) => h && !/^[\d.]+$/.test(h) && h !== '::1')])];
+  const ipSet = [...new Set(['127.0.0.1', '::1', ...ips.filter(Boolean)])];
+  const san = [...dnsSet.map((d) => `DNS:${d}`), ...ipSet.map((i) => `IP:${i}`)].join(',');
+  try {
+    execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+      '-keyout', keyPath, '-out', certPath, '-days', '3650',
+      '-subj', '/CN=xitto-kernel', '-addext', `subjectAltName=${san}`,
+    ], { stdio: 'ignore' });
+  } catch (e) {
+    throw new Error(`自簽憑證產生失敗（需要系統有 openssl）：${e.message}。可改設 XITTO_TLS_CERT / XITTO_TLS_KEY 指向現成憑證。`);
+  }
+  return { cert: readFileSync(certPath), key: readFileSync(keyPath), certPath, keyPath, generated: true };
 }
 
 // 從設定引導頁送來的表單組出 providers.json 內容（單 provider + 單 model，足以啟動；之後可自行擴充檔案）。
@@ -2069,6 +2304,7 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
       <button class="tab active" type="button" data-tab="models">🧠 模型</button>
       <button class="tab" type="button" data-tab="thinking" id="tabThinking" hidden>💭 思考</button>
       <button class="tab" type="button" data-tab="voice" id="tabVoice" hidden>🎙 語音</button>
+      <button class="tab" type="button" data-tab="db" id="tabDb" hidden>🗄 資料庫</button>
     </nav>
     <div class="side-foot"><span class="ver" id="ver"></span><span class="spacer"></span><button id="closeBtn" class="close" type="button" title="關閉（不變更）" hidden>✕ 關閉</button></div>
   </aside>
@@ -2134,16 +2370,59 @@ code{background:var(--inset);padding:1px 5px;border-radius:5px;font-size:.9em}
     <section class="panel" data-panel="voice" hidden>
       <div class="ph">🎙 語音轉文字（會議室錄音）</div>
       <p class="sub" id="sttStatus"></p>
-      <label>STT 端點（OpenAI 相容 <code>/v1/audio/transcriptions</code>）</label>
+      <label>接口協定</label>
+      <select id="sttMode">
+        <option value="">Whisper 轉錄（/v1/audio/transcriptions）</option>
+        <option value="chat">Chat 音頻理解（/v1/chat/completions，如 Qwen3-ASR）</option>
+      </select>
+      <div class="hint">私有化 Qwen3-ASR-1.7B 用 <code>chat</code>；faster-whisper-server 等用 Whisper。</div>
+      <label>STT 端點</label>
       <input id="sttEndpoint" placeholder="http://localhost:8000/v1/audio/transcriptions" autocomplete="off">
-      <div class="hint">留空 = 停用會議室錄音鈕。本地可用 faster-whisper-server（見 <code>docs/13</code>）。</div>
+      <div class="hint" id="sttEndpointHint">留空 = 停用會議室錄音鈕。本地可用 faster-whisper-server（見 <code>docs/13</code>）。</div>
       <div class="grid2">
         <div><label>模型</label><input id="sttModel" placeholder="Systran/faster-whisper-large-v3" autocomplete="off"></div>
         <div><label>語言碼（留白＝自動偵測）</label><input id="sttLang" placeholder="zh" autocomplete="off"></div>
       </div>
+      <div id="sttPromptRow" hidden><label>提示（chat 模式，可空；偏置詞彙／語種／專名）</label><input id="sttPrompt" placeholder="例：Speaker uses Chinese/English. Terms: xitto, Wishboard." autocomplete="off"></div>
       <label>API Key（本地通常不需要）</label><input id="sttKey" type="password" placeholder="留空 = 不變更" autocomplete="off">
+      <div class="hint">chat 模式音頻格式：瀏覽器錄 webm，伺服器端若有 <code>ffmpeg</code> 會自動轉 wav（Qwen3-ASR 建議 wav）；無 ffmpeg 則原格式送出。</div>
       <div class="msg" id="sttMsg"></div>
       <div class="actions"><button id="sttTest" class="ghost" type="button" title="不儲存，先打一次確認 STT 端點可連線">🧪 測試語音端點</button><button id="sttSave" type="button">儲存語音設定</button></div>
+    </section>
+    <section class="panel" data-panel="db" hidden>
+      <div class="ph">🗄 資料庫連線（data-query）</div>
+      <p class="sub">管理 data-query pack 可查詢的資料庫連線。權限級別 <code>read</code> 只讀／<code>write</code> 可寫不可破壞／<code>admin</code> 全開。PostgreSQL／MySQL 用原生驅動（<code>npm i</code> 內建，免裝客戶端）；未裝原生套件時回落 CLI（<code>psql</code>／<code>mysql</code>）。SQLite 需主機有 <code>sqlite3</code>。</p>
+      <div id="dsList" class="ds-list"></div>
+      <hr style="border:none;border-top:1px solid var(--line,#2a2f45);margin:16px 0">
+      <div class="ph" id="dsFormTitle" style="font-size:15px">新增連線</div>
+      <div class="grid2">
+        <div><label>連線名稱</label><input id="dsName" placeholder="warehouse" autocomplete="off"></div>
+        <div><label>驅動</label><select id="dsDriver"><option value="sqlite">SQLite</option><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option></select></div>
+      </div>
+      <div class="grid2">
+        <div><label>權限級別</label><select id="dsMode"><option value="read">read（只讀）</option><option value="write">write（可寫）</option><option value="admin">admin（全開）</option></select></div>
+        <div><label>單次查詢列上限</label><input id="dsMaxRows" placeholder="1000" autocomplete="off"></div>
+      </div>
+      <div id="dsSqlite"><label>資料庫檔路徑</label><input id="dsFile" placeholder="/data/app.db 或相對路徑" autocomplete="off"><div class="hint">相對路徑相對服務 baseDir；建議用絕對路徑。</div></div>
+      <div id="dsServer" hidden>
+        <label>連線串（url，選填；填了下面主機資訊可略）</label><input id="dsUrl" placeholder="postgresql://user@host:5432/dbname" autocomplete="off">
+        <div class="grid2">
+          <div><label>主機 host</label><input id="dsHost" placeholder="10.0.0.5" autocomplete="off"></div>
+          <div><label>埠 port</label><input id="dsPort" placeholder="5432 / 3306" autocomplete="off"></div>
+        </div>
+        <div class="grid2">
+          <div><label>資料庫 database</label><input id="dsDatabase" placeholder="analytics" autocomplete="off"></div>
+          <div><label>使用者 user（帳號）</label><input id="dsUser" placeholder="readonly" autocomplete="off"></div>
+        </div>
+        <div class="hint">database：<b>MySQL 可留空</b> → 跨所有庫查看全部（用「庫名.表名」查詢）；<b>PostgreSQL 必填</b>（一連接一庫，不能跨庫查）。</div>
+        <div class="grid2">
+          <div><label>密碼</label><input id="dsPassword" type="password" placeholder="留空 = 不變更" autocomplete="off"></div>
+          <div><label>或密碼環境變數名（推薦）</label><input id="dsPasswordEnv" placeholder="WH_PASS" autocomplete="off"></div>
+        </div>
+        <div class="hint">密碼二選一：直接存（寫進 data-sources.json）或填環境變數名（值放在啟動服務的環境，設定檔不落密碼）。</div>
+      </div>
+      <div class="msg" id="dsMsg"></div>
+      <div class="actions"><button id="dsTest" class="ghost" type="button" title="不儲存，先實連一次跑 list_tables">🧪 測試連線</button><button id="dsSave" type="button">儲存連線</button><button id="dsReset" class="ghost" type="button">清空表單</button></div>
     </section>
   </main>
 </div>
@@ -2171,10 +2450,16 @@ var STT=/*STT*/null;
 if(STT){
   $("#tabVoice").hidden=false;
   $("#sttEndpoint").value=STT.endpoint||"";$("#sttModel").value=STT.model||"";$("#sttLang").value=STT.language||"";
+  $("#sttMode").value=STT.mode==="chat"?"chat":"";$("#sttPrompt").value=STT.prompt||"";
+  var sttSyncMode=function(){var chat=$("#sttMode").value==="chat";$("#sttPromptRow").hidden=!chat;
+    $("#sttEndpoint").placeholder=chat?"http://localhost:8000/v1/chat/completions":"http://localhost:8000/v1/audio/transcriptions";
+    $("#sttModel").placeholder=chat?"Qwen/Qwen3-ASR-1.7B":"Systran/faster-whisper-large-v3";
+    $("#sttEndpointHint").textContent=chat?"chat 模式：填模型的 /v1/chat/completions 端點。":"留空 = 停用會議室錄音鈕。本地可用 faster-whisper-server（見 docs/13）。"};
+  $("#sttMode").onchange=sttSyncMode;sttSyncMode();
   if(STT.hasKey)$("#sttKey").placeholder="留空 = 沿用現有 API Key";
   $("#sttStatus").textContent=STT.enabled?"狀態：已啟用 — 會議室成員可錄音轉逐字稿。":"狀態：未啟用 — 填入 STT 端點即開啟。";
   $("#sttTest").onclick=async function(){
-    var payload={endpoint:$("#sttEndpoint").value.trim(),model:$("#sttModel").value.trim(),language:$("#sttLang").value.trim(),apiKey:$("#sttKey").value};
+    var payload={endpoint:$("#sttEndpoint").value.trim(),model:$("#sttModel").value.trim(),language:$("#sttLang").value.trim(),mode:$("#sttMode").value,prompt:$("#sttPrompt").value.trim(),apiKey:$("#sttKey").value};
     var m=$("#sttMsg");if(!payload.endpoint){m.textContent="請先填 STT 端點";m.className="msg err";return}
     m.textContent="測試連線中…";m.className="msg";
     var r;try{r=await fetch("/v1/stt/test",{method:"POST",headers:AUTH,body:JSON.stringify(payload)}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}
@@ -2182,7 +2467,7 @@ if(STT){
     m.textContent="✓ 端點可連線"+(r.sample?"（樣本回應："+esc(r.sample)+"）":"（靜音樣本無輸出屬正常）");m.className="msg ok";
   };
   $("#sttSave").onclick=async function(){
-    var payload={endpoint:$("#sttEndpoint").value.trim(),model:$("#sttModel").value.trim(),language:$("#sttLang").value.trim(),apiKey:$("#sttKey").value};
+    var payload={endpoint:$("#sttEndpoint").value.trim(),model:$("#sttModel").value.trim(),language:$("#sttLang").value.trim(),mode:$("#sttMode").value,prompt:$("#sttPrompt").value.trim(),apiKey:$("#sttKey").value};
     var m=$("#sttMsg");m.textContent="儲存中…";m.className="msg";
     var r;try{r=await fetch("/v1/stt",{method:"POST",headers:AUTH,body:JSON.stringify(payload)}).then(function(x){return x.json()})}catch(e){r={error:"無法連線到伺服器"}}
     if(!r||r.error){m.textContent=(r&&r.error)||"儲存失敗";m.className="msg err";return}
@@ -2193,6 +2478,51 @@ if(STT){
 var esc=function(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})};
 function esch(t,k){var e=$("#msg");e.textContent=t;e.className="msg "+k}
 var showMsg=esch;
+// DB：資料庫連線管理（僅設定模式顯示；首次引導頁 EXISTING 為 null → 不顯示）。增刪改查測，走 /v1/data-sources。
+if(EXISTING){
+  $("#tabDb").hidden=false;
+  var dsEditing=null;
+  function dsSyncDriver(){var d=$("#dsDriver").value;$("#dsSqlite").hidden=(d!=="sqlite");$("#dsServer").hidden=(d==="sqlite");}
+  $("#dsDriver").onchange=dsSyncDriver;dsSyncDriver();
+  function dsForm(){return{name:$("#dsName").value.trim(),driver:$("#dsDriver").value,mode:$("#dsMode").value,maxRows:$("#dsMaxRows").value.trim(),file:$("#dsFile").value.trim(),url:$("#dsUrl").value.trim(),host:$("#dsHost").value.trim(),port:$("#dsPort").value.trim(),database:$("#dsDatabase").value.trim(),user:$("#dsUser").value.trim(),password:$("#dsPassword").value,passwordEnv:$("#dsPasswordEnv").value.trim()};}
+  function dsReset(){dsEditing=null;$("#dsFormTitle").textContent="新增連線";["dsName","dsFile","dsUrl","dsHost","dsPort","dsDatabase","dsUser","dsPassword","dsPasswordEnv","dsMaxRows"].forEach(function(id){$("#"+id).value=""});$("#dsDriver").value="sqlite";$("#dsMode").value="read";$("#dsPassword").placeholder="留空 = 不變更";$("#dsName").disabled=false;dsSyncDriver();$("#dsMsg").textContent="";$("#dsMsg").className="msg";}
+  $("#dsReset").onclick=dsReset;
+  function dsRow(s){return '<div class="ds-row" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line,#2a2f45);border-radius:8px;margin-bottom:6px">'+'<b>'+esc(s.name)+'</b>'+(s.isDefault?' <span class="hint">預設</span>':'')+' <span class="hint">'+esc(s.driver)+' · '+esc(s.mode)+(s.database?' · '+esc(s.database):'')+(s.file?' · '+esc(s.file):'')+'</span>'+'<span class="spacer" style="flex:1"></span>'+'<button class="ghost" type="button" data-edit="'+esc(s.name)+'">編輯</button>'+'<button class="ghost" type="button" data-del="'+esc(s.name)+'">刪除</button></div>';}
+  async function dsLoad(){
+    var r;try{r=await fetch("/v1/data-sources",{headers:AUTH}).then(function(x){return x.json()})}catch(e){r={sources:[]}}
+    var list=(r&&r.sources)||[];window.__DS__=list;
+    $("#dsList").innerHTML=list.length?list.map(dsRow).join(""):'<p class="hint">尚無連線 —— 用下方表單新增。未設任何連線時 data-query 回落單一 sqlite（data.db）。</p>';
+    Array.prototype.forEach.call(document.querySelectorAll("[data-edit]"),function(b){b.onclick=function(){dsEdit(b.getAttribute("data-edit"))}});
+    Array.prototype.forEach.call(document.querySelectorAll("[data-del]"),function(b){b.onclick=function(){dsDel(b.getAttribute("data-del"))}});
+  }
+  function dsEdit(name){
+    var s=(window.__DS__||[]).filter(function(x){return x.name===name})[0];if(!s)return;
+    dsEditing=name;$("#dsFormTitle").textContent="編輯連線："+name;
+    $("#dsName").value=s.name;$("#dsName").disabled=true;$("#dsDriver").value=s.driver;$("#dsMode").value=s.mode;
+    $("#dsMaxRows").value=s.maxRows||"";$("#dsFile").value=s.file||"";$("#dsUrl").value=s.url||"";
+    $("#dsHost").value=s.host||"";$("#dsPort").value=s.port||"";$("#dsDatabase").value=s.database||"";$("#dsUser").value=s.user||"";
+    $("#dsPassword").value="";$("#dsPassword").placeholder=s.hasPassword?"留空 = 沿用現有密碼":"留空 = 不變更";$("#dsPasswordEnv").value=s.passwordEnv||"";
+    dsSyncDriver();$("#dsMsg").textContent="";$("#dsMsg").className="msg";
+  }
+  async function dsDel(name){
+    if(!confirm("刪除連線「"+name+"」？"))return;
+    var r;try{r=await fetch("/v1/data-sources/delete",{method:"POST",headers:AUTH,body:JSON.stringify({name:name})}).then(function(x){return x.json()})}catch(e){r={error:"連線失敗"}}
+    if(r&&r.ok){if(dsEditing===name)dsReset();dsLoad();}else alert((r&&r.error)||"刪除失敗");
+  }
+  $("#dsTest").onclick=async function(){
+    var m=$("#dsMsg");m.textContent="測試連線中…";m.className="msg";
+    var r;try{r=await fetch("/v1/data-sources/test",{method:"POST",headers:AUTH,body:JSON.stringify(dsForm())}).then(function(x){return x.json()})}catch(e){r={ok:false,error:"連線失敗"}}
+    if(!r||!r.ok){m.textContent="✗ "+((r&&r.error)||"測試失敗");m.className="msg err";return}
+    m.textContent="✓ 連線成功，共 "+r.tableCount+" 張表"+(r.tables&&r.tables.length?"："+r.tables.slice(0,8).map(esc).join(", ")+(r.tableCount>8?" …":""):"");m.className="msg ok";
+  };
+  $("#dsSave").onclick=async function(){
+    var m=$("#dsMsg");m.textContent="儲存中…";m.className="msg";
+    var r;try{r=await fetch("/v1/data-sources",{method:"POST",headers:AUTH,body:JSON.stringify(dsForm())}).then(function(x){return x.json()})}catch(e){r={error:"連線失敗"}}
+    if(!r||r.error){m.textContent="✗ "+((r&&r.error)||"儲存失敗");m.className="msg err";return}
+    m.textContent="✓ 已儲存（下次任務即生效，免重啟）";m.className="msg ok";dsReset();dsLoad();
+  };
+  dsLoad();
+}
 // THINK：/settings 注入當前思考預設；首次引導頁為 null → 不顯示此卡。
 var THINK=/*THINK*/null;
 if(THINK){
@@ -2384,6 +2714,8 @@ export function startServer(opts = {}) {
     model: process.env.XITTO_STT_MODEL || 'Systran/faster-whisper-large-v3',
     apiKey: process.env.XITTO_STT_KEY || '',
     language: process.env.XITTO_STT_LANGUAGE || '',
+    mode: (String(process.env.XITTO_STT_MODE || '').toLowerCase() === 'chat') ? 'chat' : '',
+    prompt: process.env.XITTO_STT_PROMPT || '',
   } : null);
   // SSO 認證（純 opt-in）：設了 issuer 或顯式授權端點才啟用 OAuth2/OIDC；否則 auth=undefined → createServerApp 走 defaultAuth（現況）。
   let auth = opts.auth;
@@ -2422,21 +2754,39 @@ export function startServer(opts = {}) {
     console.warn(`⚠️  無法載入 model 設定：${e.message}`);
     return startSetupServer({ ...opts, port });
   }
-  // 對外網址：明確設定（域名/反代）優先；否則取第一個區網 IP，讓同網段其他人與邀請連結都能連入。
+  // TLS（HTTPS）：opts.tls / XITTO_TLS=1 開啟，讓瀏覽器把此源視為安全上下文（麥克風/剪貼簿可用，見會議室錄音）。
+  //   憑證來源：① XITTO_TLS_CERT + XITTO_TLS_KEY 指向現成憑證 → 用之；② 否則自簽（快取 <baseDir>/tls，SAN 涵蓋 localhost + 區網 IP）。
   const ips = lanIPs();
-  const publicOrigin = String(opts.publicUrl ?? process.env.XITTO_PUBLIC_URL ?? (ips[0] ? `http://${ips[0]}:${port}` : '')).replace(/\/$/, '');
+  const tlsOn = opts.tls ?? (process.env.XITTO_TLS === '1' || process.env.XITTO_TLS === 'true' || !!(process.env.XITTO_TLS_CERT && process.env.XITTO_TLS_KEY));
+  let tls = null;
+  if (tlsOn) {
+    try {
+      if (process.env.XITTO_TLS_CERT && process.env.XITTO_TLS_KEY) {
+        tls = { cert: readFileSync(process.env.XITTO_TLS_CERT), key: readFileSync(process.env.XITTO_TLS_KEY) };
+      } else {
+        const host = (() => { try { return opts.publicUrl || process.env.XITTO_PUBLIC_URL ? new URL(opts.publicUrl || process.env.XITTO_PUBLIC_URL).hostname : ''; } catch { return ''; } })();
+        const c = ensureSelfSignedCert(baseDir, { hosts: [host].filter(Boolean), ips });
+        tls = { cert: c.cert, key: c.key };
+        console.log(`🔐 HTTPS 自簽憑證${c.generated ? '已產生' : '沿用'}：${c.certPath}（自簽 → 瀏覽器首次會警示，按「繼續前往」即可；正式部署請設 XITTO_TLS_CERT/KEY）`);
+      }
+    } catch (e) { console.error(`❌ TLS 啟用失敗：${e.message}`); throw e; }
+  }
+  const scheme = tls ? 'https' : 'http';
+  // 對外網址：明確設定（域名/反代）優先；否則取第一個區網 IP，讓同網段其他人與邀請連結都能連入。
+  const publicOrigin = String(opts.publicUrl ?? process.env.XITTO_PUBLIC_URL ?? (ips[0] ? `${scheme}://${ips[0]}:${port}` : '')).replace(/\/$/, '');
   let server;
   // 熱重載：/v1/setup 存檔後關掉現有 server、用同 opts 重起（載入新設定），同 port 不需重進容器。
   const onReconfigure = () => { try { server.close(); } catch { /* 略 */ } startServer(opts); };
-  server = createServerApp({ model, getApiKey, resolveModel, models, token, auth, adminEmails, allowedEmailDomain, ssoOpen, stt, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure });
+  server = createServerApp({ model, getApiKey, resolveModel, models, token, auth, adminEmails, allowedEmailDomain, ssoOpen, stt, baseDir, sandbox, concurrency, local, publicOrigin, configPath: opts.configPath, onReconfigure, tls });
   server.listen(port, () => {
-    console.log(`📋 任務台：http://localhost:${port}/  （本機瀏覽器打開即用）`);
-    console.log(`👥 會議室：http://localhost:${port}/room  （多人 + AI 針對專案對談；點名 @ai 才回覆）`);
+    console.log(`📋 任務台：${scheme}://localhost:${port}/  （本機瀏覽器打開即用）`);
+    console.log(`👥 會議室：${scheme}://localhost:${port}/room  （多人 + AI 針對專案對談；點名 @ai 才回覆）`);
+    if (tls) console.log('🔐 HTTPS 已開：麥克風/剪貼簿等需要安全上下文的功能可用（會議室錄音）。自簽憑證首次連線瀏覽器會警示，按「繼續前往」接受即可。');
     if (ips.length) {
       console.log('🌐 區網位址（同網段其他人可用這些連入 / 邀請連結也會用第一個）：');
-      for (const ip of ips) console.log(`   http://${ip}:${port}/room`);
+      for (const ip of ips) console.log(`   ${scheme}://${ip}:${port}/room`);
     } else {
-      console.log('🌐 未偵測到區網 IP（僅 localhost 可連）。要讓別人連入請設 XITTO_PUBLIC_URL=http://<你的位址>:port');
+      console.log(`🌐 未偵測到區網 IP（僅 localhost 可連）。要讓別人連入請設 XITTO_PUBLIC_URL=${scheme}://<你的位址>:port`);
     }
     if (publicOrigin) console.log(`   邀請連結對外網址：${publicOrigin}`);
     console.log(`xitto-kernel server · model ${model.id} · 沙箱 ${sandbox ? '開' : '關'} · 背景並發 ${concurrency}${local ? ' · 本地模式(顯示檔案位置)' : ''}`);

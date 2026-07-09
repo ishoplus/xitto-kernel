@@ -7,7 +7,14 @@ const tick = () => new Promise((r) => setImmediate(r));
 const defer = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 
 test('mapEvent：session_start → session 事件（串流首事件送 sessionId，讓新對話即時進側欄）', () => {
-  assert.deepEqual(mapEvent({ type: 'session_start', sessionId: 'abc123' }), { type: 'session', sessionId: 'abc123' });
+  assert.deepEqual(mapEvent({ type: 'session_start', sessionId: 'abc123' }), { type: 'session', sessionId: 'abc123', contextWindow: null, compactAt: null });
+});
+
+test('mapEvent：session_start 帶視窗/壓縮門檻 → 透給前端算上下文佔用 %（對標 CC）', () => {
+  assert.deepEqual(
+    mapEvent({ type: 'session_start', sessionId: 'abc123', contextWindow: 128000, compactAt: 111616 }),
+    { type: 'session', sessionId: 'abc123', contextWindow: 128000, compactAt: 111616 },
+  );
 });
 
 test('mapEvent：round / verify 事件 → 進度事件', () => {
@@ -17,11 +24,24 @@ test('mapEvent：round / verify 事件 → 進度事件', () => {
   assert.deepEqual(mapEvent({ type: 'verify_end', ok: false }), { type: 'phase', phase: 'fixing' });
 });
 
-test('mapEvent：message_end 帶 usage → token 用量事件（給 UI 即時計數）', () => {
-  assert.deepEqual(mapEvent({ type: 'message_end', message: { usage: { input: 120, output: 45 } } }), { type: 'usage', input: 120, output: 45 });
+test('mapEvent：message_end 帶 usage → token 用量事件（給 UI 即時計數 + 上下文佔用快照）', () => {
+  // contextTokens ＝ input+cacheRead+cacheWrite+output（當前上下文佔用，供佔用 % 指示器取最新值）
+  assert.deepEqual(
+    mapEvent({ type: 'message_end', message: { usage: { input: 120, output: 45, cacheRead: 3000, cacheWrite: 100 } } }),
+    { type: 'usage', input: 120, output: 45, contextTokens: 3265 },
+  );
+  // 無 cache 欄位時 contextTokens 退回 input+output
+  assert.deepEqual(mapEvent({ type: 'message_end', message: { usage: { input: 120, output: 45 } } }), { type: 'usage', input: 120, output: 45, contextTokens: 165 });
   // 無 usage（或無 message）仍為 null，不污染串流
   assert.equal(mapEvent({ type: 'message_end' }), null);
   assert.equal(mapEvent({ type: 'message_end', message: {} }), null);
+});
+
+test('mapEvent：compact 事件 → 透給前端（回合內自動壓縮發生，顯示提示 + 佔用指示器回落）', () => {
+  assert.deepEqual(
+    mapEvent({ type: 'compact', tokensBefore: 120000, tokensAfter: 42000, summarized: 30, kept: 8 }),
+    { type: 'compact', tokensBefore: 120000, tokensAfter: 42000, summarized: 30, kept: 8 },
+  );
 });
 
 test('progress：從事件累積 round / steps / recent / phase，完成轉 done', async () => {

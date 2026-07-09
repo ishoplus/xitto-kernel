@@ -7,6 +7,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- 設計系統（與任務台／對話頁共用同一套 token、字體、明暗主題）-->
 <link rel="stylesheet" href="shared/style.css">
+<link rel="stylesheet" href="shared/office-preview.css">
 <script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, stt: __STT__, version: "__VERSION__", origin: "__PUBLIC_ORIGIN__", lang: "__LANG__" };</script>
 <!-- 三語字典一律全載入（供切換器即時切換，不用重整頁面），部署預設語言只決定初次顯示哪一份 -->
 <script src="shared/i18n/zh-Hant.js"></script>
@@ -14,14 +15,37 @@
 <script src="shared/i18n/en.js"></script>
 <script src="shared/i18n.js"></script>
 <script src="shared/md.js"></script>
+<script src="shared/office-preview.js"></script>
 <script src="shared/account.js"></script>
 <style>
 /* ── 會議室頁面樣式（沿用 shared/style.css 的設計 token）────────── */
-:root { --sidebar-w: 300px; }
+:root { --sidebar-w: 300px; --transcript-w: 320px; }
 html, body { height: 100%; }
 body { display: flex; flex-direction: column; }
 
 .app { flex: 1; display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: 100vh; overflow: hidden; }
+/* 逐字稿面板開啟 → 右側多一欄 */
+.app.tr-on { grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--transcript-w); }
+
+/* ── 右側逐字稿面板（會議語音文字：發言人 + 內容 + 時序）────────── */
+.transcript { display: none; flex-direction: column; border-left: 1px solid var(--line); background: var(--inset); overflow: hidden; min-width: 0; }
+.app.tr-on .transcript { display: flex; }
+.transcript-head { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-3); border-bottom: 1px solid var(--line); flex-shrink: 0; font-weight: 700; font-size: 14px; }
+.transcript-head .tr-count { color: var(--dim); font-weight: 400; font-size: 12px; }
+.transcript-head .tr-spacer { flex: 1; }
+.transcript-head button { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 15px; padding: 2px 6px; border-radius: var(--r-sm); }
+.transcript-head button:hover { color: var(--fg); background: var(--card); }
+.transcript-body { flex: 1; overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: 10px; }
+.transcript-body .tr-empty { color: var(--dim); font-size: 13px; text-align: center; padding: var(--sp-4) var(--sp-2); line-height: 1.6; }
+.tr-item { font-size: 13px; line-height: 1.55; }
+.tr-item .tr-meta { display: flex; align-items: baseline; gap: 6px; margin-bottom: 2px; }
+.tr-item .tr-who { font-weight: 600; color: var(--accent); }
+.tr-item .tr-who.me { color: var(--ok); }
+.tr-item .tr-time { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tr-item .tr-mic { font-size: 11px; opacity: .8; }
+.tr-item .tr-text { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+/* 開關鈕（左欄動作區）啟用態 */
+.side-actions button.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 
 /* 左側邊欄 */
 .side { border-right: 1px solid var(--line); display: flex; flex-direction: column; background: var(--inset); overflow: hidden; }
@@ -34,6 +58,10 @@ body { display: flex; flex-direction: column; }
 .side-meta { display: flex; flex-wrap: wrap; gap: 6px; }
 .pill { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 2px 9px; font-size: 12px; color: var(--dim); }
 .pill.live { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+/* 上下文佔用膠囊（對標 CC）：常態靛藍字，逼近自動壓縮門檻轉琥珀、達門檻轉紅 */
+#ctxPill { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); cursor: default; }
+#ctxPill.ctx-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+#ctxPill.ctx-crit { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--line)); }
 .side-actions { padding: var(--sp-3); border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .side-actions button { width: 100%; }
 .side-actions button.recording { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); animation: recpulse 1.6s ease-in-out infinite; }
@@ -76,6 +104,9 @@ body { display: flex; flex-direction: column; }
 .msg.me .who { text-align: right; }
 .msg.me .bubble { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--btnfg); }
 .msg.ai .who { color: var(--ok); font-weight: 600; }
+/* lane 標頭的即時計時／累計 token（⏱ 1m20s · ↑ 3.2k）：弱化、等寬數字、不搶氣泡內容 */
+.msg.ai .who .lane-meta { color: var(--dim); font-weight: 400; font-variant-numeric: tabular-nums; }
+.msg.ai .who .lane-meta.done { color: color-mix(in srgb, var(--ok) 55%, var(--dim)); }
 .msg.ai .bubble { background: color-mix(in srgb, var(--ok) 9%, var(--card)); border-color: color-mix(in srgb, var(--ok) 30%, var(--line)); }
 /* markdown 已產生區塊標記（p/ul/pre…），關掉氣泡的 pre-wrap 免雙重換行；pre.code 自己保留空白 */
 .msg .bubble.md { white-space: normal; }
@@ -88,6 +119,12 @@ body { display: flex; flex-direction: column; }
 .msg .bubble .tool { color: var(--dim); font-size: 12px; font-family: var(--mono, ui-monospace,SFMono-Regular,Menlo,monospace); margin-bottom: 4px; }
 .typing { color: var(--dim); font-size: 13px; padding: 0 var(--sp-4) 4px; height: 18px; text-align: center; }
 .typing:empty { height: 0; padding: 0; }
+/* 即時字幕（錄音逐字）：說話者名下的浮動灰字，定稿後由 say 氣泡取代。自己的字幕描一圈色，強調「你也看得到自己說的」。 */
+.captions { padding: 0 var(--sp-4); display: flex; flex-direction: column; gap: 3px; }
+.captions:empty { padding: 0; }
+.caption-line { font-size: 13px; color: var(--dim); line-height: 1.5; padding: 4px 10px; border-radius: var(--r-md); background: color-mix(in srgb, var(--dim) 8%, transparent); border: 1px dashed color-mix(in srgb, var(--dim) 30%, var(--line)); }
+.caption-line.self { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.caption-line .cap-who { font-weight: 600; color: var(--accent); margin-right: 6px; }
 .ai-status { color: var(--accent); font-size: 13px; padding: 0 var(--sp-4) 2px; min-height: 16px; text-align: center; font-weight: 600; }
 .ai-status:empty { padding: 0; min-height: 0; }
 
@@ -127,7 +164,6 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
 .preview-body { overflow: auto; padding: var(--sp-4); }
 .preview-pre { white-space: pre-wrap; word-break: break-word; font-family: var(--mono, ui-monospace,Menlo,monospace); font-size: 13px; margin: 0; }
 .preview-img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
-
 /* 進場 Modal */
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.66); display: flex; align-items: center; justify-content: center; z-index: 100; padding: var(--sp-4); }
 .modal[hidden] { display: none; }
@@ -165,6 +201,9 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
   .mobile-bar { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); background: var(--inset); flex-shrink: 0; }
   .mobile-bar button { background: none; border: 0; font-size: 20px; line-height: 1; padding: 4px 6px; cursor: pointer; color: var(--fg); }
   .mobile-bar .mb-title { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 逐字稿面板在窄螢幕改成右側浮動抽屜（不擠壓主區）*/
+  .app.tr-on { grid-template-columns: 1fr; }
+  .app.tr-on .transcript { position: fixed; inset: 0 0 0 auto; width: min(340px, 88vw); z-index: 90; box-shadow: -2px 0 24px rgba(0,0,0,.34); }
 }
 </style>
 </head>
@@ -195,6 +234,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
         <span class="pill" id="packPill">—</span>
         <span class="pill" id="modelPill" data-i18n-title="room.modelPillTip" title="此會議的 AI 模型；主持人可點擊切換" hidden style="cursor:pointer" onclick="switchModel()">🧠 —</span>
         <span class="pill" id="statusPill" data-i18n="room.connecting">連線中…</span>
+        <span class="pill" id="ctxPill" role="status" aria-live="polite" hidden>🧠 —</span>
         <span class="pill" id="roPill" data-i18n-title="room.roPillTip" title="唯讀會議：僅主持人可上傳/改檔" hidden data-i18n="room.readonlyPill">🔒 唯讀</span>
       </div>
     </div>
@@ -202,6 +242,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
       <button class="ghost" id="copyBtn" type="button" data-i18n-title="room.copyInviteTip" title="複製邀請連結" data-i18n="room.copyInvite">🔗 複製邀請連結</button>
       <input id="inviteBox" class="invite-box" readonly hidden onclick="this.select()" data-i18n-title="room.inviteBoxTip" title="邀請連結（點一下全選）">
       <button class="ghost" id="recBtn" type="button" data-i18n-title="room.recBtnTip" title="開啟錄音：把你的發言即時轉成文字記錄（各錄各麥，說話人＝你）" style="margin-top:6px" hidden data-i18n="room.recStart">🎙 開始錄音</button>
+      <button class="ghost" id="transcriptBtn" type="button" data-i18n-title="room.transcriptBtnTip" title="開關右側逐字稿面板（會議語音文字：發言人／內容／時序）" style="margin-top:6px" data-i18n="room.transcriptBtn">📝 逐字稿</button>
       <button class="ghost" id="minutesBtn" type="button" data-i18n-title="room.minutesBtnTip" title="讓 AI 把整段對話整理成決策／待辦／摘要，產出可下載的檔案" style="margin-top:6px" data-i18n="room.minutesBtn">📋 生成會議紀要</button>
       <button class="ghost" id="leaveBtn" type="button" data-i18n-title="room.leaveBtnTip" title="離開此會議室，回到大廳（會議與其他成員不受影響，可隨時再進入）" style="margin-top:6px" data-i18n="room.leaveBtn">🚪 離開會議室</button>
     </div>
@@ -229,6 +270,7 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
       <span class="mb-title" id="mbTitle" data-i18n="nav.room">會議室</span>
     </div>
     <div class="thread-scroll" id="logWrap"><div class="thread-inner" id="log"></div></div>
+    <div class="captions" id="captions" aria-live="polite"></div>
     <div class="ai-status" id="aiStatus"></div>
     <div class="typing" id="typing"></div>
     <div class="composer">
@@ -241,6 +283,18 @@ kbd { background: var(--card); border: 1px solid var(--line); border-radius: 5px
       <div class="hint"><span data-i18n="room.hintType">打</span> <kbd>@</kbd>：<b>@ai</b> <span data-i18n="room.hintAiDesc">讓 AI 回覆整段討論</span>、<b>@成員</b> <span data-i18n="room.hintMentionDesc">提及</span>、<b>@檔案</b> <span data-i18n="room.hintFileDesc">引用（同句 @ai 時 AI 會讀該檔）</span>。<kbd>Enter</kbd> <span data-i18n="room.hintSend">送出</span>、<kbd>Shift+Enter</kbd> <span data-i18n="room.hintNewline">換行</span>。</div>
     </div>
   </main>
+
+  <!-- 右側逐字稿面板：會議語音文字（發言人 + 內容 + 時序），依時間累積 -->
+  <aside class="transcript" id="transcript" aria-label="逐字稿">
+    <div class="transcript-head">
+      <span data-i18n="room.transcriptTitle">📝 逐字稿</span>
+      <span class="tr-count" id="trCount"></span>
+      <span class="tr-spacer"></span>
+      <button type="button" id="trExport" data-i18n-title="room.transcriptExport" title="下載整場逐字稿（.md）" data-i18n-aria="room.transcriptExport" aria-label="下載逐字稿">⬇</button>
+      <button type="button" id="trClose" data-i18n-aria="room.transcriptClose" aria-label="收合逐字稿">✕</button>
+    </div>
+    <div class="transcript-body" id="trBody"><div class="tr-empty" data-i18n="room.transcriptEmpty">尚無發言。成員的發言（含語音轉文字 🎙）會依時間顯示在這裡。</div></div>
+  </aside>
 </div>
 <!-- 手機抽屜側欄的背景遮罩（點擊關閉；桌機隱藏）-->
 <div class="side-backdrop" id="sideBackdrop"></div>
@@ -476,6 +530,10 @@ function returnToLobby() {
   aiLanes.clear(); aiThinkers.clear(); // 清 per-lane 串流泡泡與 per-user AI 狀態
   // 清畫面：訊息串 / 成員 / 檔案 / 打字中 / AI 狀態 / 邀請框 / 標題與 pill，避免再進他房時殘留上一場內容。
   $("#log").innerHTML = ""; $("#members").innerHTML = ""; $("#wbfiles").innerHTML = ""; $("#typing").textContent = ""; $("#aiStatus").textContent = "";
+  // 清逐字稿面板與即時字幕（避免再進他房殘留上一場語音記錄）
+  trIds.clear(); for (const k of [...captionEls.keys()]) clearCaption(k);
+  $("#trBody").innerHTML = `<div class="tr-empty">${esc(t("room.transcriptEmpty", "尚無發言。成員的發言（含語音轉文字 🎙）會依時間顯示在這裡。"))}</div>`;
+  $("#trCount").textContent = "";
   const ib = $("#inviteBox"); ib.hidden = true; ib.value = "";
   $("#roomTitle").textContent = t("room.defaultTitle", "專案會議室"); $("#mbTitle").textContent = t("nav.room", "會議室"); document.title = t("room.defaultTitle", "專案會議室"); closeSide();
   $("#mcount").textContent = "(0)";
@@ -589,12 +647,53 @@ function stopRec() {
   try { if (mediaRec && mediaRec.state !== "inactive") mediaRec.stop(); } catch { /* 略 */ }
   if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
   mediaRec = null;
+  clearCaption("self"); // 停錄 → 清掉尚未定稿的「聆聽中/逐字」浮動字幕
 }
-async function sendAudio(blob) {
+// 瀏覽器端 webm/opus → 16kHz 單聲道 WAV：多數 ASR 端點（OpenAI input_audio schema）只吃 wav/mp3，
+// 不吃瀏覽器 MediaRecorder 錄的 webm。在瀏覽器就轉好 wav → 免依賴伺服器 ffmpeg，私有化部署即開即用。
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2), view = new DataView(buf);
+  const wr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+  wr(0, "RIFF"); view.setUint32(4, 36 + samples.length * 2, true); wr(8, "WAVE");
+  wr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  wr(36, "data"); view.setUint32(40, samples.length * 2, true);
+  let o = 44; for (let i = 0; i < samples.length; i++) { const s = Math.max(-1, Math.min(1, samples[i])); view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2; }
+  return new Blob([view], { type: "audio/wav" });
+}
+async function blobToWav(blob) {
+  const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+  const ctx = new AC();
   try {
-    await fetch(`/v1/rooms/${roomId}/audio` + (authTok ? "?token=" + encodeURIComponent(authTok) : ""),
-      { method: "POST", headers: { "content-type": blob.type || "audio/webm", ...(authTok ? { authorization: "Bearer " + authTok } : {}) }, body: blob });
-  } catch { /* 靜默：單段失敗不打斷錄音 */ }
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const rate = 16000, len = Math.max(1, Math.ceil(decoded.duration * rate));
+    const off = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, len, rate); // 重採樣＋降單聲道
+    const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start(0);
+    const rendered = await off.startRendering();
+    return encodeWav(rendered.getChannelData(0), rate);
+  } catch { return null; } finally { try { ctx.close(); } catch { /* 略 */ } }
+}
+let sttErrShown = 0; // 節流 STT 錯誤提示：連續失敗只提示一次（每 15s），免洗版
+async function sendAudio(blob) {
+  showCaption("self", myName, "🎙 " + t("room.captionListening", "聆聽中…"), true); // 立即回饋：本段上傳/轉錄中，說話者先看到「在聽」
+  const wav = await blobToWav(blob); // 轉不動（瀏覽器不支援/解碼失敗）→ 退回原格式，交由伺服器 ffmpeg 或端點盡力
+  const send = wav || blob;
+  try {
+    const resp = await fetch(`/v1/rooms/${roomId}/audio` + (authTok ? "?token=" + encodeURIComponent(authTok) : ""),
+      { method: "POST", headers: { "content-type": send.type || "audio/webm", ...(authTok ? { authorization: "Bearer " + authTok } : {}) }, body: send });
+    const r = await resp.json().catch(() => null);
+    if (!resp.ok || (r && r.error)) {
+      // STT 失敗（502 等）：把真正原因顯示給說話者一次（含端點錯誤內文），別再默默吞掉讓人以為壞了。
+      clearCaption("self");
+      const now = Date.now();
+      if (now - sttErrShown > 15000) { sttErrShown = now; addSystem("⚠ " + t("room.sttFailedPrefix", "語音轉文字失敗：") + ((r && r.error) || ("HTTP " + resp.status))); }
+      return;
+    }
+    // 有轉出文字 → 顯示成自己的即時字幕（say 廣播回來會由 clearCaptionsFor 換成正式氣泡）；空白（靜音段）→ 清「聆聽中」。
+    // 保底自動清除：say 若比本回應早到（已清字幕），這裡再顯示會變孤兒 → 掛計時器兜底，避免殘留。
+    if (r && r.text) { showCaption("self", myName, r.text, true); clearTimeout(selfCapTimer); selfCapTimer = setTimeout(() => clearCaption("self"), 6000); }
+    else clearCaption("self");
+  } catch { clearCaption("self"); /* 網路層失敗（非 STT 回應）：靜默，不打斷錄音 */ }
 }
 function updateRecUI() {
   const b = $("#recBtn"); if (!b) return;
@@ -603,7 +702,7 @@ function updateRecUI() {
 }
 $("#recBtn").onclick = async () => {
   if (recording) { stopRec(); updateRecUI(); addSystem(t("room.recStoppedMsg", "🎙 已停止錄音")); return; }
-  if (!window.isSecureContext) { alert(t("room.recNeedsHttps", "錄音需要 HTTPS 或 localhost 環境（瀏覽器限制）。")); return; }
+  if (!window.isSecureContext) { alert(t("room.recNeedsHttps", "錄音需要安全環境（HTTPS 或 localhost）——瀏覽器硬性限制，非本站問題。你正以 HTTP 從遠端開啟，故無法存取麥克風。\n\n解法：\n① 前方架 HTTPS 反向代理，改用 https:// 開啟（你的 HTTP STT 端點不受影響，仍由伺服器端呼叫）\n② 改用 localhost 開啟（可用 SSH 埠轉發）\n③ Chrome 臨時放行：chrome://flags/#unsafely-treat-insecure-origin-as-secure 加入 %o").replace("%o", location.origin)); return; }
   if (!navigator.mediaDevices || !window.MediaRecorder) { alert(t("room.recNotSupported", "此瀏覽器不支援錄音。")); return; }
   if (!confirm(t("room.recConfirm", "開始錄音？你的發言會即時轉成文字記錄、供 AI 與會議紀要使用（其他成員會看到你的逐字內容）。"))) return;
   try { await startRec(); } catch (e) { alert(t("room.recMicDeniedPrefix", "無法存取麥克風：") + (e.message || e) + t("room.recMicDeniedSuffix", "（請允許麥克風權限）")); return; }
@@ -668,6 +767,11 @@ function handle(ev) {
     case "presence": onlineSet = new Set(ev.online || []); renderMembers(currentMembers); return;
     case "typing": onTyping(ev.name, ev.on); return;
     case "status": updateThinker(ev.by, ev.byName, ev.laneStatus); setStatus(ev.status); if (ev.laneStatus === "idle" && ev.by) finishAi(ev.by); if (ev.status === "idle") loadFiles(); return;
+    case "caption":
+      // 別人的即時字幕才由伺服器事件渲染；自己的走本地回聲（sendAudio 已即時顯示，避免重複/延遲）
+      if (ev.by && ev.by === memberId) return;
+      if (ev.final || !ev.text) clearCaption(ev.by); else showCaption(ev.by, ev.name, ev.text, false);
+      return;
     case "say": renderMessage(ev.message); return;
     case "room_model": setModelPill(ev.model); return;
     case "ai": handleAi(ev.by, ev.byName, ev.ev); return;
@@ -693,6 +797,8 @@ function renderText(text) {
 const renderedIds = new Set();   // 已渲染的訊息 id → SSE 斷線重連時服務端會重放全部歷史，按 id 去重避免重複渲染
 function renderMessage(m) {
   if (m.id) { if (renderedIds.has(m.id)) return; renderedIds.add(m.id); } // 先記 id（含 AI 落定分支）→ 重連重放同 id 一律略過
+  if (m.by) clearCaptionsFor(m.by); // 定稿發言 → 清掉該員的即時字幕（浮動灰字被正式氣泡取代）
+  if (m.kind === "user") addTranscript(m); // 人類發言 → 進右側逐字稿面板（發言人／內容／時序）；重放同 id 由上面 return 擋掉
   if (m.kind === "ai" && aiLanes.has(m.by)) { finishAi(m.by, m.text); return; } // 該 lane 的串流泡泡落定（用權威全文），避免重複；無 live 泡泡（重連重放）則往下走靜態渲染
   const cls = m.kind === "ai" ? "ai" : m.kind === "system" ? "system" : (m.name === myName ? "me" : "");
   const el = document.createElement("div");
@@ -719,12 +825,19 @@ function laneLabel(by, byName) {
 // 串流：每條 lane（by）一個獨立泡泡 → 多人並行各問各的不會互相蓋字。
 function handleAi(by, byName, ev) {
   if (!ev) return;
+  // 上下文佔用事件（session/usage/compact）：只更新該 lane 的佔用快照，不建氣泡、不落文字。
+  // 只追蹤成員 lane（跳過 __minutes__/__auto__ 這類轉瞬的獨立 session，其 context 與會議無關）。
+  if (ev.type === "session" || ev.type === "usage" || ev.type === "compact") {
+    if (!by.startsWith("__")) handleLaneCtx(by, byName, ev);
+    return;
+  }
   let lane = aiLanes.get(by);
   if (!lane) {
     const el = document.createElement("div"); el.className = "msg ai";
     const label = laneLabel(by, byName);
-    el.innerHTML = `<div class="who">AI${label ? " → " + esc(label) : ""}</div><div class="bubble"></div>`;
-    appendLog(el); lane = { el, text: "", tools: [] }; aiLanes.set(by, lane);
+    el.innerHTML = `<div class="who">AI${label ? " → " + esc(label) : ""}<span class="lane-meta" aria-hidden="true"></span></div><div class="bubble"></div>`;
+    appendLog(el); lane = { el, text: "", tools: [], startedAt: Date.now(), tokens: 0, done: false }; aiLanes.set(by, lane);
+    renderLaneMeta(lane); ensureRoomTicker();
   }
   const bubble = lane.el.querySelector(".bubble");
   if (ev.type === "text") lane.text += ev.delta || "";
@@ -739,6 +852,7 @@ function finishAi(by, finalText) {
   const lane = aiLanes.get(by); if (!lane) return;
   const text = finalText != null ? finalText : lane.text;
   const b = lane.el.querySelector(".bubble");
+  lane.done = true; lane.finishedAt = Date.now(); renderLaneMeta(lane); // 凍結計時 → 標頭改顯示「用時 X」
   if (text) { b.innerHTML = mdRender(text); b.classList.add("md"); }
   else lane.el.remove(); // 空泡泡（如純工具後被中止）→ 移除佔位
   aiLanes.delete(by);
@@ -754,6 +868,115 @@ function renderAiStatus() {
   const el = $("#aiStatus"); if (!el) return;
   const names = [...aiThinkers.values()];
   el.textContent = !names.length ? "" : names.length === 1 ? "🤔 " + names[0] + t("room.aiReplyingSuffix", " 的 AI 回覆中…") : "🤔 " + names.slice(0, 3).join("、") + (names.length > 3 ? t("room.etcWord", " 等") : "") + t("room.aiReplyingSuffix", " 的 AI 回覆中…");
+}
+// ── 即時字幕（錄音逐字）：說話者名下的浮動灰字，供「說到哪、轉到哪」即時可見（含自己）。定稿由 say 氣泡取代 → clearCaption。
+const captionEls = new Map(); // key（成員 memberId 或 'self'）-> DOM 節點
+let selfCapTimer = null;      // 自己的字幕保底自動清除計時器（防 say/回應競態殘留）
+function showCaption(key, name, text, self) {
+  if (!text) { clearCaption(key); return; }
+  let el = captionEls.get(key);
+  if (!el) { el = document.createElement("div"); el.className = "caption-line" + (self ? " self" : ""); $("#captions").appendChild(el); captionEls.set(key, el); }
+  el.innerHTML = `<span class="cap-who">${esc(self ? (myName || t("room.youWord", "你")) : (name || "…"))}</span>${esc(text)}`;
+  scrollDown();
+}
+function clearCaption(key) { const el = captionEls.get(key); if (el) { el.remove(); captionEls.delete(key); } if (key === "self") { clearTimeout(selfCapTimer); selfCapTimer = null; } }
+function clearCaptionsFor(by) { clearCaption(by); if (by && by === memberId) clearCaption("self"); } // say 定稿 → 清該員字幕（含自己的本地回聲）
+
+// ── 右側逐字稿面板（會議語音文字：發言人 + 內容 + 時序）：所有人類發言依時間累積；語音轉文字者標 🎙。
+const trIds = new Set(); // 已進逐字稿的訊息 id → 重連重放去重
+function trTime(ts) { try { const d = new Date(ts); const p = (n) => String(n).padStart(2, "0"); return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()); } catch { return ""; } }
+function addTranscript(m) {
+  if (!m || m.kind !== "user" || !m.text) return;
+  if (m.id) { if (trIds.has(m.id)) return; trIds.add(m.id); }
+  const body = $("#trBody"); if (!body) return;
+  const empty = body.querySelector(".tr-empty"); if (empty) empty.remove();
+  const self = m.name === myName;
+  const el = document.createElement("div"); el.className = "tr-item";
+  el.innerHTML = `<div class="tr-meta"><span class="tr-who${self ? " me" : ""}">${esc(m.name || "—")}</span>`
+    + (m.source === "voice" ? `<span class="tr-mic" title="${esc(t("room.voiceTranscriptTip", "語音轉錄"))}">🎙</span>` : "")
+    + `<span class="tr-time">${trTime(m.ts)}</span></div><div class="tr-text">${esc(m.text)}</div>`;
+  body.appendChild(el);
+  const c = $("#trCount"); if (c) c.textContent = "(" + trIds.size + ")";
+  // 貼底才自動捲（往上翻看舊記錄時不硬拉回底部）
+  if (body.scrollHeight - body.scrollTop - body.clientHeight < 120) body.scrollTop = body.scrollHeight;
+}
+function toggleTranscript(force) {
+  const app = document.querySelector(".app"); if (!app) return;
+  const on = force != null ? force : !app.classList.contains("tr-on");
+  app.classList.toggle("tr-on", on);
+  const b = $("#transcriptBtn"); if (b) b.classList.toggle("on", on);
+  try { localStorage.setItem("xitto_room_transcript", on ? "1" : "0"); } catch { /* 略 */ }
+}
+// 下載整場逐字稿（.md）：走後端讀 append-only 完整存檔（含被 replay 上限砍掉的前段），非只匯出畫面上已載入的部分。
+async function exportTranscript() {
+  if (!roomId) return;
+  try {
+    const r = await fetch(`/v1/rooms/${roomId}/transcript` + (authTok ? "?token=" + encodeURIComponent(authTok) : ""), { headers: authTok ? { authorization: "Bearer " + authTok } : {} });
+    if (!r.ok) { addSystem("⚠ " + t("room.transcriptExportFail", "逐字稿下載失敗：") + " HTTP " + r.status); return; }
+    const blob = await r.blob();
+    const cd = r.headers.get("content-disposition") || "";
+    const mt = /filename\*=UTF-8''([^;]+)/.exec(cd);
+    const name = mt ? decodeURIComponent(mt[1]) : ((myName ? "" : "") + "逐字稿.md");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch { addSystem("⚠ " + t("room.transcriptExportFail", "逐字稿下載失敗：") + " " + t("room.networkError", "網路錯誤")); }
+}
+
+// ── 上下文佔用指示器（對標 Claude Code）：每條成員 lane 有自己私有 session，故各自追蹤佔用快照。
+// 頭部膠囊顯示「佔用最高」的 lane（最能反映此會議室是否逼近上限），tooltip 標明是誰的 AI。
+const roomLaneCtx = new Map(); // by -> { tokens, window, compactAt, label }
+let ctxFlashUntil = 0, ctxFlashTimer = null;
+function fmtTokens(n) { n = n || 0; return n < 1000 ? String(n) : (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, "") + "k"; }
+
+// ── 執行時間 + 過程（對標對話模式的狀態列）：每條 lane 在氣泡標頭顯示即時計時（⏱）與累計 token（↑），
+// 過程（工具步驟/階段）已逐步落在氣泡內。ticker 每秒刷新進行中 lane 的計時；落定後凍結成「用時 X」。
+let roomTicker = null;
+function fmtElapsed(ms) { const s = Math.floor(ms / 1000); return s < 60 ? s + "s" : Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0") + "s"; }
+function ensureRoomTicker() {
+  if (roomTicker) return;
+  roomTicker = setInterval(() => {
+    if (![...aiLanes.values()].some((l) => !l.done)) { clearInterval(roomTicker); roomTicker = null; return; }
+    for (const lane of aiLanes.values()) if (!lane.done) renderLaneMeta(lane);
+  }, 1000);
+}
+function renderLaneMeta(lane) {
+  const meta = lane.el && lane.el.querySelector(".lane-meta"); if (!meta || !lane.startedAt) return;
+  const took = fmtElapsed((lane.finishedAt || Date.now()) - lane.startedAt);
+  const tok = lane.tokens ? " · ↑ " + fmtTokens(lane.tokens) : "";
+  meta.textContent = lane.done ? " · " + t("room.tookTime", "用時 ") + took : " · ⏱ " + took + tok;
+  meta.classList.toggle("done", !!lane.done);
+}
+function handleLaneCtx(by, byName, ev) {
+  let c = roomLaneCtx.get(by);
+  if (!c) { c = { tokens: 0, window: null, compactAt: null, label: laneLabel(by, byName) }; roomLaneCtx.set(by, c); }
+  else if (byName) c.label = laneLabel(by, byName);
+  if (ev.type === "session") { c.window = ev.contextWindow || c.window; c.compactAt = ev.compactAt || c.compactAt; }
+  else if (ev.type === "usage") {
+    if (ev.contextTokens != null) c.tokens = ev.contextTokens;
+    const bl = aiLanes.get(by); if (bl) { bl.tokens = (bl.tokens || 0) + (ev.input || 0) + (ev.output || 0); renderLaneMeta(bl); } // 本輪累計 token → 標頭 ↑
+  }
+  else if (ev.type === "compact") { c.tokens = ev.tokensAfter || c.tokens; ctxFlashUntil = Date.now() + 2600; clearTimeout(ctxFlashTimer); ctxFlashTimer = setTimeout(renderRoomCtx, 2700); }
+  renderRoomCtx();
+}
+function renderRoomCtx() {
+  const pill = $("#ctxPill"); if (!pill) return;
+  let best = null; // 佔用 % 最高的 lane
+  for (const [by, c] of roomLaneCtx) {
+    if (!c.window || !(c.tokens > 0)) continue;
+    const pct = Math.min(100, Math.round((c.tokens / c.window) * 100));
+    if (!best || pct > best.pct) best = { pct, tokens: c.tokens, window: c.window, compactAt: c.compactAt, label: c.label, by };
+  }
+  if (!best) { pill.hidden = true; pill.classList.remove("ctx-warn", "ctx-crit"); return; }
+  const warnPct = best.compactAt ? (best.compactAt / best.window) * 100 : 80;
+  pill.hidden = false;
+  pill.classList.toggle("ctx-crit", best.pct >= warnPct);
+  pill.classList.toggle("ctx-warn", best.pct >= warnPct - 10 && best.pct < warnPct);
+  const flash = Date.now() < ctxFlashUntil;
+  pill.textContent = flash ? "🗜 " + t("ctx.compacted", "✓ 已自動壓縮") : "🧠 " + best.pct + "%";
+  const tip = t("ctx.tooltipRoom", "%l 上下文 %p% · %u / %w · 逼近 %c% 自動壓縮")
+    .replace("%l", best.label || "AI").replace("%p", best.pct).replace("%u", fmtTokens(best.tokens)).replace("%w", fmtTokens(best.window)).replace("%c", Math.round(warnPct));
+  pill.title = tip; pill.setAttribute("aria-label", tip);
 }
 const argSum = (a) => { const v = a.command ?? a.path ?? a.pattern ?? a.query ?? a.url ?? a.name ?? a.topic; return v ? String(v).slice(0, 60) : ""; };
 const appendLog = (el) => { $("#log").appendChild(el); scrollDown(); };
@@ -903,6 +1126,7 @@ $("#fileUpload").addEventListener("change", (e) => { const fs = [...e.target.fil
 })();
 
 const closeFilePreview = () => ($("#file-preview").innerHTML = "");
+
 async function wbView(encPath, name) {
   const v = $("#file-preview"); if (!v) return;
   const url = `/v1/rooms/${roomId}/file?path=` + encPath + (authTok ? "&token=" + encodeURIComponent(authTok) : "");
@@ -911,7 +1135,15 @@ async function wbView(encPath, name) {
   let body = "";
   if (IMG.test(name)) body = `<img class="preview-img" src="${url}" alt="${esc(name)}">`;
   else if (HTMLF.test(name)) body = `<div class="empty">${t("room.htmlPreviewNote", "（HTML 檔案，請用「開新分頁」檢視）")}</div>`;
-  else if (DOC.test(name)) { const r = await fetch(url + "&as=text").catch(() => null); body = (!r || !r.ok) ? `<div class="empty">${t("room.noPreviewDownload", "（無法預覽，可下載原檔）")}</div>` : `<pre class="preview-pre">${esc(await r.text())}</pre>`; }
+  else if (DOC.test(name)) {
+    const pr = await fetch(url + "&as=preview").catch(() => null);
+    const doc = pr && pr.ok ? await pr.json().catch(() => null) : null;
+    if (doc) body = renderOfficePreview(doc, "preview-pre");
+    else {
+      const r = await fetch(url + "&as=text").catch(() => null);
+      body = (!r || !r.ok) ? `<div class="empty">${t("room.noPreviewDownload", "（無法預覽，可下載原檔）")}</div>` : `<pre class="preview-pre">${esc(await r.text())}</pre>`;
+    }
+  }
   else { const txt = await fetch(url).then((r) => (r.ok ? r.text() : null)).catch(() => null); if (txt == null) body = `<div class="empty">${t("room.noPreview", "（無法預覽）")}</div>`; else if (MD.test(name)) body = `<div class="md">${mdRender(txt)}</div>`; else if (JSONF.test(name)) { try { body = `<pre class="preview-pre">${esc(JSON.stringify(JSON.parse(txt), null, 2))}</pre>`; } catch { body = `<pre class="preview-pre">${esc(txt)}</pre>`; } } else body = `<pre class="preview-pre">${esc(txt)}</pre>`; }
   v.innerHTML = `<div class="preview-panel" role="dialog" aria-modal="true" aria-label="${t("preview.fileLabel", "檔案預覽：%n").replace("%n", esc(name))}">
     <div class="preview-bar"><span class="preview-name">📄 ${esc(name)}</span><a href="${url}" target="_blank">${t("preview.newTab", "開新分頁")}</a><a href="${url}&download=1">${t("preview.download", "下載")}</a><span class="spacer"></span><button class="ghost" onclick="closeFilePreview()" type="button">${t("preview.close", "✕ 關閉")}</button></div>
@@ -923,6 +1155,11 @@ function toggleSide(on) { const s = $(".side"), b = $("#sideBackdrop"); const op
 const closeSide = () => toggleSide(false);
 $("#sideToggle").onclick = () => toggleSide();
 $("#sideBackdrop").onclick = closeSide;
+// 逐字稿面板開關：預設寬螢幕開、窄螢幕關；記住上次選擇
+$("#transcriptBtn").onclick = () => toggleTranscript();
+$("#trClose").onclick = () => toggleTranscript(false);
+$("#trExport").onclick = exportTranscript;
+(() => { let pref; try { pref = localStorage.getItem("xitto_room_transcript"); } catch { /* 略 */ } toggleTranscript(pref != null ? pref === "1" : window.innerWidth >= 1100); })();
 // 點側欄的動作按鈕（離開/紀要/複製邀請）後自動收起抽屜；瀏覽檔案/資料夾不收（開檔預覽本身會蓋在上層）
 $(".side-actions").addEventListener("click", (e) => { if (window.matchMedia("(max-width: 720px)").matches && e.target.closest("button")) closeSide(); });
 

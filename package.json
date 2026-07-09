@@ -67,14 +67,20 @@
     "@earendil-works/pi-ai": "^0.80.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cli-highlight": "^2.1.11",
+    "docx": "^9.7.1",
     "ink": "^7.1.0",
     "jose": "^6.2.3",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
+    "pptxgenjs": "^4.0.1",
     "react": "^19.2.7"
   },
   "devDependencies": {
     "ink-testing-library": "^4.0.0",
     "opencc-js": "^1.4.0"
+  },
+  "optionalDependencies": {
+    "mysql2": "^3.11.0",
+    "pg": "^8.13.0"
   }
 }

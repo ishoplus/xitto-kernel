@@ -7,7 +7,7 @@
 
 ## 核心觀念 / Core idea
 
-- **STT 只做轉錄**：把音訊轉成文字。xitto 打的是 **OpenAI 相容 `/v1/audio/transcriptions`**，所以任何相容服務都能接（本地 faster-whisper / 雲端）。
+- **STT 只做轉錄**：把音訊轉成文字。xitto 支援兩種 OpenAI 相容協定：預設 **`/v1/audio/transcriptions`**（Whisper 風格，本地 faster-whisper / 雲端），以及 **`/v1/chat/completions`** 音頻理解（`XITTO_STT_MODE=chat`，如私有化 Qwen3-ASR-1.7B，見 §2b）。
 - **各錄各麥 → 說話人天生正確**：每位成員的瀏覽器**只錄自己的麥克風**，用其房間成員身份打標。所以**不需要 diarization（聲紋分離）模型**，說話人歸屬 100% 準。只有「一間會議室共用一支麥」才需要 diarization（見 §6）。
 - **併入既有管線**：轉出的文字走**和打字發言完全相同的路徑**——即時廣播、決策/待辦沉澱進 `會議記錄.md`、散會自動出 `會議紀要-<時間戳>.pdf`。語音只是多了一個「產生文字訊息」的來源。
 - **純 opt-in**：不設 `XITTO_STT_ENDPOINT` → 完全是現況，錄音鈕不顯示，零影響。
@@ -53,6 +53,8 @@ curl -s http://localhost:8000/v1/audio/transcriptions \
 | `XITTO_STT_MODEL` | | 模型名，預設 `Systran/faster-whisper-large-v3`（依你的 STT server 而定）。 |
 | `XITTO_STT_LANGUAGE` | | 語言碼，例 `zh`（中文會議建議強制，準確度更穩）；留空＝自動偵測。 |
 | `XITTO_STT_KEY` | | STT 服務的 API Key（本地通常不需要）。 |
+| `XITTO_STT_MODE` | | 接口協定：留空＝Whisper `/v1/audio/transcriptions`（預設）；`chat`＝`/v1/chat/completions` 音頻理解（如 Qwen3-ASR）。見 §2b。 |
+| `XITTO_STT_PROMPT` | | 僅 `chat` 模式：system 偏置提示（詞彙／語種／專名），可空。 |
 | `XITTO_MAX_AUDIO` | | 單段音訊大小上限（bytes），預設 25MB。 |
 
 範例：
@@ -64,7 +66,40 @@ PORT=8787 XITTO_SERVER_TOKEN=secret node src/app/server.js
 ```
 啟動日誌會出現 `🎙 語音轉文字：已啟用 …`。
 
-> **也可用 UI 設定（免 env、免重啟）**：master 開 `/settings` → 最下方「🎙 語音轉文字」卡片填端點/模型/語言/Key，儲存後存進 `<baseDir>/stt.json` 並自動熱重載。優先序為 **注入式 opts > `stt.json`（UI 存的）> 環境變數**——一旦用 UI 存過即以該檔為準（端點留空＝停用）。env 適合宣告式部署，UI 適合臨場調整。
+> **也可用 UI 設定（免 env、免重啟）**：master 開 `/settings` → 最下方「🎙 語音轉文字」卡片填接口協定/端點/模型/語言/Key，儲存後存進 `<baseDir>/stt.json` 並自動熱重載。優先序為 **注入式 opts > `stt.json`（UI 存的）> 環境變數**——一旦用 UI 存過即以該檔為準（端點留空＝停用）。env 適合宣告式部署，UI 適合臨場調整。
+
+## 2b. 私有化 chat/completions STT（Qwen3-ASR-1.7B 等）
+
+有些自建 ASR 模型只以 **OpenAI 相容 `/v1/chat/completions`** 暴露（把音頻當一個 `input_audio` content part 送、從 `choices[0].message.content` 取文字），而非 Whisper 的 `/v1/audio/transcriptions`。這兩種是**不同的線格式**，不能只改端點 URL —— 要把 `mode` 設為 `chat`。
+
+UI：`/settings` →「🎙 語音轉文字」→「接口協定」選 **Chat 音頻理解**，填模型的 `/v1/chat/completions` 端點與模型名（如 `Qwen/Qwen3-ASR-1.7B`），可選填「提示」偏置詞彙。
+
+env：
+```bash
+XITTO_STT_ENDPOINT=http://localhost:8000/v1/chat/completions \
+XITTO_STT_MODE=chat \
+XITTO_STT_MODEL=Qwen/Qwen3-ASR-1.7B \
+XITTO_STT_PROMPT='Speaker uses Chinese/English. Terms: xitto, Wishboard.' \
+PORT=8787 XITTO_SERVER_TOKEN=secret node src/app/server.js
+```
+
+送出的請求體：
+```json
+{
+  "model": "Qwen/Qwen3-ASR-1.7B",
+  "messages": [
+    { "role": "system", "content": "（XITTO_STT_PROMPT，可省）" },
+    { "role": "user", "content": [
+      { "type": "input_audio", "input_audio": { "data": "<base64>", "format": "wav" } }
+    ]}
+  ],
+  "temperature": 0
+}
+```
+
+**音頻格式（重要）**：瀏覽器 `MediaRecorder` 錄的是 **webm/opus**，而 Qwen3-ASR chat 端點官方只文檔化 **wav**。伺服器端 `transcribe()` 會在**有 `ffmpeg`** 時自動把每段音頻轉成 16kHz 單聲道 wav 再送；**無 ffmpeg** 則以原格式（webm）透傳，交由後端盡力解碼（vLLM 部署多半可）。內網部署建議裝 `ffmpeg` 以求穩定。
+
+> Qwen3-ASR 也可能同時提供 Whisper 風格的 `/v1/audio/transcriptions`；若你的部署有，用預設模式（`mode` 留空）＋該端點更省事，`chat` 模式的價值在 context-priming（用 system 提示偏置專名/術語）。
 
 ## 3. 使用者怎麼用
 

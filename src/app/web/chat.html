@@ -7,6 +7,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- 設計系統 + 共享工具庫 -->
 <link rel="stylesheet" href="shared/style.css">
+<link rel="stylesheet" href="shared/office-preview.css">
 <!-- 設定注入：server 會替換這些佔位符（HTML 才會被替換，靜態 app.js 不會），app.js 從 window.__XITTO__ 讀 -->
 <script>window.__XITTO__ = { token: "__SERVER_TOKEN__", packs: __PACKS__, local: __LOCAL__, version: "__VERSION__", lang: "__LANG__" };</script>
 <!-- 三語字典一律全載入（供切換器即時切換，不用重整頁面），部署預設語言只決定初次顯示哪一份 -->
@@ -16,6 +17,7 @@
 <script src="shared/i18n.js"></script>
 <script src="shared/md.js"></script>
 <script src="shared/app.js"></script>
+<script src="shared/office-preview.js"></script>
 <script src="shared/account.js"></script>
 <style>
 /* ── Chat 頁面樣式 ──────────────────────────────────────── */
@@ -1619,7 +1621,7 @@ async function wbView(encPath, name) {
   if (!v) return;
   const url = "/v1/workspaces/file?ws=" + encodeURIComponent(curSpace) + "&path=" + encPath + "&token=" + encodeURIComponent(TOKEN);
   const IMG = /\.(png|jpe?g|gif|webp|svg)$/i, MD = /\.(md|markdown)$/i, JSONF = /\.json$/i, HTMLF = /\.html?$/i;
-  const DOC = /\.(docx|pptx|xlsx|odt|odp|ods|rtf|pdf)$/i; // Word/Excel/PPT/PDF：伺服器萃取成文字（?as=text）
+  const DOC = /\.(docx|pptx|xlsx|odt|odp|ods|rtf|pdf)$/i; // Word/Excel/PPT/PDF：伺服器萃取成預覽資料（回退 ?as=text）
 
   let body = "";
   if (IMG.test(name)) {
@@ -1627,9 +1629,14 @@ async function wbView(encPath, name) {
   } else if (HTMLF.test(name)) {
     body = `<div class="empty">（HTML 檔案，請用「開新分頁」檢視）</div>`;
   } else if (DOC.test(name)) {
-    const r = await fetch(url + "&as=text").catch(() => null);
-    if (!r || !r.ok) body = `<div class="empty">（無法預覽${r && r.status === 422 ? "：文件解析失敗，可下載原檔" : ""}）</div>`;
-    else body = `<pre class="preview-pre">${esc(await r.text())}</pre>`;
+    const pr = await fetch(url + "&as=preview").catch(() => null);
+    const doc = pr && pr.ok ? await pr.json().catch(() => null) : null;
+    if (doc) body = renderOfficePreview(doc, "preview-pre");
+    else {
+      const r = await fetch(url + "&as=text").catch(() => null);
+      if (!r || !r.ok) body = `<div class="empty">（無法預覽${r && r.status === 422 ? "：文件解析失敗，可下載原檔" : ""}）</div>`;
+      else body = `<pre class="preview-pre">${esc(await r.text())}</pre>`;
+    }
   } else {
     const txt = await fetch(url).then((r) => (r.ok ? r.text() : null)).catch(() => null);
     if (txt == null) body = `<div class="empty">（無法預覽）</div>`;

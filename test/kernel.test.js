@@ -58,9 +58,10 @@ test('data-query pack：同一個 kernel、零改動、不同領域（真實 sql
     const q = await k.runTool('sql_query', { sql: 'SELECT count(*) AS n FROM t' });
     assert.match(q.result.content[0].text, /\b2\b/); // 真的查到 2 筆
 
-    // sql_query 擋寫入型 SQL
+    // sql_query 擋寫入型 SQL（政策收斂在守衛鏈第 3 格 → blocked，reason 導向 sql_exec）
     const w = await k.runTool('sql_query', { sql: 'DELETE FROM t' });
-    assert.match(w.result.content[0].text, /sql_exec/);
+    assert.equal(w.blocked, true);
+    assert.match(w.reason, /sql_exec/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
