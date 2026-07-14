@@ -325,8 +325,8 @@ export function App({ store, handlers }) {
     return () => clearInterval(t);
   }, [s.mode]);
 
-  // 註：終端 resize 由 index.js 處理（全清螢幕 + 重新掛載），因為 Ink 的增量清行
-  // 會用「換行數」而非「實際終端列數」計算，視窗變窄時會誤算並殘留亂碼。
+  // 註：終端 resize 由 tui-run.js 的 runTui（onResize）處理（debounce 後全清螢幕 + 卸載重掛），
+  // 因為 Ink 的增量清行會用「換行數」而非「實際終端列數」計算，視窗變窄時會誤算並殘留亂碼。
 
   const elapsed = s.busyAt ? Math.floor((Date.now() - s.busyAt) / 1000) : 0;
   // 工具執行中優先「執行中」；否則只要本段在吐字（live 有值或 outputting 旗標）就「輸出中」，不因區塊提交瞬間閃回思考中

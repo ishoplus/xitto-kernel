@@ -17,9 +17,9 @@ const setup = () => {
   return { dir, k };
 };
 
-test('工具齊（含 grep/glob/web_fetch）', () => {
+test('工具齊（含 grep/glob/web_search/web_fetch）', () => {
   const { dir, k } = setup();
-  try { for (const n of ['read', 'ls', 'glob', 'grep', 'write', 'edit', 'bash', 'web_fetch']) assert.ok(k.registry.has(n), n); }
+  try { for (const n of ['read', 'ls', 'glob', 'grep', 'write', 'edit', 'bash', 'web_search', 'web_fetch']) assert.ok(k.registry.has(n), n); }
   finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -43,6 +43,46 @@ test('grep：正則搜內容、回 path:line、glob 過濾', async () => {
     const js = await k.runTool('grep', { pattern: 'foo', glob: '*.js' });
     assert.match(js.result.content[0].text, /a\.js/);
     assert.doesNotMatch(js.result.content[0].text, /readme/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('grep：context 顯示上下文行', async () => {
+  const { dir, k } = setup();
+  try {
+    const r = await k.runTool('grep', { pattern: 'function foo', glob: '*.js', context: 1 });
+    const t = r.result.content[0].text;
+    // 命中行內容 + 因 context 才出現的前一行內容（斷言內容本身，兼容 rg 的 - 分隔與 JS 回退的 : 分隔）
+    assert.match(t, /function foo/);      // 命中行
+    assert.match(t, /export const X/);    // 前一行：只有開了 context 才會出現
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('grep：outputMode files_with_matches / count', async () => {
+  const { dir, k } = setup();
+  try {
+    const fwm = await k.runTool('grep', { pattern: 'foo', outputMode: 'files_with_matches' });
+    const lines = fwm.result.content[0].text.split('\n');
+    assert.ok(lines.includes('src/a.js'), '只列檔名');
+    assert.ok(!/:\d+:/.test(fwm.result.content[0].text), '不含行號/內容');
+    const cnt = await k.runTool('grep', { pattern: 'foo', glob: '*.js', outputMode: 'count' });
+    assert.match(cnt.result.content[0].text, /src\/a\.js:1/); // a.js 有 1 行含 foo
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('edit：edits 陣列一次改多處，任一筆失敗整批不改（原子）', async () => {
+  const { dir, k } = setup();
+  try {
+    const f = join(dir, 'multi.txt');
+    writeFileSync(f, 'alpha\nbeta\ngamma\n');
+    await k.runTool('read', { path: 'multi.txt' });
+    // 成功：兩處替換
+    const ok = await k.runTool('edit', { path: 'multi.txt', edits: [{ oldText: 'alpha', newText: 'A' }, { oldText: 'gamma', newText: 'G' }] });
+    assert.match(ok.result.content[0].text, /"edits":2/);
+    assert.equal(readFileSync(f, 'utf8'), 'A\nbeta\nG\n');
+    // 失敗：第二筆找不到 → 整批回退，檔案不變
+    const bad = await k.runTool('edit', { path: 'multi.txt', edits: [{ oldText: 'A', newText: 'x' }, { oldText: '不存在', newText: 'y' }] });
+    assert.match(bad.result.content[0].text, /failedAt/);
+    assert.equal(readFileSync(f, 'utf8'), 'A\nbeta\nG\n', '整批未套用');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

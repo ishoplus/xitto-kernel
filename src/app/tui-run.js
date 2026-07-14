@@ -34,6 +34,47 @@ export function toolBlock(name, summary, result, isError, dur) {
   return out;
 }
 
+// 工具顯示名（對標 Claude Code 的 ⏺ Read(...) 友善名；未列出的用原名）。
+const TOOL_LABELS = {
+  read: '讀檔', write: '寫檔', edit: '編輯', ls: '列目錄', glob: '找檔', grep: '搜尋',
+  bash: 'bash', bash_bg: '背景執行', bash_output: '背景輸出', bash_kill: '停止背景',
+  web_search: '搜尋網路', web_fetch: '抓網頁', http: 'HTTP',
+  git_status: 'git 狀態', git_diff: 'git diff', git_log: 'git log', git_commit: 'git commit',
+  todo_write: '待辦', spawn_agent: '子 agent', spawn_agents: '平行子 agent',
+  security_review: '安全審查', code_review: '程式碼審查',
+  lsp_diagnostics: 'LSP 診斷', lsp_definition: '跳定義', lsp_hover: 'hover', lsp_symbols: '符號大綱',
+  lsp_references: '找引用', lsp_rename: '重命名', lsp_workspace_symbols: '符號搜尋',
+};
+export const toolLabel = (name) => TOOL_LABELS[name] || name;
+
+// 讀類工具的「摘要一行」（對標 Claude Code）：read/glob/ls 的結果是給模型的上下文，
+// 使用者只需看到「讀了 N 行 / 找到 N 個檔」，不該把整份檔案內容/清單灌進轉錄。
+// 回 null＝沒有可摘要的形態（錯誤 JSON、bash 等）→ 交給一般 toolBlock 顯示完整結果。純函數,可測。
+export function toolDigest(name, result) {
+  const raw = (result?.content || []).map((c) => c.text || '').join('\n');
+  if (name === 'glob') { try { const o = JSON.parse(raw); if (typeof o.count === 'number') return `${o.count} 個檔案`; } catch { /* 非預期形態 */ } return null; }
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.startsWith('{')) return null; // 空 / 錯誤 JSON → 交給 toolBlock
+  if (name === 'read') {
+    const n = (raw.match(/^\s*\d+\t/gm) || []).length;    // 帶行號的內容行數
+    if (!n) return null;
+    const more = raw.match(/還有\s*(\d+)\s*行/);
+    return `讀取 ${n} 行` + (more ? `（+${more[1]} 未顯示）` : '');
+  }
+  if (name === 'ls') return `${raw.split('\n').filter((l) => l.trim()).length} 項`;
+  return null;
+}
+
+// 工具結果卡（對標 Claude Code）：讀類工具用摘要一行，其餘沿用 toolBlock 顯示完整結果。純函數,可測。
+export function toolResultBlock(name, summary, result, isError, dur) {
+  const digest = isError ? null : toolDigest(name, result);
+  if (digest) {
+    const head = Y(`⏺ ${toolLabel(name)}`) + (summary ? G(`(${summary})`) : '') + (dur ? G(` ${dur}`) : '');
+    return head + '\n' + G(`  ⎿ ${digest}`);
+  }
+  return toolBlock(toolLabel(name), summary, result, isError, dur);
+}
+
 // 彩色 diff 區塊：以「hunk」呈現——變動行（綠 + / 紅 -）+ 前後各 2 行上下文（灰），
 // 跨 hunk 折疊為 ⋮，對標 Claude Code / xitto-code 的 unified diff。渲染 kernel 掛在 result._diff 的行級 diff。
 export function diffBlock(d, dur) {
@@ -155,7 +196,7 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
           store.set({ tasks: ev.args.todos.map((t) => '  ' + (t.status === 'completed' ? Gn('☑ ') + G(t.content) : t.status === 'in_progress' ? Y('◐ ') + t.content : G('☐ ' + t.content))).join('\n') });
         } else {
           pendingSummary = summarize(ev.args);
-          store.setTool({ name: ev.toolName, summary: pendingSummary });
+          store.setTool({ name: toolLabel(ev.toolName), summary: pendingSummary });
         }
         break;
       case 'tool_execution_end': {
@@ -164,9 +205,9 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
         if (ev.toolName !== 'todo_write') {
           const d = ev.result?._diff;
           if (d && !ev.isError && (d.added || d.removed || d.tooBig)) {
-            store.pushBlock(Y(`⏺ ${ev.toolName}`) + (pendingSummary ? G(`(${pendingSummary})`) : '') + (dur ? G(` ${dur}`) : '') + '\n' + diffBlock(d));
+            store.pushBlock(Y(`⏺ ${toolLabel(ev.toolName)}`) + (pendingSummary ? G(`(${pendingSummary})`) : '') + (dur ? G(` ${dur}`) : '') + '\n' + diffBlock(d));
           } else {
-            store.pushBlock(toolBlock(ev.toolName, pendingSummary, ev.result, ev.isError, dur));
+            store.pushBlock(toolResultBlock(ev.toolName, pendingSummary, ev.result, ev.isError, dur));
           }
         }
         pendingSummary = ''; toolStartAt = 0;
@@ -194,7 +235,19 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
 
   const cmdHistory = [];
   let ink;
-  const doExit = () => { persist(); try { ink?.unmount(); } catch { /* 略 */ } process.exit(0); };
+  let resizeTimer = null;
+  // 終端 resize：Ink 的增量清行以「換行數」而非實際終端列數計算，視窗變窄會誤算、殘留亂碼。
+  // 對策（對標 Claude Code）：debounce 後全清螢幕 + 卸載重掛 → <Static> 依新寬度整份重印、
+  // 動態區從頭重繪。store 保有完整 transcript，故重掛不丟歷史（僅輸入框當下未送出的字會清掉）。
+  const onResize = () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      try { ink?.unmount(); } catch { /* 略 */ }
+      process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+      ink = mountTui({ store, handlers });
+    }, 120);
+  };
+  const doExit = () => { persist(); if (resizeTimer) clearTimeout(resizeTimer); try { process.stdout.off('resize', onResize); } catch { /* 略 */ } try { ink?.unmount(); } catch { /* 略 */ } process.exit(0); };
 
   // ── 斜線指令 ──
   const slash = (input) => {
@@ -302,5 +355,6 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
   store.setMode('idle'); store.setPlaceholder('輸入訊息…');
   process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
   ink = mountTui({ store, handlers });
+  try { process.stdout.on('resize', onResize); } catch { /* 非 TTY：無 resize 事件 */ }
   return ink;
 }

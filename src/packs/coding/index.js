@@ -8,6 +8,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
 import { createBackgroundTools } from '../../kernel/bg.js';
 import { createGrepTool, createGlobTool } from '../shared/code-nav.js';
+import { createWebSearchTool } from '../shared/web-tools.js';
 import { markRead, writeAtomic } from '../shared/safe-write.js';
 import { isDocFile, extractDocText, DOC_EXTENSIONS } from '../shared/doc-extract.js';
 import { scanCode, sortFindings } from '../shared/security-scan.js';
@@ -19,13 +20,15 @@ const txt = (s) => ({ content: [{ type: 'text', text: typeof s === 'string' ? s 
 
 const SYSTEM_PROMPT = [
   '你是嚴謹的編碼 agent。準則：',
-  '- 探索 codebase：用 glob 找檔、grep 搜內容、read 讀檔（附行號）。',
+  '- 探索 codebase：用 glob 找檔、grep 搜內容（可加 context 看上下文）、read 讀檔（附行號）。找線上文件/錯誤訊息用 web_search 找來源、web_fetch 讀全文，別憑空臆測 API。',
   '- 編輯既有檔案前必先 read 它的當前內容，不基於臆測修改。',
-  '- edit 的 oldText 要夠精確且唯一（含足夠上下文）；要全部取代用 replaceAll。',
+  '- edit 的 oldText 要夠精確且唯一（含足夠上下文）；要全部取代用 replaceAll；同一檔多處改用 edits 陣列一次原子完成。',
+  '- 沿用既有程式碼風格、命名與慣例；用某個函式庫前先確認專案真的依賴它（看 package.json / import），不要引入未安裝的套件。',
+  '- 不加畫蛇添足的註解；只在意圖不明顯處註明「為何」，不註明「做了什麼」。',
   '- 多步任務（3 步以上）先用 todo_write 規劃並隨進度更新。',
   '- 長時間/常駐命令（dev server、watch）用 bash_bg 後台執行，再用 bash_output 看輸出。',
-  '- 一次做一件事，改動後說明你做了什麼、如何驗證。',
-  '- 破壞性操作先確認。',
+  '- 一次做一件事，改動後說明你做了什麼、如何驗證。改完程式碼盡量跑專案的 lint/typecheck 或測試確認沒壞。',
+  '- 破壞性操作先確認。除非使用者明確要求，否則不要主動 git commit。',
   '- 要提交時：先 git_diff 看變更，再用 git_commit 寫一則簡潔、說明「為何」的 commit 訊息。',
 ].join('\n');
 
@@ -86,20 +89,41 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
     },
   };
 
+  // 對單一檔內容套一次替換；回 { text } 或 { error }。供 edit 的單次/多次路徑共用。
+  const applyOneEdit = (content, { oldText, newText, replaceAll }) => {
+    if (oldText == null || newText == null) return { error: '每筆 edit 需含 oldText 與 newText' };
+    const occurrences = content.split(oldText).length - 1;
+    if (occurrences === 0) return { error: `oldText 未找到（請先 read 確認當前內容）：${JSON.stringify(oldText.slice(0, 40))}` };
+    if (occurrences > 1 && !replaceAll) return { error: `oldText 出現 ${occurrences} 次，請提供更精確、唯一的 oldText（含上下文），或設 replaceAll:true：${JSON.stringify(oldText.slice(0, 40))}` };
+    return { text: replaceAll ? content.split(oldText).join(newText) : content.replace(oldText, newText), replaced: replaceAll ? occurrences : 1 };
+  };
+
   const editTool = {
     name: 'edit', label: '編輯', mutating: true,
-    description: '把檔案中的 oldText 換成 newText。oldText 必須唯一（出現多次會失敗，請加上下文；或設 replaceAll:true 全部取代）。',
-    parameters: { type: 'object', properties: { path: { type: 'string' }, oldText: { type: 'string' }, newText: { type: 'string' }, replaceAll: { type: 'boolean' } }, required: ['path', 'oldText', 'newText'] },
-    execute: async (_id, { path, oldText, newText, replaceAll }) => {
+    description: '把檔案中的 oldText 換成 newText。oldText 必須唯一（出現多次會失敗，請加上下文；或設 replaceAll:true 全部取代）。'
+      + '同一檔要改多處：傳 edits 陣列 [{oldText,newText,replaceAll?}]，依序套用、全部成功才一次原子寫入（任一筆失敗則整批不改）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        oldText: { type: 'string' }, newText: { type: 'string' }, replaceAll: { type: 'boolean' },
+        edits: { type: 'array', description: '多處替換（同一檔）；給了它就忽略頂層 oldText/newText。每筆 {oldText,newText,replaceAll?}，依序套用。', items: { type: 'object', properties: { oldText: { type: 'string' }, newText: { type: 'string' }, replaceAll: { type: 'boolean' } }, required: ['oldText', 'newText'] } },
+      },
+      required: ['path'],
+    },
+    execute: async (_id, { path, oldText, newText, replaceAll, edits }) => {
       const p = within(path); if (!p) return escapeErr(path);
       if (!existsSync(p)) return txt({ error: '檔案不存在', path });
-      const before = readFileSync(p, 'utf8');
-      const occurrences = before.split(oldText).length - 1;
-      if (occurrences === 0) return txt({ error: 'oldText 未找到（請先 read 確認當前內容）', path });
-      if (occurrences > 1 && !replaceAll) return txt({ error: `oldText 出現 ${occurrences} 次，請提供更精確、唯一的 oldText（含上下文），或設 replaceAll:true`, path });
-      const after = replaceAll ? before.split(oldText).join(newText) : before.replace(oldText, newText);
-      writeAtomic(readFiles, p, after); // edit 已重讀當前內容再套 oldText → 只需原子落地，不做陳舊誤擋
-      return txt({ edited: path, replaced: replaceAll ? occurrences : 1 });
+      const list = Array.isArray(edits) && edits.length ? edits : [{ oldText, newText, replaceAll }];
+      let content = readFileSync(p, 'utf8');
+      let replaced = 0;
+      for (let i = 0; i < list.length; i++) {
+        const r = applyOneEdit(content, list[i]);
+        if (r.error) return txt({ error: r.error, path, ...(list.length > 1 ? { failedAt: i + 1, note: '整批未套用（原子性）' } : {}) });
+        content = r.text; replaced += r.replaced;
+      }
+      writeAtomic(readFiles, p, content); // 已重讀當前內容再套 → 只需原子落地，不做陳舊誤擋
+      return txt({ edited: path, edits: list.length, replaced });
     },
   };
 
@@ -350,7 +374,7 @@ export function createCodingPack({ cwd = process.cwd() } = {}) {
 
   return {
     name: 'coding',
-    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool, lspDefTool, lspHoverTool, lspSymbolsTool, lspRefTool, lspRenameTool, lspWsSymTool, createScreenshotTool(cwd), createFetchRenderedTool(cwd)],
+    tools: () => [readTool, lsTool, globTool, grepTool, writeTool, editTool, bashTool, ...bg.tools, createWebSearchTool(), webFetch, gitStatus, gitDiff, gitLog, gitCommit, securityReview, codeReview, lspTool, lspDefTool, lspHoverTool, lspSymbolsTool, lspRefTool, lspRenameTool, lspWsSymTool, createScreenshotTool(cwd), createFetchRenderedTool(cwd)],
     systemPrompt: withBaseRules(SYSTEM_PROMPT),
     contextFiles: ['CLAUDE.md', 'AGENTS.md', 'XITTO.md', '.xitto-code.md'],
     // mutatingTools 省略 → kernel 從工具 metadata 推導（write/edit/bash）

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { createStore, App, gutter, backspaceAt } from '../src/app/tui.js';
-import { summarize, toolBlock, previewChange } from '../src/app/tui-run.js';
+import { summarize, toolBlock, previewChange, toolDigest, toolResultBlock, toolLabel } from '../src/app/tui-run.js';
 const strip = (s) => s.replace(/\x1b\[[0-9]+m/g, '');
 
 const noopHandlers = { onSubmit() {}, onCtrlC() {}, onEscape() {}, getHistory: () => [], complete: () => null, onSelectChoice() {}, onSelectCancel() {}, onSelectAbort() {} };
@@ -86,6 +86,42 @@ test('toolBlock：⏺ 標頭(args) + ⎿ 多行 + 摺疊 +N 行 + 耗時', () =>
   // 空結果 → ✓ / ✗ 標記
   assert.match(strip(toolBlock('x', '', { content: [] }, false)), /⎿ ✓/);
   assert.match(strip(toolBlock('x', '', { content: [] }, true)), /⎿ ✗/);
+});
+
+test('toolLabel：友善工具名（對標 CC 的 ⏺ Read）', () => {
+  assert.equal(toolLabel('read'), '讀檔');
+  assert.equal(toolLabel('grep'), '搜尋');
+  assert.equal(toolLabel('unknown_tool'), 'unknown_tool'); // 未列出用原名
+});
+
+test('toolDigest：讀類工具只摘要一行、不灌內容（對標 CC）', () => {
+  // read：附行號內容 → 只顯示「讀取 N 行」，不含內容本身
+  const readRes = { content: [{ type: 'text', text: '     1\texport const X = 1;\n     2\tfunction foo() {}' }] };
+  assert.equal(toolDigest('read', readRes), '讀取 2 行');
+  // read 超出 → 附「+N 未顯示」
+  const readMore = { content: [{ type: 'text', text: '     1\ta\n     2\tb\n… 還有 98 行（用 offset=3 繼續）' }] };
+  assert.equal(toolDigest('read', readMore), '讀取 2 行（+98 未顯示）');
+  // glob：JSON → N 個檔案
+  assert.equal(toolDigest('glob', { content: [{ type: 'text', text: '{"pattern":"**/*.js","count":7,"files":[]}' }] }), '7 個檔案');
+  // ls：清單 → N 項
+  assert.equal(toolDigest('ls', { content: [{ type: 'text', text: 'a.js\nb/\nc.md' }] }), '3 項');
+  // bash / 錯誤 JSON → null（交給 toolBlock 顯示完整結果）
+  assert.equal(toolDigest('bash', { content: [{ type: 'text', text: 'some output' }] }), null);
+  assert.equal(toolDigest('read', { content: [{ type: 'text', text: '{"error":"檔案不存在"}' }] }), null);
+});
+
+test('toolResultBlock：read 走摘要一行、bash 走完整 toolBlock', () => {
+  const readRes = { content: [{ type: 'text', text: '     1\ta\n     2\tb\n     3\tc' }] };
+  const rb = strip(toolResultBlock('read', 'src/a.js', readRes, false, '0.1s'));
+  assert.match(rb, /⏺ 讀檔\(src\/a\.js\) 0\.1s/); // 友善名 + 摘要
+  assert.match(rb, /⎿ 讀取 3 行/);
+  assert.doesNotMatch(rb, /export|function/);      // 不把檔案內容灌進轉錄
+  // bash：無 digest → 走 toolBlock 顯示完整輸出
+  const bashRes = { content: [{ type: 'text', text: 'line1\nline2' }] };
+  const bb = strip(toolResultBlock('bash', 'ls', bashRes, false));
+  assert.match(bb, /⏺ bash\(ls\)/);
+  assert.match(bb, /line1/);
+  assert.match(bb, /line2/);
 });
 
 test('previewChange：核准前顯示 write/edit 要改什麼（不再盲核准）', () => {
