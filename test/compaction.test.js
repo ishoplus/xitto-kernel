@@ -1,7 +1,7 @@
 // 回合內壓縮 — 純邏輯：閾值判斷、切點、設定 clamp（摘要的 LLM 呼叫不在單測範圍）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isContextOverThreshold, findCutIndex, resolveCompactionSettings, maybeCompact } from '../src/kernel/compaction.js';
+import { isContextOverThreshold, findCutIndex, resolveCompactionSettings, maybeCompact, compactNow } from '../src/kernel/compaction.js';
 
 const msg = (role, text) => ({ role, content: [{ type: 'text', text }] });
 const big = (n) => msg('user', 'x'.repeat(n));
@@ -32,4 +32,9 @@ test('maybeCompact：未達閾值 → null（不呼叫 LLM）', async () => {
   const agent = { state: { messages: [msg('user', 'hi')] } };
   const r = await maybeCompact(agent, { contextWindow: 1000000 }, () => 'k', { enabled: true, reserveTokens: 2000, keepRecentTokens: 2000 });
   assert.equal(r, null);
+});
+
+test('compactNow：訊息太少 → nothing-to-compact（不呼叫 LLM）', async () => {
+  assert.equal((await compactNow([], { contextWindow: 1000 }, 'k')).error, 'nothing-to-compact');
+  assert.equal((await compactNow([msg('user', 'hi')], { contextWindow: 1000 }, 'k')).error, 'nothing-to-compact');
 });

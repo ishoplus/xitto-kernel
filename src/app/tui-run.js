@@ -123,16 +123,48 @@ export function previewChange(name, args) {
   return '';
 }
 
-const SLASH = { '/help': '說明', '/goal': '目標循環', '/sandbox': '沙箱', '/auto': '自動核准', '/plan': '計劃模式', '/undo': '撤銷', '/tools': '工具', '/memory': '記憶', '/sessions': '對話', '/resume': '續接', '/cost': '成本', '/clear': '清除', '/exit': '離開' };
+// 斜線指令多層聯動補全（對標 Claude Code）：L1 指令名 → L2 參數 → L3 子項。純函數,可測。
+// argsFor(cmd) 回該指令的參數選項 [{value, desc, sub?}]：value 尾隨空白＝接受後自動聯動下一層；
+// 帶 sub() 的選項再往下展一層。hasArgs（Set）：L1 判斷哪些指令要加尾隨空白，避免對每個指令都呼叫 argsFor。
+const bareVal = (o) => (typeof o === 'string' ? o : o.value).replace(/\s+$/, '');
+export function slashComplete(text, { slashMap, hasArgs, argsFor }) {
+  const m3 = text.match(/^(\/[a-z]+)\s+(\S+)\s+(\S*)$/);
+  if (m3) {
+    const opt = (argsFor(m3[1]) || []).find((o) => bareVal(o) === m3[2] && typeof o.sub === 'function');
+    if (!opt) return null;
+    const items = opt.sub().filter((o) => bareVal(o).startsWith(m3[3]));
+    return items.length ? { start: text.length - m3[3].length, items } : null;
+  }
+  const m2 = text.match(/^(\/[a-z]+)\s+(\S*)$/);
+  if (m2) {
+    const opts = argsFor(m2[1]);
+    if (!opts) return null;
+    const items = opts.filter((o) => bareVal(o).startsWith(m2[2]));
+    return items.length ? { start: text.length - m2[2].length, items } : null;
+  }
+  const sm = text.match(/^\/(\S*)$/);
+  if (sm) {
+    const items = Object.keys(slashMap).filter((c) => c.startsWith('/' + sm[1])).map((c) => ({ value: hasArgs.has(c) ? c + ' ' : c, desc: slashMap[c] }));
+    return items.length ? { start: 0, items } : null;
+  }
+  return null;
+}
 
-export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, resume = null, cwd = process.cwd() }) {
+const SLASH = { '/help': '說明', '/model': '切換模型', '/goal': '目標循環', '/plan': '計劃模式', '/compact': '壓縮上下文', '/init': '產生 CLAUDE.md', '/sandbox': '沙箱', '/auto': '自動核准', '/undo': '撤銷', '/tools': '工具', '/memory': '記憶', '/playbook': '專案手冊', '/skills': '技能', '/episodes': '情節', '/trust': '信任', '/sessions': '對話', '/resume': '續接', '/cost': '成本', '/clear': '清除', '/exit': '離開' };
+
+// /init：分析 codebase 產生 CLAUDE.md（走一般回合，用固定指令；對標 Claude Code 的 /init）。
+const INIT_PROMPT = '分析這個 codebase 並產生一份 CLAUDE.md 放在專案根目錄（若已存在則就地改進，別覆蓋掉有用內容）。'
+  + '先用 ls/glob/grep/read 探索：專案用途、技術棧、目錄結構、建置/測試/執行指令、程式碼慣例與重要架構決策。'
+  + '寫成精簡、對「未來接手的 AI agent」實用的指南——只寫專案裡實際存在、查證過的資訊，不要臆造。最後用 write 存成 CLAUDE.md。';
+
+export function runTui({ pack, model, getApiKey, resolveModel, models = [], sandbox = false, resume = null, cwd = process.cwd(), auto = false, extraTools = [], onExit = null }) {
   const store = createStore();
   let history = [];
   let sessionId;
   let currentAgent = null;
   let planMode = false;
   let sandboxOn = !!sandbox;
-  let autoApprove = false;
+  let autoApprove = !!auto;
   let pendingSelect = null;
   const sessionTok = { in: 0, out: 0 };
   const turnTok = { in: 0, out: 0 };   // 本輪 token（spinner 即時顯示 + 結束小結）
@@ -149,7 +181,7 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
   };
 
   const kernel = createKernel(pack, {
-    model, getApiKey, resolveModel,
+    model, getApiKey, resolveModel, extraTools,
     sandbox: { enabled: sandboxOn }, getSandbox: () => sandboxOn,
     getPlanMode: () => planMode, confirm: askConfirm,
   });
@@ -247,20 +279,62 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
       ink = mountTui({ store, handlers });
     }, 120);
   };
-  const doExit = () => { persist(); if (resizeTimer) clearTimeout(resizeTimer); try { process.stdout.off('resize', onResize); } catch { /* 略 */ } try { ink?.unmount(); } catch { /* 略 */ } process.exit(0); };
+  const doExit = () => { persist(); if (resizeTimer) clearTimeout(resizeTimer); try { process.stdout.off('resize', onResize); } catch { /* 略 */ } try { if (onExit) onExit(); } catch { /* 略 */ } try { ink?.unmount(); } catch { /* 略 */ } process.exit(0); };
 
   // ── 斜線指令 ──
   const slash = (input) => {
     const [cmd, arg] = input.split(/\s+/);
+    const rest = input.slice(cmd.length).trim(); // 子命令/查詢（可含空白），供 /playbook forget、/episodes <詞> 等
     switch (cmd) {
       case '/exit': case '/quit': doExit(); return true;
       case '/help': store.pushBlock(G(Object.entries(SLASH).map(([k, v]) => `  ${k}  ${v}`).join('\n') + '\n  @檔案 引用 · !命令 直接跑 · #文字 存記憶')); return true;
+      case '/model': {
+        if (!arg) {
+          const lines = (models || []).map((m) => `  ${m.id === model.id ? Gn('●') : ' '} ${m.id}${m.name && m.name !== m.id ? G('  ' + m.name) : ''}${G('  · ' + m.provider)}`);
+          store.pushBlock(G('目前：') + Gn(model.id) + '\n' + (lines.length ? lines.join('\n') : G('（providers.json 沒有其他 model）')) + '\n' + G('用 /model <id> 切換'));
+          return true;
+        }
+        const m = resolveModel ? resolveModel(arg) : null;
+        if (!m) { store.pushBlock(R(`找不到 model「${arg}」（打 /model 看清單）`)); return true; }
+        model = m; kernel.setModel(m); setStatus();
+        store.pushBlock(Gn(`✓ 已切換 model：${m.id}`) + G('（下一輪生效）'));
+        return true;
+      }
       case '/sandbox': sandboxOn = arg ? arg === 'on' : !sandboxOn; setStatus(); store.pushBlock(sandboxOn ? Y('🔒 沙箱開') : G('沙箱關')); return true;
       case '/auto': autoApprove = arg ? arg === 'on' : !autoApprove; setStatus(); store.pushBlock(autoApprove ? Y('⚡ 自動核准開') : G('自動核准關')); return true;
       case '/plan': planMode = arg ? arg === 'on' : !planMode; setStatus(); store.pushBlock(planMode ? C('📋 計劃模式開') : G('計劃模式關')); return true;
       case '/undo': { const r = kernel.undo(); store.pushBlock(r.undone ? G(`↩ 已撤銷 ${r.path}`) : Y(r.reason)); return true; }
       case '/tools': store.pushBlock(G(kernel.registry.names().join('  '))); return true;
       case '/memory': { const m = kernel.memory.list(); store.pushBlock(m.length ? G(m.map((x) => '  • ' + x).join('\n')) : G('（尚無記憶）')); return true; }
+      case '/playbook': {
+        if (rest === 'clear') { const { cleared } = kernel.playbook.clear(); store.pushBlock(G(`（已清空專案手冊，移除 ${cleared} 條）`)); return true; }
+        if (rest.startsWith('forget ')) { const t = rest.slice(7).trim(); const r = kernel.playbook.remove(t); store.pushBlock(r.removed ? G(`（已移除「${t}」）`) : Y(`找不到主題「${t}」`)); return true; }
+        const entries = kernel.playbook.list();
+        store.pushBlock(entries.length ? entries.map((e) => C(`  ## ${e.topic}`) + '\n' + G(e.note.split('\n').map((l) => '  ' + l).join('\n'))).join('\n') + G('\n  ↳ 清除：/playbook forget <主題>') : G('（尚無專案手冊；agent 摸清做法時會用 playbook_update 累積）'));
+        return true;
+      }
+      case '/skills': {
+        if (rest.startsWith('forget ')) { const n = rest.slice(7).trim(); const r = kernel.skills.remove(n); store.pushBlock(r.removed ? G(`（已移除技能「${r.removed}」）`) : Y(`找不到技能「${n}」`)); return true; }
+        if (rest === 'check') { store.pushBlock(G('複查中（重跑各技能 verify）…')); kernel.skills.check().then((res) => store.pushBlock(res.length ? res.map((r) => (r.status === 'ok' ? Gn('  ✓ ') : r.status === 'stale' ? R('  ✗ ') : G('  - ')) + r.name + G(`（${r.status}）`)).join('\n') : G('（尚無技能可複查）'))); return true; }
+        const sk = kernel.skills.list();
+        store.pushBlock(sk.length ? sk.map((s) => (s.stale ? R('  ⚠ ') : C('  • ')) + s.name + G(`：${s.desc}${s.used ? ` · 用過 ${s.used} 次` : ''}${s.stale ? ' · 已失效待修' : ''}`)).join('\n') + G('\n  ↳ 複查：/skills check · 移除：/skills forget <名>') : G('（尚無技能；agent 摸出可重複流程時會用 skill_save 結晶）'));
+        return true;
+      }
+      case '/episodes': {
+        if (rest === 'clear') { const { cleared } = kernel.episodes.clear(); store.pushBlock(G(`（已清空情節，移除 ${cleared} 筆）`)); return true; }
+        if (rest) { const hits = kernel.episodes.recall(rest, 8); store.pushBlock(hits.length ? hits.map((h) => C(`  • [${h.score}] `) + h.summary + G(`${h.outcome ? ` (${h.outcome})` : ''}${h.tags?.length ? ` [${h.tags.join(', ')}]` : ''}`)).join('\n') : G(`（沒召回到與「${rest}」相關的情節）`)); return true; }
+        const eps = kernel.episodes.list(15);
+        store.pushBlock(eps.length ? eps.map((e) => C('  • ') + e.summary + G(`${e.outcome ? ` (${e.outcome})` : ''}${e.tags?.length ? ` [${e.tags.join(', ')}]` : ''}`)).join('\n') + G(`\n  ↳ ${kernel.episodes.count()} 筆 · 試召回：/episodes <關鍵詞>`) : G('（尚無情節；完成有價值的任務時 agent 會用 episode_record 記下）'));
+        return true;
+      }
+      case '/trust': {
+        if (rest === 'clear') { kernel.permissions.clear(); store.pushBlock(G('（已清除全部信任）')); return true; }
+        if (rest.startsWith('forget ')) { const entry = rest.slice(7).trim(); store.pushBlock(kernel.permissions.forget(entry) ? G(`（已撤銷信任：${entry}）`) : Y(`找不到信任項「${entry}」`)); return true; }
+        const { tools, bash } = kernel.permissions.list();
+        if (!tools.length && !bash.length) { store.pushBlock(G('（尚無已信任項；批准工具時選「此工具全部允許」即可記住）')); return true; }
+        store.pushBlock((tools.length ? G('  工具（全部放行）：') + tools.join('、') + '\n' : '') + (bash.length ? G('  命令（簽章類）：') + bash.map((s) => `「${s}」`).join('、') : '') + G('\n  ↳ 撤銷：/trust forget <項>'));
+        return true;
+      }
       case '/cost': store.pushBlock(G(`本 session 累計：${sessionTok.in + sessionTok.out} tokens（in ${sessionTok.in} / out ${sessionTok.out}）`)); return true;
       case '/sessions': { const ss = kernel.session.list(); store.pushBlock(ss.length ? G(ss.map((s) => `  ${s.id}  [${s.count} 則]`).join('\n')) : G('（尚無對話）')); return true; }
       case '/resume': { const t = arg || kernel.session.latest()?.id; const d = t ? kernel.session.load(t) : null; if (d?.messages?.length) { history = d.messages; sessionId = d.id; store.pushBlock(G(`（已續接 ${d.id}，${d.messages.length} 則）`)); } else store.pushBlock(Y('找不到可續接的 session')); return true; }
@@ -289,19 +363,45 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
     store.pushBlock('\n' + input.split('\n').map((l) => `\x1b[34m▌ \x1b[1m${l}\x1b[22m\x1b[39m`).join('\n'));
 
     if (input.startsWith('/goal ') || input === '/goal') { return runGoal(input.slice(5).trim()); }
+    if (input === '/compact') { return runCompact(); }
+    if (input === '/init') { return runAgentTurn(INIT_PROMPT); }
     if (input.startsWith('/')) { slash(input); return; }
     if (input.startsWith('!')) { const r = (() => { try { return execSync(input.slice(1), { cwd, encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { return (e.stdout || '') + (e.stderr || '') || e.message; } })(); store.pushBlock(G('$ ' + input.slice(1)) + '\n' + (r.trim() || '(no output)')); return; }
     if (input.startsWith('#')) { const r = kernel.memory.save(input.slice(1).trim()); store.pushBlock(r.saved ? G('✎ 已記住：' + r.saved) : G('（記憶已存在或空）')); return; }
 
+    return runAgentTurn(input);
+  }
+
+  // 跑一般 agent 回合（一般輸入與 /init 共用）。planMode 前綴、@檔案展開、保底提示、token 小結。
+  async function runAgentTurn(userText) {
     const startAt = beginTurn();
     try {
-      const text = expandMentions(planMode ? `[計劃模式：只規劃、列步驟與會改動的檔案，不要實際寫檔或執行命令]\n\n${input}` : input);
+      const text = expandMentions(planMode ? `[計劃模式：只規劃、列步驟與會改動的檔案，不要實際寫檔或執行命令]\n\n${userText}` : userText);
       const r = await kernel.runTurn(text, { history, onEvent, onAgent: (a) => { currentAgent = a; } });
       store.finalizeLive(); history = r.messages; persist();
       const note = turnNotice(r.stopReason, !!r.text); // 保底：截斷/空回應也給一句話，不留半截或空白
       if (note) store.pushBlock(Y(note));
     } catch (e) { store.finalizeLive(); store.pushBlock(R('錯誤：' + e.message)); }
     finally { finishTurn(startAt); }
+  }
+
+  // /compact：手動壓縮歷史（對標 Claude Code）。不看閾值，摘要較舊對話、保留最近數輪。
+  async function runCompact() {
+    if (store.get().mode === 'busy') return;
+    if (history.length < 2) { store.pushBlock(G('（沒有足夠的歷史可壓縮）')); return; }
+    store.setMode('busy'); store.set({ busyAt: Date.now(), turnTok: 0 });
+    store.pushBlock(G('  ⊙ 壓縮上下文中…'));
+    try {
+      const r = await kernel.compact(history);
+      if (!r || r.error || !r.messages) { store.pushBlock(Y(r?.error === 'nothing-to-compact' ? '（沒有可壓縮的較舊對話）' : '壓縮失敗（稍後再試）')); }
+      else {
+        history = r.messages; persist();
+        const i = r.info;
+        store.pushBlock(G(`  ⊙ 已壓縮：${i.tokensBefore}→${i.tokensAfter} tokens（摘要 ${i.summarized} 則、保留 ${i.kept} 則）`));
+        store.set({ ctx: { used: i.tokensAfter, total: model.contextWindow || 0 } });
+      }
+    } catch (e) { store.pushBlock(R('壓縮錯誤：' + e.message)); }
+    finally { store.set({ busyAt: null }); store.setMode('idle'); refreshGit(); }
   }
 
   async function runGoal(goal) {
@@ -322,9 +422,26 @@ export function runTui({ pack, model, getApiKey, resolveModel, sandbox = false, 
   }
 
   // ── 補全（斜線 + @檔案）──
+  // 多層聯動：指令 → 參數 → 子項（如 /skills → forget → <技能名>）。
+  // 帶 sub 的選項 value 以空白結尾 → 接受後游標落在其後，自動彈出下一層。
+  const HAS_ARGS = new Set(['/model', '/sandbox', '/auto', '/plan', '/resume', '/skills', '/playbook', '/trust', '/episodes']);
+  const cmdArgs = (cmd) => {
+    switch (cmd) {
+      case '/model': return (models || []).map((m) => ({ value: m.id, desc: m.provider }));
+      case '/sandbox': case '/auto': case '/plan': return [{ value: 'on' }, { value: 'off' }];
+      case '/resume': return kernel.session.list().map((s) => ({ value: s.id, desc: `${s.count} 則` }));
+      case '/episodes': return [{ value: 'clear', desc: '清空' }];
+      case '/skills': return [{ value: 'check', desc: '複查失效' }, { value: 'forget ', desc: '移除 <技能名>', sub: () => kernel.skills.list().map((s) => ({ value: s.name, desc: s.desc })) }];
+      case '/playbook': return [{ value: 'clear', desc: '清空' }, { value: 'forget ', desc: '移除 <主題>', sub: () => kernel.playbook.list().map((e) => ({ value: e.topic })) }];
+      case '/trust': return [{ value: 'clear', desc: '清除全部' }, { value: 'forget ', desc: '撤銷 <項>', sub: () => { const { tools, bash } = kernel.permissions.list(); return [...tools, ...bash].map((v) => ({ value: String(v) })); } }];
+      default: return null;
+    }
+  };
   const complete = (text) => {
-    const sm = text.match(/^\/(\S*)$/);
-    if (sm) { const items = Object.keys(SLASH).filter((c) => c.startsWith('/' + sm[1])).map((c) => ({ value: c, desc: SLASH[c] })); return items.length ? { start: 0, items } : null; }
+    // 斜線指令三層聯動（純函數）
+    const sc = slashComplete(text, { slashMap: SLASH, hasArgs: HAS_ARGS, argsFor: cmdArgs });
+    if (sc) return sc;
+    // @檔案路徑補全
     const am = text.match(/(?:^|\s)@(\S*)$/);
     if (am) {
       const frag = am[1]; const at = text.length - frag.length - 1; const slashI = frag.lastIndexOf('/');

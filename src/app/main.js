@@ -65,14 +65,14 @@ export async function main(argv = process.argv.slice(2)) {
   const make = PACKS[opts.pack];
   if (!make) { console.error(`未知 pack「${opts.pack}」。可用：${Object.keys(PACKS).join(', ')}`); process.exit(1); }
 
-  let model, getApiKey, resolveModel;
-  try { ({ model, getApiKey, resolveModel } = loadModel(opts.model)); }
+  let model, getApiKey, resolveModel, models;
+  try { ({ model, getApiKey, resolveModel, models } = loadModel(opts.model)); }
   catch (err) {
     // 沒設定 + 真實終端：直接帶進設定導引，完成後續跑；非 TTY 才只給提示
     if (err.noConfig && process.stdin.isTTY) {
       console.log(cyan('首次使用，沒找到 providers.json —— 進入設定導引。') + gray('（按 Ctrl+C 取消）'));
       await runInit([]);
-      try { ({ model, getApiKey, resolveModel } = loadModel(opts.model)); }
+      try { ({ model, getApiKey, resolveModel, models } = loadModel(opts.model)); }
       catch (err2) {
         console.error(red(err2.message));
         console.error(gray(err2.noConfig ? '（未完成設定，已取消）' : '（設定好像缺東西，可編輯該檔或重跑 `xitto-kernel init`）'));
@@ -127,8 +127,14 @@ export async function main(argv = process.argv.slice(2)) {
     process.exit(res.done ? 0 : 1);
   }
 
-  if (opts.tui && process.stdin.isTTY) {
-    runTui({ pack: make({ cwd }), model, getApiKey, resolveModel, sandbox: opts.sandbox, resume: opts.resume, cwd });
+  // 預設：真實終端跑完整 Ink TUI（邊打即時補全、常駐狀態列、工具卡、彩色 diff…對標 Claude Code）。
+  // --plain / --no-tui（或非 TTY）退回 readline 簡易 CLI。--tui 仍可顯式指定（與預設相同）。
+  if (!opts.plain && process.stdin.isTTY) {
+    runTui({
+      pack: make({ cwd }), model, getApiKey, resolveModel, models,
+      sandbox: opts.sandbox, resume: opts.resume, cwd,
+      auto: opts.yes, extraTools: mcp.tools, onExit: mcp.close,
+    });
     return;
   }
   if (opts.tui) console.error(gray('（--tui 需要真實終端，退回一般 CLI）'));
@@ -275,6 +281,7 @@ function parse(argv) {
     else if (a === '--sandbox') o.sandbox = true;
     else if (a === '--yes' || a === '-y') o.yes = true;
     else if (a === '--tui') o.tui = true;
+    else if (a === '--plain' || a === '--no-tui') o.plain = true;
     else if (a === '--goal') o.goal = argv[++i];
     else if (a === '--resume') { const nxt = argv[i + 1]; if (nxt && !nxt.startsWith('--')) { o.resume = nxt; i++; } else o.resume = true; }
   }
@@ -298,7 +305,8 @@ function printHelp() {
     '  --goal "..."    給目標，agent 自主反覆做到完成（建議搭配 --pack general）',
     '  --model <id>    指定 model（預設用 providers.json 的 defaultModel）',
     '  --sandbox       啟動即開啟沙箱（macOS=Seatbelt 真隔離）',
-    '  --tui           完整 Ink TUI（持久狀態列、串流轉錄、Esc 中斷；需真實終端）',
+    '  --tui           完整 Ink TUI（預設就是；持久狀態列、即時補全、串流轉錄、Esc 中斷；需真實終端）',
+    '  --plain         退回 readline 簡易 CLI（不啟用 Ink TUI；別名 --no-tui）',
     '  --resume [id]   接續上次 session（不給 id 接最近一次）',
     '  --yes, -y       自動核准 mutating 工具（headless / 自主循環常用）',
     '  --help          顯示說明',

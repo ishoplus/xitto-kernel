@@ -22,7 +22,7 @@ import { createSpawnTool, createMapTool } from './subagent.js';
 import { createAgents } from './agents.js';
 import { createSkills, globalSkillsDir } from './skills.js';
 import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
-import { maybeCompact, resolveCompactionSettings } from './compaction.js';
+import { maybeCompact, compactNow, resolveCompactionSettings } from './compaction.js';
 import { checkGoal, normalizeFeedback } from './goal-loop.js';
 import { newSessionId, saveSession, loadSession, listSessions, latestSession } from './session.js';
 import { defaultStreamFn } from './provider.js';
@@ -449,6 +449,17 @@ export function createKernel(pack, config = {}) {
     // 情節（情節層 + 相關性召回）：記錄 / 召回 / 列出 / 清空；path 為落地檔。
     episodes: { record: episodes.record, recall: episodes.recall, list: episodes.list, clear: episodes.clear, count: episodes.count, path: join(dataDir, 'episodes.jsonl') },
     todo: { get: todo.get },
+    /** 目前使用的 model（供 UI 顯示 / 執行期切換前查詢）。 */
+    getModel: () => config.model,
+    /** 執行期切換 model：下一輪 runTurn 生效（runTurn 每次讀 config.model）。回新 model。 */
+    setModel: (m) => { if (m) config.model = m; return config.model; },
+    /** 手動壓縮歷史（/compact）：不看閾值，回 { messages, info } / { error }。不改動內部狀態，由呼叫端替換 history。 */
+    compact: async (history) => {
+      if (!config.model || !config.getApiKey) return { error: 'no-model' };
+      const s = resolveCompactionSettings(config.compaction, config.model.contextWindow);
+      let apiKey; try { apiKey = await config.getApiKey(config.model.provider); } catch { return { error: true }; }
+      return compactNow(history || [], config.model, apiKey, s);
+    },
     /** 撤銷上一次檔案改動（write/edit）：還原內容，新建的檔則刪除。 */
     undo: () => {
       const snap = undoStack.pop();

@@ -52,6 +52,26 @@ export async function maybeCompact(agent, model, apiKey, settings = DEFAULT_COMP
   return { tokensBefore: tokens, tokensAfter: totalTokens(agent.state.messages), summarized: older.length, kept: recent.length };
 }
 
+// 手動壓縮（/compact）：不看閾值，一律把較舊對話摘要、保留最近數輪。
+// 與 maybeCompact 不同——不就地改 agent，而是回傳新的 messages 陣列（供 TUI 替換 history）。
+// 回 { messages, info } / { error }。對話還沒長到超過 keepRecent 時，退為「保留最後一個 user 輪次」。
+export async function compactNow(messages, model, apiKey, settings = DEFAULT_COMPACTION) {
+  const list = messages || [];
+  if (list.length < 2) return { error: 'nothing-to-compact' };
+  const tokens = totalTokens(list);
+  let cut = findCutIndex(list, settings.keepRecentTokens || DEFAULT_COMPACTION.keepRecentTokens);
+  if (cut <= 0) { for (let i = list.length - 1; i > 0; i--) { if (list[i].role === 'user') { cut = i; break; } } }
+  if (cut <= 0) return { error: 'nothing-to-compact' };
+  const older = list.slice(0, cut);
+  const recent = list.slice(cut);
+  let summary;
+  try { summary = await summarize(older, model, settings.reserveTokens, apiKey); } catch { return { error: true }; }
+  if (!summary) return { error: true };
+  const summaryMsg = { role: 'user', content: [{ type: 'text', text: `# 先前對話摘要（已壓縮）\n${summary}` }], timestamp: Date.now() };
+  const out = [summaryMsg, ...recent];
+  return { messages: out, info: { tokensBefore: tokens, tokensAfter: totalTokens(out), summarized: older.length, kept: recent.length } };
+}
+
 // 正規化設定 + 安全 clamp（reserve+keepRecent 不逼近視窗，否則永遠切不動）
 export function resolveCompactionSettings(override = {}, contextWindow) {
   const s = { ...DEFAULT_COMPACTION, ...(override || {}) };

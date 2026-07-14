@@ -17,6 +17,15 @@ test('coding pack：mutatingTools 從工具 metadata 推導', () => {
   assert.ok(k.registry.has('memory_save') && k.registry.has('memory_list'));
 });
 
+test('kernel：setModel/getModel 執行期切換 + compact 空歷史錯誤', async () => {
+  const k = createKernel(createCodingPack(), { model: { id: 'm1', provider: 'p', contextWindow: 1000 }, getApiKey: async () => 'k' });
+  assert.equal(k.getModel().id, 'm1');
+  assert.equal(k.setModel({ id: 'm2', provider: 'p', contextWindow: 2000 }).id, 'm2');
+  assert.equal(k.getModel().id, 'm2', 'setModel 後 getModel 反映新 model');
+  // compact 歷史太少 → 錯誤，不呼叫 LLM
+  assert.equal((await k.compact([])).error, 'nothing-to-compact');
+});
+
 test('coding pack：read-before-edit 真實生效（守衛 + 工具共享狀態）', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'k-coding-'));
   try {

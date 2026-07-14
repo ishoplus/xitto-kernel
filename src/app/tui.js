@@ -227,7 +227,10 @@ function Input({ onSubmit, onCtrlC, onEscape, getHistory, complete, placeholder,
     const res = complete ? complete(v.slice(0, cur)) : null;
     if (!res || !res.items.length) { setMenu(null); return; }
     const token = v.slice(res.start, cur);
-    if (res.items.length === 1 && res.items[0] === token) { setMenu(null); return; }
+    // 唯一且已完全匹配（含物件選項 {value}、尾隨空白的聯動項）→ 收選單，讓 Enter 直接送出而非再接受一次
+    const only = res.items[0];
+    const onlyVal = (typeof only === 'string' ? only : only.value).replace(/\s+$/, '');
+    if (res.items.length === 1 && onlyVal === token) { setMenu(null); return; }
     setMenu({ items: res.items, index: 0, start: res.start });
   };
   const put = (v, c) => { const cc = c == null ? v.length : c; setValue(v); setCursor(cc); };

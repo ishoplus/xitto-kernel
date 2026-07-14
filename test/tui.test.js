@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { createStore, App, gutter, backspaceAt } from '../src/app/tui.js';
-import { summarize, toolBlock, previewChange, toolDigest, toolResultBlock, toolLabel } from '../src/app/tui-run.js';
+import { summarize, toolBlock, previewChange, toolDigest, toolResultBlock, toolLabel, slashComplete } from '../src/app/tui-run.js';
 const strip = (s) => s.replace(/\x1b\[[0-9]+m/g, '');
 
 const noopHandlers = { onSubmit() {}, onCtrlC() {}, onEscape() {}, getHistory: () => [], complete: () => null, onSelectChoice() {}, onSelectCancel() {}, onSelectAbort() {} };
@@ -86,6 +86,31 @@ test('toolBlock：⏺ 標頭(args) + ⎿ 多行 + 摺疊 +N 行 + 耗時', () =>
   // 空結果 → ✓ / ✗ 標記
   assert.match(strip(toolBlock('x', '', { content: [] }, false)), /⎿ ✓/);
   assert.match(strip(toolBlock('x', '', { content: [] }, true)), /⎿ ✗/);
+});
+
+test('slashComplete：斜線指令三層聯動（指令→參數→子項）', () => {
+  const slashMap = { '/help': '說明', '/model': '切換模型', '/skills': '技能' };
+  const hasArgs = new Set(['/model', '/skills']);
+  const argsFor = (cmd) => cmd === '/model' ? [{ value: 'm1', desc: 'p' }, { value: 'm2', desc: 'q' }]
+    : cmd === '/skills' ? [{ value: 'check' }, { value: 'forget ', sub: () => [{ value: 'alpha' }, { value: 'beta' }] }]
+      : null;
+  const sc = (t) => slashComplete(t, { slashMap, hasArgs, argsFor });
+  // L1：/ → 全部指令，有參數者 value 尾隨空白（接受後聯動下一層）
+  assert.deepEqual(sc('/').items.map((i) => i.value), ['/help', '/model ', '/skills ']);
+  assert.deepEqual(sc('/mo').items.map((i) => i.value), ['/model ']); // 前綴過濾
+  // L2：/model → 模型清單；過濾
+  assert.deepEqual(sc('/model ').items.map((i) => i.value), ['m1', 'm2']);
+  assert.deepEqual(sc('/model m2').items.map((i) => i.value), ['m2']);
+  assert.equal(sc('/model m').start, '/model '.length); // start 落在參數起點
+  // L2：/skills → check/forget（forget 尾隨空白→聯動 L3）
+  assert.deepEqual(sc('/skills ').items.map((i) => i.value), ['check', 'forget ']);
+  // L3：/skills forget → 子項清單；過濾；start 正確
+  assert.deepEqual(sc('/skills forget ').items.map((i) => i.value), ['alpha', 'beta']);
+  assert.deepEqual(sc('/skills forget be').items.map((i) => i.value), ['beta']);
+  assert.equal(sc('/skills forget be').start, '/skills forget '.length);
+  // 無參數指令的 L2、非聯動子項的 L3 → null
+  assert.equal(sc('/help '), null);
+  assert.equal(sc('/skills check x'), null); // check 無 sub
 });
 
 test('toolLabel：友善工具名（對標 CC 的 ⏺ Read）', () => {
