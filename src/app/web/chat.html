@@ -299,6 +299,13 @@ body {
 .sk-btn.danger { color: var(--danger); }
 .sk-btn.danger:hover { border-color: var(--danger); }
 .sk-body { margin: 8px 0 0; padding: 8px 10px; background: var(--code); border: 1px solid var(--line); border-radius: var(--r-sm); font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow: auto; }
+/* 技能市集/插件面板（複用 sk-* 樣式，加入來源輸入列與插件小列） */
+.mkt-add { display: flex; gap: 6px; margin-bottom: var(--sp-3); }
+.mkt-inp { font: inherit; font-size: 12.5px; padding: 4px 8px; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-sm); color: inherit; min-width: 0; }
+.mkt-inp.grow { flex: 1; }
+.mkt-plugins { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.mkt-plugin { display: flex; align-items: center; gap: 6px; font-size: 12px; color: inherit; padding-left: 4px; }
+.mkt-plugin.dim { color: var(--dim); }
 
 /* 檔案列表 */
 .file-section {
@@ -1188,7 +1195,7 @@ body {
     </section>
     
     <div class="side-foot">
-      📋 <a href="/" data-i18n="foot.tasks">任務台</a> · <button class="foot-link" type="button" onclick="openSkills()" data-i18n-title="foot.skillsTip" title="查看/管理此工作區的技能" data-i18n="foot.skills">🧠 技能</button>
+      📋 <a href="/" data-i18n="foot.tasks">任務台</a> · <button class="foot-link" type="button" onclick="openSkills()" data-i18n-title="foot.skillsTip" title="查看/管理此工作區的技能" data-i18n="foot.skills">🧠 技能</button> · <button class="foot-link" type="button" onclick="openMarket()" data-i18n-title="foot.marketTip" title="技能市集/插件（加入市集、安裝插件擴充技能）" data-i18n="foot.market">🧩 市集</button>
       <span class="app-ver" title="xitto-kernel 版本">v__VERSION__</span>
     </div>
   </aside>
@@ -1293,6 +1300,24 @@ body {
     <div class="fs-bar">
       <span class="spacer" aria-hidden="true"></span>
       <button class="ghost" onclick="closeSkills()" data-i18n="skills.close">關閉</button>
+    </div>
+  </div>
+</div>
+
+<!-- 技能市集/插件：加入市集（git/本地）、安裝插件擴充技能。管理限本地模式。 -->
+<div id="mkt-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="mkt-modal-title" onclick="if(event.target===this)closeMarket()">
+  <div class="modal-box">
+    <div class="modal-title" id="mkt-modal-title" data-i18n="market.manage">🧩 技能市集</div>
+    <div class="sk-sub" id="mkt-sub"></div>
+    <div class="mkt-add" id="mkt-add-row">
+      <input id="mkt-name" class="mkt-inp" data-i18n-ph="market.namePh" placeholder="市集名" aria-label="市集名" />
+      <input id="mkt-source" class="mkt-inp grow" data-i18n-ph="market.sourcePh" placeholder="git URL 或本地路徑" aria-label="來源" />
+      <button class="sk-btn" type="button" onclick="mktAdd()" data-i18n="market.add">加入</button>
+    </div>
+    <div class="sk-list" id="mkt-list" aria-live="polite"></div>
+    <div class="fs-bar">
+      <span class="spacer" aria-hidden="true"></span>
+      <button class="ghost" onclick="closeMarket()" data-i18n="skills.close">關閉</button>
     </div>
   </div>
 </div>
@@ -1452,14 +1477,19 @@ async function loadSkills() {
   if (!skills.length) { list.innerHTML = '<div class="sk-empty">' + t("skills.empty", "這個工作區還沒有技能。<br>agent 摸出可重複流程時，會用 skill_save 結晶成技能，之後即可複用。") + '</div>'; return; }
   list.innerHTML = skills.map((s, i) => {
     const sid = "skb-" + i;
+    // 插件技能（scope=plugin）來自市集、唯讀：不給查看/刪除（管理走「市集」面板），標「插件」+ 來源。
+    const isPlugin = s.scope === "plugin";
+    const acts = isPlugin ? '<span class="sk-pack">' + esc(s.source || s.pack || "") + "</span>"
+      : '<span class="sk-pack">' + esc(s.pack || "") + '</span><span class="spacer"></span>' +
+        '<button class="sk-btn" type="button" onclick="skillView(\'' + esc(s.pack) + "','" + esc(s.name) + "','" + sid + '\')">' + t("skills.view", "查看") + '</button>' +
+        '<button class="sk-btn danger" type="button" onclick="skillDel(\'' + esc(s.pack) + "','" + esc(s.name) + '\')">' + t("skills.del", "刪除") + '</button>';
     return '<div class="sk-item"><div class="sk-item-h"><span class="sk-name">⚡ ' + esc(s.name) + "</span>" +
+      (isPlugin ? '<span class="sk-tag">' + t("skills.plugin", "插件") + "</span>" : "") +
       (s.used ? '<span class="sk-tag">' + t("skills.used", "用過 %n 次").replace("%n", s.used) + "</span>" : "") +
       (s.stale ? '<span class="sk-tag warn">' + t("skills.stale", "⚠ 待修") + "</span>" : "") +
-      '<span class="sk-pack">' + esc(s.pack || "") + '</span><span class="spacer"></span>' +
-      '<button class="sk-btn" type="button" onclick="skillView(\'' + esc(s.pack) + "','" + esc(s.name) + "','" + sid + '\')">' + t("skills.view", "查看") + '</button>' +
-      '<button class="sk-btn danger" type="button" onclick="skillDel(\'' + esc(s.pack) + "','" + esc(s.name) + '\')">' + t("skills.del", "刪除") + '</button></div>' +
+      (isPlugin ? '<span class="spacer"></span>' : "") + acts + "</div>" +
       (s.desc ? '<div class="sk-desc">' + esc(s.desc) + "</div>" : "") +
-      '<pre class="sk-body" id="' + sid + '" hidden></pre></div>';
+      (isPlugin ? "" : '<pre class="sk-body" id="' + sid + '" hidden></pre>') + "</div>";
   }).join("");
 }
 async function skillView(pack, name, sid) {
@@ -1475,6 +1505,61 @@ async function skillDel(pack, name) {
   const r = await api("/v1/skills/remove", { method: "POST", body: JSON.stringify({ ws: curSpace, pack, name }) }).then((x) => x.json()).catch(() => ({ error: "連線失敗" }));
   if (r && r.ok) loadSkills(); else alert("刪除失敗：" + ((r && r.error) || "未知錯誤"));
 }
+
+/* ── 技能市集/插件（對標 CC plugin marketplace）：加入市集、安裝插件擴充技能 ────────── */
+function openMarket() { const m = $("#mkt-modal"); if (m) { m.hidden = false; loadMarket(); } }
+function closeMarket() { const m = $("#mkt-modal"); if (m) m.hidden = true; }
+const mktLocal = () => !!(window.__XITTO__ && window.__XITTO__.local); // 管理端點限本地模式
+async function loadMarket() {
+  const list = $("#mkt-list"), sub = $("#mkt-sub"), addRow = $("#mkt-add-row");
+  if (!list) return;
+  if (addRow) addRow.style.display = mktLocal() ? "" : "none"; // 託管模式：隱藏加入列，僅檢視
+  list.innerHTML = t("market.loading", "載入中…");
+  const r = await api("/v1/marketplace").then((x) => x.json()).catch(() => null);
+  const ms = (r && r.marketplaces) || [];
+  if (sub) sub.textContent = mktLocal()
+    ? t("market.sub", "共 %n 個市集").replace("%n", ms.length)
+    : t("market.localOnly", "管理限本地模式；此處僅供檢視");
+  if (!ms.length) { list.innerHTML = '<div class="sk-empty">' + t("market.empty", "尚無市集。加入一個 git 或本地市集，安裝其插件即可擴充技能。") + "</div>"; return; }
+  list.innerHTML = ms.map((m) => {
+    const nm = esc(m.name);
+    const head = '<div class="sk-item-h"><span class="sk-name">📦 ' + nm + "</span>" +
+      '<span class="sk-tag">' + (m.git ? "git" : "local") + "</span>" +
+      (m.enabled ? "" : '<span class="sk-tag warn">' + t("market.disabled", "停用") + "</span>") +
+      (m.present ? "" : '<span class="sk-tag warn">' + t("market.missing", "未取得") + "</span>") +
+      '<span class="sk-pack">' + esc(m.source) + "</span><span class=\"spacer\"></span>" +
+      (mktLocal()
+        ? '<button class="sk-btn" type="button" onclick="mktUpdate(\'' + nm + '\')">' + t("market.update", "更新") + "</button>" +
+          '<button class="sk-btn danger" type="button" onclick="mktRemove(\'' + nm + '\')">' + t("market.remove", "移除") + "</button>"
+        : "") + "</div>";
+    const plugins = (m.plugins || []).map((p) => {
+      const ref = esc(p.name) + "@" + nm;
+      const btn = !mktLocal() ? "" : p.installed
+        ? '<button class="sk-btn danger" type="button" onclick="mktUninstall(\'' + ref + '\')">' + t("market.uninstall", "移除插件") + "</button>"
+        : '<button class="sk-btn" type="button" onclick="mktInstall(\'' + ref + '\')">' + t("market.install", "安裝") + "</button>";
+      return '<div class="mkt-plugin">' + (p.installed ? "✓ " : "○ ") + esc(p.name) +
+        (p.installed ? ' <span class="sk-tag">' + t("market.installed", "已安裝") + "</span>" : "") +
+        '<span class="spacer"></span>' + btn + "</div>";
+    }).join("") || '<div class="mkt-plugin dim">' + t("market.noPlugins", "（無插件）") + "</div>";
+    return '<div class="sk-item">' + head + '<div class="mkt-plugins">' + plugins + "</div></div>";
+  }).join("");
+}
+async function mktPost(action, body) {
+  const r = await api("/v1/marketplace/" + action, { method: "POST", body: JSON.stringify(body || {}) }).then((x) => x.json()).catch(() => ({ error: t("market.netErr", "連線失敗") }));
+  if (!r || r.error) { alert(t("market.failed", "操作失敗：") + ((r && r.error) || "?")); return null; }
+  loadMarket();
+  return r;
+}
+async function mktAdd() {
+  const name = ($("#mkt-name").value || "").trim(), source = ($("#mkt-source").value || "").trim();
+  if (!name || !source) { alert(t("market.needBoth", "請填市集名與來源")); return; }
+  const r = await mktPost("add", { name, source });
+  if (r) { $("#mkt-name").value = ""; $("#mkt-source").value = ""; }
+}
+function mktInstall(ref) { mktPost("install", { plugin: ref }); }
+function mktUninstall(ref) { mktPost("uninstall", { plugin: ref }); }
+function mktUpdate(name) { mktPost("update", { name }); }
+function mktRemove(name) { if (confirm(t("market.confirmRemove", "移除市集「%n」？其插件一併下架。").replace("%n", name))) mktPost("remove", { name }); }
 
 /* ── 對話持久化（localStorage）──────────────────────────── */
 const chatsKey = () => "xk_chats";

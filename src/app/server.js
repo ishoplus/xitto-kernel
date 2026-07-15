@@ -16,6 +16,7 @@ import { resolveCompactionSettings } from '../kernel/compaction.js';
 import { createMemory } from '../kernel/memory.js';
 import { createEpisodes } from '../kernel/episodes.js';
 import { createSkills, globalSkillsDir } from '../kernel/skills.js';
+import { createMarketplaces } from '../kernel/marketplace.js';
 import { createPlaybook } from '../kernel/playbook.js';
 import { fileAllowStore } from '../kernel/security/allow-store.js';
 import { loadModel, buildModel, providersConfigPath, loadProvidersConfig } from './providers.js';
@@ -198,6 +199,11 @@ export function readWorkspaceExperience(wsDir) {
     try { const t = fileAllowStore(join(d, 'allow.json')).list(); t.tools.forEach((x) => trustTools.add(x)); t.bash.forEach((x) => trustBash.add(x)); if (t.tools.length || t.bash.length) had = true; } catch { /* 略 */ }
     if (had) out.packs.push(pack);
   }
+  // 已安裝插件（市集）的技能：跨工作區、非 per-pack，統一併入一次（標來源，scope=plugin 供前端隱藏「刪除」）。
+  try {
+    const dirs = createMarketplaces().pluginSkillDirs();
+    if (dirs.length) for (const s of createSkills(join(root, '__plugins__'), { pluginDirs: dirs }).list()) out.skills.push({ ...s, pack: s.source || 'plugin' });
+  } catch { /* 略 */ }
   out.episodes.sort((a, b) => _tsNum(b.ts) - _tsNum(a.ts));
   out.episodes = out.episodes.slice(0, 30);
   out.trust = { tools: [...trustTools], bash: [...trustBash] };
@@ -2083,6 +2089,32 @@ export function createServerApp({ model, getApiKey, resolveModel, models = [], t
       const r = createSkills(dir, { globalDir: globalSkillsDir(body.pack) }).remove(body.name);
       if (r.error) return json(res, 404, r);
       log({ action: 'skill-remove', pack: body.pack, name: r.removed });
+      return json(res, 200, { ok: true, ...r });
+    }
+
+    // 技能市集/插件（對標 CC plugin marketplace）：全域註冊表（~/.xitto-code），跨工作區/使用者共用。
+    //   list 唯讀（authed）；add/remove/update/install/uninstall 會動全域狀態或 clone 到主機 → 限本地模式 + authed。
+    if (req.method === 'GET' && path === '/v1/marketplace') {
+      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      try { return json(res, 200, { marketplaces: createMarketplaces().list() }); }
+      catch (e) { return json(res, 200, { marketplaces: [], error: e.message }); }
+    }
+    if (req.method === 'POST' && path.startsWith('/v1/marketplace/')) {
+      if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+      if (!local) return json(res, 403, { error: '技能市集僅本地模式可管理（會 clone 到主機並影響所有工作區）' });
+      const action = path.slice('/v1/marketplace/'.length);
+      const body = await readBody(req);
+      const m = createMarketplaces();
+      let r;
+      if (action === 'add') r = m.add(body.name, body.source);
+      else if (action === 'remove') r = m.remove(body.name);
+      else if (action === 'update') r = { results: m.update(body.name) };
+      else if (action === 'install') r = m.install(body.plugin);
+      else if (action === 'uninstall') r = m.uninstall(body.plugin);
+      else if (action === 'enable') r = m.setEnabled(body.name, body.enabled !== false);
+      else return json(res, 404, { error: `未知動作「${action}」` });
+      if (r && r.error) return json(res, 400, r);
+      log({ action: `marketplace-${action}`, ...body });
       return json(res, 200, { ok: true, ...r });
     }
 

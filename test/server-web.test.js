@@ -411,3 +411,41 @@ test('GET / 服務許願台網頁，token 注入、公開可載入（免 auth）
     assert.equal(un.status, 401);
   } finally { await new Promise((r) => app.close(r)); }
 });
+
+test('技能市集端點：list(authed) / add·install(local) / experience 併入插件技能 / 託管禁改', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'xk-mkt-'));
+  const prevEnv = process.env.XITTO_SKILLS_DIR;
+  process.env.XITTO_SKILLS_DIR = join(root, 'skills-root'); // 隔離：市集註冊表寫到 temp，不碰真實 ~/.xitto-code
+  // 本地市集：demo/skills/hello.md
+  const mp = join(root, 'market');
+  mkdirSync(join(mp, 'demo', 'skills'), { recursive: true });
+  writeFileSync(join(mp, 'demo', 'skills', 'hello.md'), '---\ndescription: 插件打招呼\n---\n# 步驟\n說 hi');
+  const local = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', local: true, baseDir: join(root, '.srv') });
+  const hosted = createServerApp({ model: { id: 'm', provider: 'p' }, getApiKey: () => 'k', token: 't', local: false, baseDir: join(root, '.srv2') });
+  await new Promise((r) => local.listen(0, r)); await new Promise((r) => hosted.listen(0, r));
+  const U = (s, p) => `http://localhost:${s.address().port}${p}`;
+  const H = { authorization: 'Bearer t', 'content-type': 'application/json' };
+  try {
+    // list 需 token
+    assert.equal((await fetch(U(local, '/v1/marketplace'))).status, 401);
+    assert.deepEqual((await fetch(U(local, '/v1/marketplace'), { headers: H }).then((x) => x.json())).marketplaces, []);
+    // add（本地）→ 發現 demo
+    const add = await fetch(U(local, '/v1/marketplace/add'), { method: 'POST', headers: H, body: JSON.stringify({ name: 'mk', source: mp }) }).then((x) => x.json());
+    assert.equal(add.added, 'mk');
+    assert.deepEqual(add.plugins, ['demo']);
+    // install → 技能併入
+    const inst = await fetch(U(local, '/v1/marketplace/install'), { method: 'POST', headers: H, body: JSON.stringify({ plugin: 'demo' }) }).then((x) => x.json());
+    assert.equal(inst.installed, 'demo@mk');
+    // experience 面板現在看得到插件技能（scope=plugin + source）
+    const exp = await fetch(U(local, '/v1/workspaces/experience?ws=default'), { headers: H }).then((x) => x.json());
+    const hello = exp.skills.find((s) => s.name === 'hello');
+    assert.ok(hello && hello.scope === 'plugin' && hello.source === 'mk/demo', '插件技能應併入知識面板並標來源');
+    // 託管模式：改市集被擋（403），但 list 可讀
+    assert.equal((await fetch(U(hosted, '/v1/marketplace/add'), { method: 'POST', headers: H, body: JSON.stringify({ name: 'x', source: mp }) })).status, 403);
+    assert.equal((await fetch(U(hosted, '/v1/marketplace'), { headers: H })).status, 200);
+  } finally {
+    await new Promise((r) => local.close(r)); await new Promise((r) => hosted.close(r));
+    if (prevEnv === undefined) delete process.env.XITTO_SKILLS_DIR; else process.env.XITTO_SKILLS_DIR = prevEnv;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

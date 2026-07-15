@@ -1,4 +1,5 @@
-// Skills（漸進揭露 + 結晶層 + 自我維護）— kernel 內建。.xitto-kernel/<pack>/skills/*.md 每檔一個技能。
+// Skills（漸進揭露 + 結晶層 + 自我維護）— kernel 內建。
+// 支援既有 .xitto-kernel/<pack>/skills/*.md，也支援 Codex 相容的 .agents/skills/<skill>/SKILL.md。
 // system prompt 只列「名稱 + 簡述」；agent 用 skill 工具按名載入完整步驟。對標 xitto-code skills。
 // 結晶層：agent 把重複流程用 skill_save 寫成新技能（須附 goal + 通過 verify 才落地）。
 // 自我維護：載入時記使用戳記（usedCount/lastUsedAt）；skills_check 重跑各技能 verify 偵測漂移（stale）。
@@ -49,8 +50,11 @@ const slug = (s) => String(s || '').trim().toLowerCase()
 // dir＝工作區技能目錄（<cwd>/.xitto-kernel/<pack>/skills）；globalDir＝可選的跨專案全域目錄。
 // 讀取時「全域→工作區」合併，同名以工作區為準（越具體越優先，對標 CC 的作用域分級）。
 // 寫入（skill_save）一律落工作區——結晶的是「這個專案摸出的流程」；patch/remove/read 依技能實際來源檔。
-export function createSkills(dir, { verifyRunner, capFilter, globalDir } = {}) {
+export function createSkills(dir, { verifyRunner, capFilter, globalDir, codexSkillDirs = [], pluginDirs = [] } = {}) {
   const fileOf = (name) => join(dir, `${name}.md`); // 新存技能一律進工作區
+  // pluginDirs：市集插件帶進來的技能目錄（{ dir, marketplace, plugin }）。可為函式 → 每次掃描時重取
+  // （執行期 plugin_install/uninstall 後即時反映）。scope='plugin'、唯讀（管理走 marketplace/plugin 工具）。
+  const getPluginDirs = typeof pluginDirs === 'function' ? pluginDirs : () => (pluginDirs || []);
   // capFilter(fm)：依環境能力篩技能（frontmatter 可標 `requires: cap,…` 或 `env: local`）。
   // 不通過的技能不列入 → 不出現在 prompt、skill 也載不到 → 錯環境下模型看不到無效技能。
   const allowFm = (fm) => (typeof capFilter !== 'function') || capFilter(fm);
@@ -66,9 +70,50 @@ export function createSkills(dir, { verifyRunner, capFilter, globalDir } = {}) {
       } catch { /* 略 */ }
     }
   };
+  const readCodexInto = (d, byName) => {
+    if (!d || !existsSync(d)) return;
+    for (const entry of readdirSync(d, { withFileTypes: true }).filter((x) => x.isDirectory())) {
+      const file = join(d, entry.name, 'SKILL.md');
+      if (!existsSync(file)) continue;
+      try {
+        const md = readFileSync(file, 'utf8');
+        const { fm } = splitFront(md);
+        if (!allowFm(fm)) continue;
+        const name = slug(fm.name || entry.name);
+        if (!name) continue;
+        byName.set(name, { name, desc: firstDesc(md), body: md, used: Number(fm.usedCount) || 0, stale: fm.stale === 'true', scope: 'repo', file });
+      } catch { /* 略 */ }
+    }
+  };
+  // 插件技能：讀 <skillsDir> 下的 flat *.md 與 <skill>/SKILL.md（相容 CC/Codex），記出處供標示。
+  const readPluginInto = (entry, byName) => {
+    const d = entry && entry.dir;
+    if (!d || !existsSync(d)) return;
+    const { marketplace, plugin } = entry;
+    const source = `${marketplace || ''}${plugin && plugin !== '_root' ? '/' + plugin : ''}` || String(marketplace || '');
+    const put = (name, md, file) => {
+      if (!name) return;
+      const { fm } = splitFront(md);
+      if (!allowFm(fm)) return;
+      byName.set(name, { name, desc: firstDesc(md), body: md, used: Number(fm.usedCount) || 0, stale: fm.stale === 'true', scope: 'plugin', source, file });
+    };
+    try {
+      for (const f of readdirSync(d).filter((x) => x.endsWith('.md'))) {
+        try { put(slug(f.replace(/\.md$/, '')), readFileSync(join(d, f), 'utf8'), join(d, f)); } catch { /* 略 */ }
+      }
+      for (const e of readdirSync(d, { withFileTypes: true }).filter((x) => x.isDirectory())) {
+        const file = join(d, e.name, 'SKILL.md');
+        if (!existsSync(file)) continue;
+        try { const md = readFileSync(file, 'utf8'); const { fm } = splitFront(md); put(slug(fm.name || e.name), md, file); } catch { /* 略 */ }
+      }
+    } catch { /* 略 */ }
+  };
+  // 合併順序（越後越具體、同名覆蓋）：全域 → 插件 → repo(.agents) → 工作區。
   const readAll = () => {
     const byName = new Map();
     readInto(globalDir, 'global', byName);   // 先讀全域
+    for (const p of getPluginDirs()) readPluginInto(p, byName); // 市集插件（跨專案，已安裝＋市集啟用）
+    for (const d of codexSkillDirs) readCodexInto(d, byName); // repo-scoped Codex skills
     readInto(dir, 'workspace', byName);        // 工作區同名覆蓋（更具體）
     return [...byName.values()];
   };
@@ -76,12 +121,14 @@ export function createSkills(dir, { verifyRunner, capFilter, globalDir } = {}) {
   const patch = (name, p) => {
     const cur = readAll().find((s) => s.name === name);
     const file = cur ? cur.file : fileOf(name);
+    if (cur?.scope === 'repo' || cur?.scope === 'plugin') return false; // repo/插件技能是外來來源檔，不因使用戳記而改寫
     if (!existsSync(file)) return false;
     try { const { fm, body } = splitFront(readFileSync(file, 'utf8')); Object.assign(fm, p); writeFileSync(file, joinFront(fm, body)); return true; } catch { return false; }
   };
 
   let skills = readAll(); // 啟動快照（供 system prompt 列名用）
-  const label = (s) => `- ${s.name}：${s.desc}${s.scope === 'global' ? '（全域）' : ''}${s.used ? `（用過 ${s.used} 次）` : ''}${s.stale ? ' ⚠ 已失效待修' : ''}`;
+  const scopeTag = (s) => (s.scope === 'global' ? '（全域）' : s.scope === 'repo' ? '（repo）' : s.scope === 'plugin' ? `（插件 ${s.source}）` : '');
+  const label = (s) => `- ${s.name}：${s.desc}${scopeTag(s)}${s.used ? `（用過 ${s.used} 次）` : ''}${s.stale ? ' ⚠ 已失效待修' : ''}`;
 
   const promptSection = () => (skills.length
     ? '\n\n# 可用技能（需要時用 skill 按名載入全文；摸出可重複流程可用 skill_save 結晶；⚠ 失效的先別用,可 skills_check 複查）\n' + skills.map(label).join('\n')
@@ -210,6 +257,8 @@ export function createSkills(dir, { verifyRunner, capFilter, globalDir } = {}) {
   const remove = (name) => {
     const nm = slug(name);
     const cur = readAll().find((s) => s.name === nm || s.name === name);
+    if (cur?.scope === 'repo') return { error: 'repo skill 來自 .agents/skills，請直接修改或移除來源檔', name: cur.name, scope: cur.scope };
+    if (cur?.scope === 'plugin') return { error: `插件技能來自市集 ${cur.source}，請用 plugin_uninstall 移除該插件`, name: cur.name, scope: cur.scope, source: cur.source };
     const file = cur ? cur.file : fileOf(nm);
     if (!existsSync(file)) return { error: '找不到技能', name };
     try { unlinkSync(file); skills = readAll(); return { removed: nm, scope: cur ? cur.scope : 'workspace' }; } catch (e) { return { error: e.message }; }
@@ -226,7 +275,7 @@ export function createSkills(dir, { verifyRunner, capFilter, globalDir } = {}) {
     skills, promptSection,
     tool: loadTool,
     tools: [loadTool, saveTool, checkTool, runSkillTool],
-    list: () => readAll().map(({ name, desc, used, stale, scope }) => ({ name, desc, used, stale, scope })),
+    list: () => readAll().map(({ name, desc, used, stale, scope, source }) => (source ? { name, desc, used, stale, scope, source } : { name, desc, used, stale, scope })),
     check, remove, read,
     reload: () => { skills = readAll(); return skills; },
   };

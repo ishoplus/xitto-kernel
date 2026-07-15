@@ -1939,10 +1939,14 @@ function renderExperience(e) {
   const pbHtml = (e.playbook || []).map((p) => `<div class="exp-item"><div class="exp-item-t">${esc(p.topic)} <span class="exp-pack">${esc(packLabel(p.pack))}</span></div><div class="exp-item-d">${esc(p.note)}</div></div>`).join("");
   const skHtml = (e.skills || []).map((s, i) => {
     const sid = "skb-" + i;
-    return `<div class="exp-item"><div class="exp-item-t">⚡ ${esc(s.name)}${s.used ? ` <span class="exp-used">${window.t("skills.used", "用過 %n 次").replace("%n", s.used)}</span>` : ""}${s.stale ? ` <span class="exp-stale">${window.t("skills.stale", "⚠ 待修")}</span>` : ""} <span class="exp-pack">${esc(packLabel(s.pack))}</span>` +
-      `<span class="sk-act"><button class="sk-btn" type="button" onclick="skillView('${esc(s.pack)}','${esc(s.name)}','${sid}')">${window.t("skills.view", "查看")}</button>` +
-      `<button class="sk-btn danger" type="button" onclick="skillDel('${esc(s.pack)}','${esc(s.name)}')">${window.t("skills.del", "刪除")}</button></span></div>` +
-      `${s.desc ? `<div class="exp-item-d">${esc(s.desc)}</div>` : ""}<pre class="sk-body" id="${sid}" hidden></pre></div>`;
+    // 插件技能（scope=plugin）來自市集、唯讀：標「插件」+ 來源，不給查看/刪除（管理走對話頁「市集」面板）。
+    const isPlugin = s.scope === "plugin";
+    const tag = isPlugin ? ` <span class="exp-pack">${window.t("skills.plugin", "插件")} · ${esc(s.source || s.pack || "")}</span>` : ` <span class="exp-pack">${esc(packLabel(s.pack))}</span>`;
+    const act = isPlugin ? "" : `<span class="sk-act"><button class="sk-btn" type="button" onclick="skillView('${esc(s.pack)}','${esc(s.name)}','${sid}')">${window.t("skills.view", "查看")}</button>` +
+      `<button class="sk-btn danger" type="button" onclick="skillDel('${esc(s.pack)}','${esc(s.name)}')">${window.t("skills.del", "刪除")}</button></span>`;
+    return `<div class="exp-item"><div class="exp-item-t">⚡ ${esc(s.name)}${s.used ? ` <span class="exp-used">${window.t("skills.used", "用過 %n 次").replace("%n", s.used)}</span>` : ""}${s.stale ? ` <span class="exp-stale">${window.t("skills.stale", "⚠ 待修")}</span>` : ""}${tag}` +
+      act + `</div>` +
+      `${s.desc ? `<div class="exp-item-d">${esc(s.desc)}</div>` : ""}${isPlugin ? "" : `<pre class="sk-body" id="${sid}" hidden></pre>`}</div>`;
   }).join("");
   const ocText = (o) => (o === "success" ? window.t("board.outcomeSuccess", "✓ 成功") : o === "failure" ? window.t("board.outcomeFailure", "✗ 失敗") : esc(o));
   const epHtml = (e.episodes || []).map((ep) => `<div class="exp-ep ${ep.outcome === "success" ? "ok" : ep.outcome === "failure" ? "fail" : ""}"><div class="exp-ep-s">${esc(ep.summary)}</div><div class="exp-ep-m">${ep.outcome ? `<span class="exp-oc">${ocText(ep.outcome)}</span>` : ""}${(ep.tags || []).map((t) => `<span class="exp-tag">${esc(t)}</span>`).join("")}<span>${fmtTime(ep.ts)}</span></div></div>`).join("");

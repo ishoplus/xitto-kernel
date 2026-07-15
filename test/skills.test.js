@@ -228,6 +228,37 @@ test('作用域分級：全域 + 工作區合併，同名工作區覆蓋；read/
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('市集整合：kernel 掛 marketplace 工具；安裝插件後其技能併入 skill 載入與 prompt', async () => {
+  const cwd = tmp('sk-mkt-');
+  const mp = tmp('sk-mp-');
+  const root = tmp('sk-root-');
+  try {
+    // 造本地市集：demo/skills/hello.md
+    const sd = join(mp, 'demo', 'skills');
+    mkdirSync(sd, { recursive: true });
+    writeFileSync(join(sd, 'hello.md'), '---\ndescription: 插件打招呼\n---\n# 步驟\n說 hi');
+    const model = { id: 'x', provider: 'p', api: 'openai-completions', contextWindow: 1000 };
+    const k = createKernel(createGeneralPack({ cwd }), { cwd, model, getApiKey: () => 'k', marketplaceRoot: root });
+    // 工具掛上
+    assert.ok(k.registry.has('marketplace_add') && k.registry.has('marketplace_list') && k.registry.has('plugin_install') && k.registry.has('plugin_uninstall'));
+    // 加市集 + 安裝插件（走 API）
+    assert.equal(k.marketplace.add('local', mp).added, 'local');
+    assert.equal(k.marketplace.install('demo').installed, 'demo@local');
+    // 插件技能立即可被 skill 工具載入（readAll 熱掃 pluginDirs）
+    const r = await k.runTool('skill', { name: 'hello' });
+    assert.match(r.result.content[0].text, /說 hi/);
+    // api.skills.list 反映（scope=plugin + source）
+    const hello = k.skills.list().find((s) => s.name === 'hello');
+    assert.equal(hello.scope, 'plugin');
+    assert.equal(hello.source, 'local/demo');
+    // 新 session：已安裝插件技能列入 prompt
+    const k2 = createKernel(createGeneralPack({ cwd }), { cwd, model, getApiKey: () => 'k', marketplaceRoot: root });
+    assert.match(k2.systemPrompt, /hello：插件打招呼（插件 local\/demo）/);
+    // 插件技能唯讀：不可用 skill remove（導向 plugin_uninstall）
+    assert.match(k.skills.remove('hello').error, /plugin_uninstall/);
+  } finally { for (const d of [cwd, mp, root]) rmSync(d, { recursive: true, force: true }); }
+});
+
 test('skill_save scope：預設落工作區、scope=global 落全域、無全域目錄則安全回落', async () => {
   const dir = tmp('sk-save-scope-');
   try {

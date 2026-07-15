@@ -21,6 +21,7 @@ import { createTodo } from './todo.js';
 import { createSpawnTool, createMapTool } from './subagent.js';
 import { createAgents } from './agents.js';
 import { createSkills, globalSkillsDir } from './skills.js';
+import { createMarketplaces } from './marketplace.js';
 import { loadHooks, runPreToolHooks, runPostToolHooks } from './hooks.js';
 import { maybeCompact, compactNow, resolveCompactionSettings } from './compaction.js';
 import { checkGoal, normalizeFeedback } from './goal-loop.js';
@@ -65,6 +66,19 @@ function diffWorkdir(before, after) {
   const created = [], modified = [];
   for (const [rel, sig] of after) { if (!before.has(rel)) created.push(rel); else if (before.get(rel) !== sig) modified.push(rel); }
   return { created: created.sort(), modified: modified.sort() };
+}
+
+function codexSkillDirs(cwd) {
+  const dirs = [];
+  let dir = cwd;
+  for (;;) {
+    const p = join(dir, '.agents', 'skills');
+    if (existsSync(p)) dirs.unshift(p);
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return dirs;
 }
 
 const DEFAULT_MEMORY_GUIDE =
@@ -277,7 +291,12 @@ export function createKernel(pack, config = {}) {
     if (r.error) return { ok: false, code: null, output: (output + ' ' + r.error.message).trim() };
     return { ok: r.status === 0, code: r.status, output: output || '(no output)' };
   };
-  const skills = createSkills(join(dataDir, 'skills'), { verifyRunner: runVerify, capFilter: envAllows, globalDir: globalSkillsDir(pack.name) }); // 漸進揭露 + 結晶（須驗證）；capFilter：環境不支援的技能不列不載；globalDir：跨專案全域技能（工作區同名覆蓋）
+  // 技能市集/插件（對標 CC plugin marketplace）：多市集、可安裝插件，插件技能併入下方 createSkills 發現層。
+  // onChange：install/uninstall/add 後重掃技能快照，讓 prompt 列名與 api.skills.list 即時反映。
+  let skillsRef = null;
+  const market = createMarketplaces({ root: config.marketplaceRoot, onChange: () => { try { skillsRef?.reload(); } catch { /* 略 */ } } });
+  const skills = createSkills(join(dataDir, 'skills'), { verifyRunner: runVerify, capFilter: envAllows, globalDir: globalSkillsDir(pack.name), codexSkillDirs: codexSkillDirs(cwd), pluginDirs: () => market.pluginSkillDirs() }); // 漸進揭露 + 結晶（須驗證）；capFilter：環境不支援的技能不列不載；globalDir：跨專案全域技能（工作區同名覆蓋）；codexSkillDirs：相容 .agents/skills/<skill>/SKILL.md；pluginDirs：市集已安裝插件的技能
+  skillsRef = skills;
   const agents = createAgents(join(dataDir, 'agents')); // 自訂 agent 類型（spawn_agent/spawn_agents 的 agentType）
 
   // 澄清通道：app 提供 askUser 才有 ask_user 工具（結果導向:自主完成,只在非問不可時才打斷使用者）。
@@ -306,6 +325,7 @@ export function createKernel(pack, config = {}) {
     ...(askUserTool ? [askUserTool] : []),
     todo.tool,
     ...skills.tools,
+    ...(config.marketplace === false ? [] : market.tools),  // 技能市集/插件（marketplace_add/list、plugin_install/uninstall）；可用 config.marketplace=false 關閉
     ...(config.extraTools || []),  // 外部注入（MCP 工具等）：由 app 層先 async 載入再傳入
   ];
   // spawn_agent / spawn_agents：派唯讀子 agent（單一 / 平行 map）。
@@ -445,6 +465,8 @@ export function createKernel(pack, config = {}) {
     playbook: { list: playbook.list, update: playbook.update, remove: playbook.remove, clear: playbook.clear, load: playbook.load, path: join(dataDir, 'playbook.md') },
     // 技能（結晶層 + 自我維護）：列出 / 移除 / 重掃 / 漂移複查；path 為技能資料夾。
     skills: { list: skills.list, remove: skills.remove, reload: skills.reload, check: skills.check, path: join(dataDir, 'skills') },
+    // 技能市集/插件（對標 CC plugin marketplace）：列出 / 加入(git clone 或本地) / 移除 / 更新(pull) / 安裝 / 移除插件 / 啟停；regFile 為註冊表。
+    marketplace: { list: market.list, add: market.add, remove: market.remove, update: market.update, install: market.install, uninstall: market.uninstall, setEnabled: market.setEnabled, plugins: market.plugins, regFile: market.regFile },
     agents: { list: agents.list, get: agents.get, reload: agents.reload, count: agents.count, path: join(dataDir, 'agents') },
     // 情節（情節層 + 相關性召回）：記錄 / 召回 / 列出 / 清空；path 為落地檔。
     episodes: { record: episodes.record, recall: episodes.recall, list: episodes.list, clear: episodes.clear, count: episodes.count, path: join(dataDir, 'episodes.jsonl') },

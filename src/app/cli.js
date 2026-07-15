@@ -195,6 +195,7 @@ export function runCli({ pack, model, getApiKey, resolveModel, sandbox = false, 
           '  /memory          顯示跨 session 記憶',
           '  /playbook [forget <主題>|clear]  專案手冊（agent 沉澱的程序知識,跨 session）',
           '  /skills [check|forget <名>]  已結晶技能（用量/失效標示；check 重跑 verify 偵測漂移）',
+          '  /market [add <名> <源>|remove <名>|update [名]|install <插件>[@市集]|uninstall <插件>]  技能市集/插件',
           '  /episodes [查詢|clear]  過往任務情節（無參數列近期；給查詢測相關性召回）',
           '  /sessions        列出已保存的對話',
           '  /resume [id]     續接對話（不給 id=最近一次）',
@@ -242,6 +243,30 @@ export function runCli({ pack, model, getApiKey, resolveModel, sandbox = false, 
         if (!sk.length) { out(c.gray('（尚無技能；agent 摸出可重複流程時會用 skill_save 結晶）\n')); return true; }
         out(sk.map((s) => (s.stale ? c.red('  ⚠ ') : c.cyan('  • ')) + s.name + c.gray(`：${s.desc}${s.used ? ` · 用過 ${s.used} 次` : ''}${s.stale ? ' · 已失效待修' : ''}`)).join('\n') + '\n');
         if (kernel.skills.path) out(c.gray(`  ↳ ${kernel.skills.path}（複查：/skills check · 移除：/skills forget <名>）\n`));
+        return true;
+      }
+      case '/market': case '/plugins': {
+        const rest = input.trim().slice(cmd.length).trim();
+        const parts = rest.split(/\s+/).filter(Boolean);
+        const sub = parts[0];
+        if (sub === 'add') {
+          if (parts.length < 3) { out(c.yellow('用法：/market add <名> <git-url 或本地路徑>\n')); return true; }
+          const r = kernel.marketplace.add(parts[1], parts.slice(2).join(' '));
+          out(r.error ? c.red(`加入失敗：${r.error}${r.output ? '\n' + c.gray(r.output) : ''}\n`)
+            : c.green(`（已加入市集「${r.added}」）`) + c.gray(` ${r.hint}\n`));
+          return true;
+        }
+        if (sub === 'remove') { const r = kernel.marketplace.remove(parts[1] || ''); out(r.error ? c.yellow(r.error + '\n') : c.gray(`（已移除市集「${r.removed}」）\n`)); return true; }
+        if (sub === 'update') { const res = kernel.marketplace.update(parts[1]); out((res.length ? res.map((r) => `  ${r.status === 'updated' ? c.green('✓') : r.status === 'local' ? c.gray('·') : c.red('✗')} ${r.name}（${r.status}）`).join('\n') : c.gray('（尚無市集）')) + '\n'); return true; }
+        if (sub === 'install') { const r = kernel.marketplace.install(parts[1] || ''); out(r.error ? c.yellow(`${r.error}${r.matches ? '：' + r.matches.join(', ') : ''}\n`) : c.green(`（已安裝插件「${r.installed || r.alreadyInstalled}」${r.skills != null ? ` · ${r.skills} 個技能` : ''}）\n`)); return true; }
+        if (sub === 'uninstall') { const r = kernel.marketplace.uninstall(parts[1] || ''); out(r.error ? c.yellow(r.error + '\n') : c.gray(`（已移除插件「${r.uninstalled}」）\n`)); return true; }
+        const ms = kernel.marketplace.list();
+        if (!ms.length) { out(c.gray('（尚無技能市集；用 /market add <名> <git-url 或本地路徑> 加入，可加多個）\n')); return true; }
+        for (const m of ms) {
+          out(c.cyan(`  • ${m.name}`) + c.gray(` ${m.source}${m.git ? ' (git)' : ''}${m.enabled ? '' : ' [停用]'}${m.present ? '' : ' [未取得]'}\n`));
+          for (const p of m.plugins) out((p.installed ? c.green('      ✓ ') : c.gray('      ○ ')) + p.name + c.gray(p.installed ? ' · 已安裝' : ` · plugin_install ${p.name}@${m.name}`) + '\n');
+        }
+        out(c.gray(`  ↳ ${kernel.marketplace.regFile}\n`));
         return true;
       }
       case '/episodes': {
@@ -324,7 +349,7 @@ export function runCli({ pack, model, getApiKey, resolveModel, sandbox = false, 
   };
 
   // 斜線指令 tab 補全
-  const SLASH = ['/help', '/goal ', '/sandbox', '/auto', '/plan', '/undo', '/tools', '/trust', '/memory', '/playbook', '/skills', '/episodes', '/sessions', '/resume', '/clear', '/exit'];
+  const SLASH = ['/help', '/goal ', '/sandbox', '/auto', '/plan', '/undo', '/tools', '/trust', '/memory', '/playbook', '/skills', '/market', '/episodes', '/sessions', '/resume', '/clear', '/exit'];
   const completer = (line) => {
     if (!line.startsWith('/')) return [[], line];
     const hits = SLASH.filter((s) => s.startsWith(line));

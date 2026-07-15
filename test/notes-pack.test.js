@@ -9,7 +9,7 @@ import { createNotesPack } from '../src/packs/notes/index.js';
 
 test('notes pack：同一個 createKernel，第三個領域', () => {
   const k = createKernel(createNotesPack());
-  assert.deepEqual([...k.mutatingTools], ['add_note', 'skill_run']);           // 從 metadata 推導
+  assert.deepEqual([...k.mutatingTools], ['add_note', 'skill_run', 'marketplace_add']);           // 從 metadata 推導
   for (const n of ['list_notes', 'read_note', 'search_notes']) assert.ok(k.registry.readOnlyNames().includes(n));
 });
 

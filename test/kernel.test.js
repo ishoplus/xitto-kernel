@@ -10,7 +10,7 @@ import { createDataQueryPack } from '../src/packs/data-query/index.js';
 
 test('coding pack：mutatingTools 從工具 metadata 推導', () => {
   const k = createKernel(createCodingPack());
-  assert.deepEqual([...k.mutatingTools].sort(), ['bash', 'bash_bg', 'edit', 'git_commit', 'lsp_rename', 'skill_run', 'write']);
+  assert.deepEqual([...k.mutatingTools].sort(), ['bash', 'bash_bg', 'edit', 'git_commit', 'lsp_rename', 'marketplace_add', 'skill_run', 'write']);
   // pack 的唯讀工具（kernel 另注入 memory_save/memory_list，故用 subset 檢查）
   for (const n of ['ls', 'read']) assert.ok(k.registry.readOnlyNames().includes(n));
   // kernel 內建記憶工具：任何 pack 都有
@@ -54,7 +54,7 @@ test('data-query pack：同一個 kernel、零改動、不同領域（真實 sql
   try {
     const k = createKernel(createDataQueryPack({ cwd: dir }), { cwd: dir });
     // 只有 sql_exec 是 mutating（sql_query 唯讀）→ 證明 metadata 推導跨領域通用
-    assert.deepEqual([...k.mutatingTools], ['sql_exec', 'skill_run']);
+    assert.deepEqual([...k.mutatingTools], ['sql_exec', 'skill_run', 'marketplace_add']);
 
     // schema-before-query：未看 schema 先查 → 擋（對照 read-before-edit，同插槽不同領域）
     const blocked = await k.runTool('sql_query', { sql: 'SELECT 1' });
