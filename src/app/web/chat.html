@@ -468,6 +468,15 @@ body {
   animation: fade-in var(--duration-base) var(--ease-out);
 }
 
+/* 超長對話（訊息數 > VIRT_AT）：瀏覽器原生虛擬化——離屏泡泡跳過排版/繪製/樣式計算，
+   只有捲到可視範圍的才真正 render。contain-intrinsic-size 的 auto 會記住量過的真實高度，
+   捲動仍穩定。長對話下關掉逐條淡入，避免泡泡離開再進入視口時重播動畫。 */
+.thread-wrap.virt .msg {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 200px;
+  animation: none;
+}
+
 .msg.user { flex-direction: row-reverse; }
 
 .avatar {
@@ -1872,10 +1881,20 @@ function compactDividerHtml(c) {
   </details>`;
 }
 
+/* 泡泡正文快取：完成的訊息 text 不再變動 → mdRender（含語法高亮，最貴）只算一次；
+   串流中的最後一顆泡泡 text 每幀都變 → m._mdSrc !== m.text 自動失效重算（僅這一顆）。 */
+function asstBodyHtml(m) {
+  if (!m.text) return "";
+  if (m._mdSrc === m.text && m._mdHtml != null) return m._mdHtml;
+  m._mdSrc = m.text;
+  m._mdHtml = mdRender(m.text);
+  return m._mdHtml;
+}
+
 function msgHtml(m, idx) {
   if (m.role === "divider" && m._compact) return compactDividerHtml(m._compact);
   const isUser = m.role === "user";
-  const bodyHtml = isUser ? esc(m.text) : m.text ? mdRender(m.text) : "";
+  const bodyHtml = isUser ? esc(m.text) : asstBodyHtml(m);
   const cursor =
     !isUser && streaming && idx === messages.length - 1 && !m.text
       ? '<span class="cursor" aria-label="正在輸入"></span>'
@@ -1913,7 +1932,19 @@ function render() {
   } else {
     $("#thread").innerHTML = `<div class="thread-wrap">${messages.map((m, i) => msgHtml(m, i)).join("")}</div>`;
   }
-  // 右側軌道：泡泡＝工作日誌，TUI＝工作階段 HUD
+  applyVirt();
+  updateRail();
+}
+
+/* 訊息數超過門檻才開啟原生虛擬化：短對話（常態）完全不變、零風險；長對話才讓離屏泡泡跳過 render。 */
+const VIRT_AT = 40;
+function applyVirt(wrap) {
+  wrap = wrap || $("#thread").querySelector(".thread-wrap");
+  if (wrap) wrap.classList.toggle("virt", messages.length > VIRT_AT);
+}
+
+/* 右側軌道：泡泡＝工作日誌，TUI＝工作階段 HUD（render 與串流增量重繪共用）*/
+function updateRail() {
   const on = railActive();
   document.querySelector(".app").classList.toggle("rail-on", on);
   const rail = $("#worklog");
@@ -1923,6 +1954,34 @@ function render() {
     $("#worklog-head").textContent = tui ? "◈ 工作階段" : "⚙ 工作日誌";
     $("#worklog-body").innerHTML = tui ? renderHud() : renderRail();
   }
+}
+
+/* 串流熱路徑：只替換最後一顆泡泡的 DOM（其餘泡泡不動）——避免每個 chunk 都重建整棵 thread。
+   結構一變（插話新增泡泡／壓縮插分隔線／切對話）節點數對不上 → 退回整棵 render()，保證正確。 */
+function renderStreamTail() {
+  const wrap = $("#thread").querySelector(".thread-wrap");
+  if (!wrap || wrap.children.length !== messages.length) return render();
+  const i = messages.length - 1;
+  const tpl = document.createElement("template");
+  tpl.innerHTML = msgHtml(messages[i], i);
+  const next = tpl.content.firstElementChild;
+  if (!next) return render();
+  wrap.replaceChild(next, wrap.children[i]);
+  applyVirt(wrap);
+  updateRail();
+}
+
+/* 串流期間把「重繪＋捲動」合併進一個 rAF：無論一幀內來幾個 chunk，最多只重繪一次，
+   把「每 token 一次全量重繪」降成「每幀一次增量重繪」，主線程不再被打滿 → 不再彈「頁面無回應」。*/
+let _tailQueued = false;
+function scheduleStreamRender() {
+  if (_tailQueued) return;
+  _tailQueued = true;
+  requestAnimationFrame(() => {
+    _tailQueued = false;
+    renderStreamTail();
+    scrollDown();
+  });
 }
 
 function toggleProc(idx) {
@@ -2212,7 +2271,7 @@ function onRunEvent(run, ev) {
     if (run.chatMsgs === messages) sessionId = ev.sessionId; // 該對話仍開著才同步全局
   }
   if (run.chatMsgs === messages) {
-    if (!composing) { render(); scrollDown(); }
+    if (!composing) scheduleStreamRender();
     updateStreamStatus(run);
   }
 }
