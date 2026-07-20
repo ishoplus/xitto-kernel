@@ -70,7 +70,7 @@
     "docx": "^9.7.1",
     "ink": "^7.1.1",
     "jose": "^6.2.3",
-    "marked": "^15.0.12",
+    "marked": "^18.0.6",
     "marked-terminal": "^7.3.0",
     "pptxgenjs": "^4.0.1",
     "react": "^19.2.7"
