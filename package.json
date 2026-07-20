@@ -64,11 +64,11 @@
     "./packs/docgen": "./src/packs/docgen/index.js"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.80.2",
+    "@earendil-works/pi-ai": "^0.80.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cli-highlight": "^2.1.11",
     "docx": "^9.7.1",
-    "ink": "^7.1.0",
+    "ink": "^7.1.1",
     "jose": "^6.2.3",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
@@ -77,7 +77,7 @@
   },
   "devDependencies": {
     "ink-testing-library": "^4.0.0",
-    "opencc-js": "^1.4.0"
+    "opencc-js": "^1.4.1"
   },
   "optionalDependencies": {
     "mysql2": "^3.11.0",
