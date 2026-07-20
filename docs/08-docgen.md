@@ -37,6 +37,129 @@ agent 用 `gen_doc` 工具產出檔案。
 
 無模板 `.pptx` 不讓 LLM 直接決定任意座標：`gen_doc` 會先把 markdown 轉為受控 deck spec，再套內建商務設計系統。每頁只使用固定安全版型（cover / statement / bullets / table），長 bullet 會拆短，正文每頁最多 5 條，長表格會保留表頭拆成多頁，避免像自由生成 HTML 以外的絕對定位內容那樣超版或重疊。
 
+這裡參照 Codex 的工程方式，而不是讓模型自由發明版面：
+
+- **Context**：LLM 只輸入 markdown 內容、語義標題與表格資料。
+- **Constraints**：LLM 不手寫座標、不自創圖形語法、不要求任意絕對定位；PPT 視覺由 deterministic renderer 控制。
+- **Done when**：`gen_doc` 回傳 `ok: true`，且 `quality.ok`、`verify.ok`、`verify.design.ok` 通過；若有 design issues，應拆分內容、改用已支援圖解或改走模板生成。
+- **Reusable workflow**：常用圖解透過固定二級標題觸發，後續新增圖解必須同時補 renderer、文檔與回歸測試。
+
+複雜無模板 PPTX 的建議流程是先規劃再生成：
+
+```json
+{
+  "tool": "plan_pptx_deck",
+  "args": {
+    "title": "改善方案",
+    "markdown": "# 改善方案\n## 流程圖\n- 需求\n- 設計\n- 驗證"
+  }
+}
+```
+
+`plan_pptx_deck` 不寫檔，只回傳 `kind: "pptx-deck-plan"`、`contract`、`summary`、逐頁 `slides` 與 `warnings`。只有 plan 沒有密度警告、圖解類型符合預期時，才呼叫 `gen_doc` 產 `.pptx`；產出後仍以 `quality` / `verify.design` 作為完成標準。
+
+如果 `warnings` 出現 `unsupported-diagram-heading`，代表二級標題看起來要求圖解，但目前不在 `contract.supportedDiagrams` 內。此時 LLM 不應自創形狀語法或手寫座標；要嘛改用已支援圖解（例如 flow / matrix / architecture），要嘛先補對應 renderer、文檔與回歸測試後再開放生成。
+
+即使 agent 跳過 `plan_pptx_deck` 直接呼叫 `gen_doc` 產 `.pptx`，工具也會在生成後重用同一個 deck plan，並把 `warnings` 併入 `verify.design.issues` 與 `quality`。因此含未支援圖解的 PPTX 可能仍會產出檔案，但 `quality.grade` 會是 `needs-repair`，不能視為可交付完成。
+
+常用商務圖解可用二級標題觸發，不需要 LLM 手寫座標：
+
+```md
+# 改善方案
+## 流程圖
+- 需求確認
+- 資料整理
+- 方案設計
+- 交付驗收
+
+## 魚骨圖
+- 人員
+- 流程
+- 工具
+- 資料
+- 風險
+- 品質
+
+## 比較矩陣
+| 面向 | 方案 A | 方案 B |
+| --- | --- | --- |
+| 成本 | 中 | 低 |
+| 速度 | 快 | 中 |
+
+## 時間線
+- Q1 需求確認
+- Q2 MVP
+- Q3 試點
+- Q4 推廣
+
+## 循環圖
+- Plan
+- Do
+- Check
+- Act
+
+## 漏斗圖
+- 訪客
+- 線索
+- 商機
+- 成交
+
+## 金字塔
+- 願景
+- 策略
+- 能力
+- 行動
+
+## SWOT
+| 類型 | 項目一 | 項目二 |
+| --- | --- | --- |
+| S | 品牌信任 | 渠道穩定 |
+| W | 交付週期 | 成本偏高 |
+| O | AI 滲透 | 新市場 |
+| T | 價格競爭 | 法規變化 |
+
+## KPI 看板
+| 指標 | 數值 | 變化 |
+| --- | --- | --- |
+| 營收 | 120M | +18% |
+| 續約率 | 91% | +3pt |
+
+## 組織架構圖
+- 總經理
+- 產品
+- 工程
+- 營運
+- 設計
+- QA
+
+## 甘特圖
+| 任務 | 起始季 | 跨度 |
+| --- | --- | --- |
+| 需求 | 1 | 1 |
+| 開發 | 2 | 2 |
+| 上線 | 4 | 1 |
+
+## Venn
+- 用戶價值
+- 商業可行
+- 技術可落地
+
+## 能力雷達
+| 指標 | 分數 | 說明 |
+| --- | --- | --- |
+| 策略 | 88 | 清晰 |
+| 交付 | 76 | 穩定 |
+| 設計 | 82 | 可提升 |
+
+## 系統架構圖
+- Office Renderer
+- Markdown Parser
+- Layout Engine
+- Quality Gate
+```
+
+目前內建圖解版型包含流程圖、時間線、循環圖、漏斗圖、金字塔、魚骨圖、SWOT、比較矩陣、KPI 看板、組織架構圖、甘特圖、Venn、能力雷達與系統架構圖；這些都會走固定安全區域與設計 token。
+
 ## 能力探測
 
 `office_capabilities` 會回傳目前環境的讀寫能力矩陣，例如：
@@ -219,7 +342,7 @@ agent 會 `read` 素材 → `gen_doc({ path: "summary.pdf", markdown: "# 摘要\
 
 ## 限制
 
-- DOCX/PPTX 目前支援標題、段落、清單與表格的原生產出；無模板 PPTX 會走內建商務版型與自動拆頁，但複雜圖文版面、母片、動畫、頁首頁尾客製仍有限。
+- DOCX/PPTX 目前支援標題、段落、清單與表格的原生產出；無模板 PPTX 會走內建商務版型、自動拆頁與常用圖解版型（流程圖、時間線、循環圖、漏斗圖、金字塔、魚骨圖、SWOT、比較矩陣、KPI 看板、組織架構圖、甘特圖、Venn、能力雷達、系統架構圖），但複雜圖文版面、母片、動畫、頁首頁尾客製仍有限。
 - PDF 仍以 HTML/CSS 為來源；複雜排版（多欄、頁首頁尾客製）有限。
 - `.xlsx` 目前支援文字表格、多工作表、欄寬估算、簡單公式（`=` 開頭）、向上合併（`^`）、表頭樣式，以及從單表數值資料自動生成柱狀圖；尚未支援複雜樣式與跨欄合併。
 - `.csv` 只取 markdown 的**第一個**表格。

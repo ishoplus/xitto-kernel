@@ -499,12 +499,23 @@ function markdownToDeckSpec(markdown, { title = '簡報' } = {}) {
     if (secIndex === 0 && normalized.shortIntro && !normalized.tables.length && normalized.bullets.length <= 3) {
       slides.push({ type: 'cover', title: normalized.title || title, subtitle: normalized.shortIntro });
     }
-    splitBullets(normalized.bullets).forEach((bullets, i) => {
+    if (normalized.bullets.length) {
+      splitBullets(normalized.bullets).forEach((bullets, i) => {
+        slides.push({
+          type: bullets.length <= 3 && normalized.shortIntro && i === 0 ? 'statement' : 'bullets',
+          title: i === 0 ? normalized.title : continuationDeckTitle(normalized.title, i + 1),
+          subtitle: i === 0 ? normalized.shortIntro : '',
+          bullets,
+        });
+      });
+    }
+    normalized.diagrams.forEach((diagram) => {
       slides.push({
-        type: bullets.length <= 3 && normalized.shortIntro && i === 0 ? 'statement' : 'bullets',
-        title: i === 0 ? normalized.title : continuationDeckTitle(normalized.title, i + 1),
-        subtitle: i === 0 ? normalized.shortIntro : '',
-        bullets,
+        type: diagram.type,
+        title: diagram.title || normalized.title,
+        subtitle: normalized.shortIntro,
+        items: diagram.items,
+        rows: diagram.rows,
       });
     });
     normalized.tables.forEach((table) => {
@@ -517,40 +528,150 @@ function markdownToDeckSpec(markdown, { title = '簡報' } = {}) {
         });
       });
     });
-    if (!normalized.bullets.length && !normalized.tables.length && !slides.some((s) => s.title === normalized.title)) {
+    if (!normalized.bullets.length && !normalized.tables.length && !normalized.diagrams.length && !slides.some((s) => s.title === normalized.title)) {
       slides.push({ type: 'statement', title: normalized.title || title, subtitle: normalized.shortIntro, bullets: [] });
     }
   });
   if (!slides.length) slides.push({ type: 'cover', title, subtitle: '' });
   return {
     theme: {
-      accent: '1F4E79',
+      accent: '245B8F',
       accent2: '0F766E',
+      accent3: 'D97706',
       ink: '111827',
       muted: '4B5563',
-      soft: 'F3F6FA',
+      soft: 'EEF5FA',
+      wash: 'F8FAFC',
+      panel: 'FFFFFF',
       line: 'D7DEE8',
     },
     slides: slides.slice(0, 40),
   };
 }
 
+export function planPptxDeck(markdown, { title = '簡報' } = {}) {
+  const deck = markdownToDeckSpec(markdown, { title });
+  const unsupportedIntents = unsupportedDiagramIntents(markdown);
+  const slides = deck.slides.map((slide, i) => ({
+    index: i + 1,
+    type: slide.type,
+    title: slide.title || '',
+    bullets: Array.isArray(slide.bullets) ? slide.bullets.length : 0,
+    tableRows: Array.isArray(slide.rows) ? slide.rows.length : 0,
+    items: Array.isArray(slide.items) ? slide.items.length : 0,
+  }));
+  const diagramTypes = [...new Set(slides.map((s) => s.type).filter((t) => SUPPORTED_DECK_DIAGRAMS.includes(t)))];
+  const warnings = [];
+  if (slides.length >= DECK_CONTRACT.maxSlides) warnings.push({ code: 'slide-cap-reached', message: `簡報已達 ${DECK_CONTRACT.maxSlides} 頁上限，後續內容可能被截斷` });
+  slides.forEach((s) => {
+    if (s.bullets > DECK_CONTRACT.maxBulletsPerSlide) warnings.push({ code: 'too-many-bullets', slide: s.index, message: '單頁 bullet 超過契約上限' });
+    if (s.tableRows > DECK_CONTRACT.maxTableRowsPerSlide) warnings.push({ code: 'too-many-table-rows', slide: s.index, message: '單頁表格列數超過契約上限' });
+  });
+  unsupportedIntents.forEach((x) => warnings.push({
+    code: 'unsupported-diagram-heading',
+    heading: x.heading,
+    section: x.section,
+    message: `「${x.heading}」看起來是圖解需求，但不在受控圖解契約內；請改用 supportedDiagrams，或先新增 renderer、文檔與回歸測試。`,
+  }));
+  return {
+    kind: 'pptx-deck-plan',
+    title,
+    contract: DECK_CONTRACT,
+    summary: {
+      slides: slides.length,
+      diagrams: diagramTypes,
+      tables: slides.filter((s) => s.type === 'table').length,
+      contentSlides: slides.filter((s) => !['cover'].includes(s.type)).length,
+      unsupportedDiagramIntents: unsupportedIntents.length,
+      warnings: warnings.length,
+    },
+    slides,
+    warnings,
+  };
+}
+
+const SUPPORTED_DECK_DIAGRAMS = ['timeline', 'cycle', 'funnel', 'pyramid', 'swot', 'org', 'gantt', 'venn', 'radar', 'architecture', 'dashboard', 'flow', 'fishbone', 'matrix'];
+const DECK_CONTRACT = {
+  renderer: 'pptx-native-controlled-deck',
+  llmRole: 'content-structure-only',
+  maxSlides: 40,
+  maxBulletsPerSlide: 5,
+  maxTableRowsPerSlide: 8,
+  unsupported: ['manual coordinates', 'custom shape syntax', 'absolute positioning from LLM'],
+  supportedDiagrams: SUPPORTED_DECK_DIAGRAMS,
+};
+
+function unsupportedDiagramIntents(markdown) {
+  const out = [];
+  pptxSections(markdown).forEach((sec) => {
+    (sec.blocks || []).forEach((b) => {
+      if (b.type !== 'heading' || b.level !== 2) return;
+      const heading = String(b.text || '').trim();
+      if (!heading || diagramTypeFromHeading(heading)) return;
+      if (looksLikeDiagramHeading(heading)) out.push({ section: sec.title || '', heading });
+    });
+  });
+  return out;
+}
+
+function looksLikeDiagramHeading(text) {
+  const s = String(text || '').toLowerCase();
+  return /圖|图|diagram|chart|架構|架构|泳道|swimlane|桑基|sankey|關係|关系|network|拓撲|拓扑|樹狀|树状|tree|mind\s*map|心智圖|心智图/.test(s);
+}
+
 function normalizeDeckSection(sec) {
   const bullets = [];
   const tables = [];
+  const diagrams = [];
   const intros = [];
+  let diagram = null;
+  const flushDiagram = () => {
+    if (!diagram) return;
+    if (diagram.items.length || diagram.rows.length) diagrams.push(diagram);
+    diagram = null;
+  };
   for (const b of sec.blocks || []) {
-    if (b.type === 'bullet') bullets.push(...splitLongBullet(b.text));
+    if (b.type === 'heading' && b.level === 2) {
+      flushDiagram();
+      const type = diagramTypeFromHeading(b.text);
+      if (type) diagram = { type, title: b.text, items: [], rows: [] };
+      else bullets.push(String(b.text || ''));
+      continue;
+    }
+    if (diagram && b.type === 'bullet') diagram.items.push(...splitLongBullet(b.text));
+    else if (diagram && b.type === 'table') diagram.rows.push(...b.rows);
+    else if (b.type === 'bullet') bullets.push(...splitLongBullet(b.text));
     else if (b.type === 'table') tables.push({ name: '', rows: b.rows });
     else if (b.type === 'heading') bullets.push(String(b.text || ''));
     else if (b.text) intros.push(String(b.text || ''));
   }
+  flushDiagram();
   return {
     title: shortenDeckText(sec.title || '簡報', 42),
     shortIntro: shortenDeckText(intros.join(' '), 96),
     bullets,
     tables,
+    diagrams,
   };
+}
+
+function diagramTypeFromHeading(text) {
+  const s = String(text || '').toLowerCase();
+  if (/時間線|时序|時序|timeline|roadmap|里程碑|milestone/.test(s)) return 'timeline';
+  if (/循環|循环|cycle|closed loop|pdca/.test(s)) return 'cycle';
+  if (/漏斗|funnel|轉化|转化|conversion/.test(s)) return 'funnel';
+  if (/金字塔|pyramid|層級|层级|hierarchy/.test(s)) return 'pyramid';
+  if (/swot/.test(s)) return 'swot';
+  if (/系統架構|系统架构|architecture|模組|模块|module/.test(s)) return 'architecture';
+  if (/組織架構|组织架构|組織圖|组织图|org chart|org|organization/.test(s)) return 'org';
+  if (/甘特|gantt|排期|schedule/.test(s)) return 'gantt';
+  if (/venn|交集|重疊|重叠|集合/.test(s)) return 'venn';
+  if (/雷達|雷达|radar|能力評估|能力评估/.test(s)) return 'radar';
+  if (/kpi|dashboard|儀表|仪表|看板|指標看板|指标看板/.test(s)) return 'dashboard';
+  if (/流程|flow|process|roadmap/.test(s)) return 'flow';
+  if (/魚骨|鱼骨|fishbone|ishikawa|cause/.test(s)) return 'fishbone';
+  if (/矩陣|矩阵|matrix|比較|对比|compare|comparison/.test(s)) return 'matrix';
+  return '';
 }
 
 function splitLongBullet(text) {
@@ -593,9 +714,23 @@ function textLengthForDeck(s) {
 function renderDeckSpec(pptx, deck) {
   deck.slides.forEach((spec, i) => {
     const slide = pptx.addSlide();
-    slide.background = { color: 'FFFFFF' };
+    slide.background = { color: deck.theme.wash };
     addDeckChrome(pptx, slide, deck.theme, i + 1, deck.slides.length);
     if (spec.type === 'cover') renderCoverSlide(slide, spec, deck.theme);
+    else if (spec.type === 'timeline') renderTimelineSlide(slide, spec, deck.theme);
+    else if (spec.type === 'cycle') renderCycleSlide(pptx, slide, spec, deck.theme);
+    else if (spec.type === 'funnel') renderFunnelSlide(slide, spec, deck.theme);
+    else if (spec.type === 'pyramid') renderPyramidSlide(slide, spec, deck.theme);
+    else if (spec.type === 'swot') renderSwotSlide(slide, spec, deck.theme);
+    else if (spec.type === 'org') renderOrgSlide(slide, spec, deck.theme);
+    else if (spec.type === 'gantt') renderGanttSlide(slide, spec, deck.theme);
+    else if (spec.type === 'venn') renderVennSlide(slide, spec, deck.theme);
+    else if (spec.type === 'radar') renderRadarSlide(slide, spec, deck.theme);
+    else if (spec.type === 'architecture') renderArchitectureSlide(slide, spec, deck.theme);
+    else if (spec.type === 'dashboard') renderDashboardSlide(slide, spec, deck.theme);
+    else if (spec.type === 'flow') renderFlowSlide(pptx, slide, spec, deck.theme);
+    else if (spec.type === 'fishbone') renderFishboneSlide(pptx, slide, spec, deck.theme);
+    else if (spec.type === 'matrix') renderMatrixSlide(slide, spec, deck.theme);
     else if (spec.type === 'table') renderTableSlide(slide, spec, deck.theme);
     else if (spec.type === 'statement') renderStatementSlide(slide, spec, deck.theme);
     else renderBulletSlide(slide, spec, deck.theme);
@@ -603,8 +738,9 @@ function renderDeckSpec(pptx, deck) {
 }
 
 function addDeckChrome(pptx, slide, theme, _no, _total) {
-  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.12, h: 7.5, fill: { color: theme.accent }, line: { color: theme.accent } });
-  slide.addShape(pptx.ShapeType.rect, { x: 0.55, y: 1.02, w: 2.9, h: 0.04, fill: { color: theme.accent }, line: { color: theme.accent } });
+  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.14, h: 7.5, fill: { color: theme.accent }, line: { color: theme.accent } });
+  slide.addShape(pptx.ShapeType.rect, { x: 0.14, y: 0, w: 13.19, h: 0.13, fill: { color: 'E8EEF6' }, line: { color: 'E8EEF6' } });
+  slide.addShape(pptx.ShapeType.rect, { x: 0.62, y: 1.03, w: 2.6, h: 0.05, fill: { color: theme.accent2 }, line: { color: theme.accent2 } });
 }
 
 function renderDeckTitle(slide, title, theme, opts = {}) {
@@ -616,25 +752,43 @@ function renderDeckTitle(slide, title, theme, opts = {}) {
 }
 
 function renderCoverSlide(slide, spec, theme) {
-  slide.addShape('rect', { x: 0.55, y: 1.45, w: 3.6, h: 0.08, fill: { color: theme.accent2 }, line: { color: theme.accent2 } });
-  slide.addText(shortenDeckText(spec.title, 46), { x: 0.72, y: 2.08, w: 8.6, h: 1.05, fontFace: 'Aptos Display', fontSize: 34, bold: true, color: theme.ink, margin: 0, breakLine: false, fit: 'shrink' });
-  if (spec.subtitle) slide.addText(shortenDeckText(spec.subtitle, 120), { x: 0.76, y: 3.32, w: 8.2, h: 0.72, fontFace: 'Aptos', fontSize: 17, color: theme.muted, margin: 0.02, fit: 'shrink' });
-  slide.addShape('rect', { x: 9.72, y: 1.35, w: 2.48, h: 4.7, fill: { color: theme.soft }, line: { color: theme.line, transparency: 20 } });
-  slide.addText('01', { x: 10.05, y: 2.0, w: 1.4, h: 0.7, fontFace: 'Aptos Display', fontSize: 34, bold: true, color: theme.accent, margin: 0 });
-  slide.addText('Executive deck', { x: 10.08, y: 2.88, w: 1.55, h: 0.55, fontFace: 'Aptos', fontSize: 13, color: theme.muted, margin: 0, fit: 'shrink' });
+  slide.addShape('rect', { x: 8.35, y: 0.13, w: 4.98, h: 7.37, fill: { color: theme.accent }, line: { color: theme.accent } });
+  slide.addShape('rect', { x: 9.18, y: 0.95, w: 2.85, h: 5.35, fill: { color: 'FFFFFF', transparency: 88 }, line: { color: 'FFFFFF', transparency: 100 } });
+  slide.addShape('rect', { x: 9.82, y: 1.45, w: 2.15, h: 3.25, fill: { color: theme.accent2, transparency: 18 }, line: { color: theme.accent2, transparency: 100 } });
+  slide.addShape('rect', { x: 0.72, y: 1.55, w: 1.15, h: 0.08, fill: { color: theme.accent3 }, line: { color: theme.accent3 } });
+  slide.addText('Executive deck', { x: 0.72, y: 1.18, w: 2.3, h: 0.26, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 1.2 });
+  slide.addText(shortenDeckText(spec.title, 46), { x: 0.72, y: 2.02, w: 7.0, h: 1.18, fontFace: 'Aptos Display', fontSize: 36, bold: true, color: theme.ink, margin: 0, breakLine: false, fit: 'shrink' });
+  if (spec.subtitle) slide.addText(shortenDeckText(spec.subtitle, 120), { x: 0.76, y: 3.45, w: 6.8, h: 0.76, fontFace: 'Aptos', fontSize: 16.5, color: theme.muted, margin: 0.02, fit: 'shrink' });
+  slide.addShape('rect', { x: 0.72, y: 5.35, w: 4.9, h: 0.62, fill: { color: 'FFFFFF' }, line: { color: theme.line, transparency: 25 } });
+  slide.addText('Generated with controlled layout', { x: 0.96, y: 5.55, w: 4.25, h: 0.2, fontFace: 'Aptos', fontSize: 10.5, color: theme.muted, margin: 0 });
 }
 
 function renderStatementSlide(slide, spec, theme) {
   renderDeckTitle(slide, spec.title, theme);
-  if (spec.subtitle) slide.addText(shortenDeckText(spec.subtitle, 140), { x: 0.82, y: 1.72, w: 9.5, h: 0.86, fontFace: 'Aptos', fontSize: 21, bold: true, color: theme.accent, margin: 0.02, fit: 'shrink' });
-  if (spec.bullets?.length) addBullets(slide, spec.bullets, { x: 0.9, y: 3.0, w: 10.6, h: 2.6 }, theme, 18);
+  slide.addShape('rect', { x: 0.72, y: 1.6, w: 11.25, h: 4.8, fill: { color: theme.panel }, line: { color: theme.line, transparency: 30 } });
+  slide.addShape('rect', { x: 0.72, y: 1.6, w: 0.16, h: 4.8, fill: { color: theme.accent2 }, line: { color: theme.accent2 } });
+  if (spec.subtitle) slide.addText(shortenDeckText(spec.subtitle, 140), { x: 1.15, y: 2.0, w: 9.6, h: 0.95, fontFace: 'Aptos Display', fontSize: 22, bold: true, color: theme.accent, margin: 0.02, fit: 'shrink' });
+  if (spec.bullets?.length) addBullets(slide, spec.bullets, { x: 1.18, y: 3.25, w: 9.95, h: 2.35 }, theme, 17.5);
 }
 
 function renderBulletSlide(slide, spec, theme) {
   renderDeckTitle(slide, spec.title, theme);
   if (spec.subtitle) slide.addText(shortenDeckText(spec.subtitle, 96), { x: 0.82, y: 1.18, w: 10.6, h: 0.42, fontFace: 'Aptos', fontSize: 12.5, color: theme.muted, margin: 0, fit: 'shrink' });
-  slide.addShape('roundRect', { x: 0.72, y: 1.78, w: 11.2, h: 4.9, rectRadius: 0.04, fill: { color: 'FFFFFF' }, line: { color: theme.line, transparency: 15, pt: 0.8 } });
-  addBullets(slide, spec.bullets || [], { x: 1.02, y: 2.1, w: 10.45, h: 4.15 }, theme, 16.5);
+  const bullets = (spec.bullets || []).slice(0, 5).map((t) => shortenDeckText(t, 72));
+  slide.addShape('rect', { x: 0.72, y: 1.72, w: 2.55, h: 4.92, fill: { color: theme.accent }, line: { color: theme.accent } });
+  slide.addText('Key points', { x: 1.02, y: 2.04, w: 1.8, h: 0.3, fontFace: 'Aptos', fontSize: 11, bold: true, color: 'FFFFFF', margin: 0, charSpace: 0.8 });
+  slide.addText(String(Math.max(1, bullets.length)).padStart(2, '0'), { x: 1.0, y: 2.48, w: 1.25, h: 0.62, fontFace: 'Aptos Display', fontSize: 33, bold: true, color: 'FFFFFF', margin: 0 });
+  slide.addShape('rect', { x: 1.02, y: 3.32, w: 1.38, h: 0.06, fill: { color: theme.accent3 }, line: { color: theme.accent3 } });
+  bullets.forEach((text, i) => addPointCard(slide, text, i, theme));
+}
+
+function addPointCard(slide, text, i, theme) {
+  const y = 1.72 + i * 0.94;
+  const color = i % 2 === 0 ? 'FFFFFF' : theme.soft;
+  slide.addShape('rect', { x: 3.55, y, w: 8.35, h: 0.74, fill: { color }, line: { color: theme.line, transparency: 25 } });
+  slide.addShape('rect', { x: 3.55, y, w: 0.08, h: 0.74, fill: { color: i === 0 ? theme.accent3 : theme.accent2 }, line: { color: i === 0 ? theme.accent3 : theme.accent2 } });
+  slide.addText(`0${i + 1}`, { x: 3.82, y: y + 0.18, w: 0.45, h: 0.2, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent, margin: 0 });
+  slide.addText(text, { x: 4.36, y: y + 0.14, w: 6.95, h: 0.34, fontFace: 'Aptos', fontSize: 13.6, color: theme.ink, margin: 0, fit: 'shrink' });
 }
 
 function addBullets(slide, bullets, box, theme, fontSize) {
@@ -652,8 +806,11 @@ function renderTableSlide(slide, spec, theme) {
   renderDeckTitle(slide, spec.title, theme);
   if (spec.subtitle) slide.addText(shortenDeckText(spec.subtitle, 72), { x: 0.82, y: 1.16, w: 10.6, h: 0.35, fontFace: 'Aptos', fontSize: 12, color: theme.muted, margin: 0 });
   const rows = (spec.rows || []).slice(0, 8).map((row) => row.map((cell) => shortenDeckText(cell, 36)));
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 25 } });
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 0.48, fill: { color: theme.accent }, line: { color: theme.accent } });
+  slide.addText('Data table', { x: 0.96, y: 1.78, w: 1.8, h: 0.18, fontFace: 'Aptos', fontSize: 9.5, bold: true, color: 'FFFFFF', margin: 0, charSpace: 0.7 });
   slide.addTable(rows, {
-    x: 0.72, y: 1.78, w: 11.2, h: Math.min(4.85, Math.max(0.8, rows.length * 0.46)),
+    x: 0.92, y: 2.32, w: 10.85, h: Math.min(3.85, Math.max(0.8, rows.length * 0.42)),
     border: { type: 'solid', color: theme.line, pt: 0.75 },
     fontFace: 'Aptos', fontSize: 11.5, color: theme.ink,
     fill: 'F8FAFC', margin: 0.06, autoFit: true,
@@ -661,6 +818,391 @@ function renderTableSlide(slide, spec, theme) {
     rowH: 0.42,
     autoPage: false,
   });
+}
+
+function renderFlowSlide(pptx, slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  if (spec.subtitle) slide.addText(shortenDeckText(spec.subtitle, 92), { x: 0.82, y: 1.14, w: 10.6, h: 0.34, fontFace: 'Aptos', fontSize: 12, color: theme.muted, margin: 0 });
+  const items = (spec.items || []).slice(0, 5).map((x) => shortenDeckText(x, 42));
+  const y = 2.25;
+  const w = 1.86;
+  const gap = 0.34;
+  slide.addShape('rect', { x: 0.72, y: 1.72, w: 11.25, h: 4.82, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  items.forEach((item, i) => {
+    const x = 1.02 + i * (w + gap);
+    slide.addShape('rect', { x, y, w, h: 1.28, fill: { color: i % 2 ? theme.soft : 'FFFFFF' }, line: { color: theme.line, transparency: 22 } });
+    slide.addShape('rect', { x, y, w, h: 0.24, fill: { color: i === 0 ? theme.accent3 : theme.accent }, line: { color: i === 0 ? theme.accent3 : theme.accent } });
+    slide.addText(`0${i + 1}`, { x: x + 0.18, y: y + 0.43, w: 0.42, h: 0.22, fontFace: 'Aptos', fontSize: 10, bold: true, color: theme.accent, margin: 0 });
+    slide.addText(item, { x: x + 0.18, y: y + 0.72, w: w - 0.34, h: 0.36, fontFace: 'Aptos', fontSize: 12, bold: true, color: theme.ink, margin: 0, fit: 'shrink' });
+    if (i < items.length - 1) {
+      slide.addShape(pptx.ShapeType.chevron, { x: x + w + 0.07, y: y + 0.43, w: 0.27, h: 0.42, fill: { color: theme.accent2 }, line: { color: theme.accent2 } });
+    }
+  });
+  slide.addText('Process flow', { x: 1.02, y: 4.55, w: 2.5, h: 0.28, fontFace: 'Aptos', fontSize: 11, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function renderFishboneSlide(pptx, slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const items = (spec.items || []).slice(0, 6).map((x) => shortenDeckText(x, 38));
+  const midY = 3.86;
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  slide.addShape('line', { x: 1.25, y: midY, w: 8.9, h: 0, line: { color: theme.accent, pt: 2.4, beginArrowType: 'none', endArrowType: 'triangle' } });
+  slide.addText('Core effect', { x: 10.22, y: midY - 0.28, w: 1.35, h: 0.35, fontFace: 'Aptos', fontSize: 11.5, bold: true, color: theme.accent, margin: 0, fit: 'shrink' });
+  items.forEach((item, i) => {
+    const upper = i % 2 === 0;
+    const col = Math.floor(i / 2);
+    const x = 2.05 + col * 2.45;
+    const y2 = upper ? 2.38 : 5.18;
+    addDeckLine(slide, x, midY, x + 1.18, upper ? midY - 0.86 : midY + 0.86, { color: theme.accent2, pt: 1.6 });
+    slide.addShape('rect', { x: x - 0.35, y: y2, w: 2.08, h: 0.58, fill: { color: upper ? theme.soft : 'FFFFFF' }, line: { color: theme.line, transparency: 20 } });
+    slide.addShape('rect', { x: x - 0.35, y: y2, w: 0.08, h: 0.58, fill: { color: upper ? theme.accent2 : theme.accent3 }, line: { color: upper ? theme.accent2 : theme.accent3 } });
+    slide.addText(item, { x: x - 0.18, y: y2 + 0.14, w: 1.65, h: 0.22, fontFace: 'Aptos', fontSize: 10.8, bold: true, color: theme.ink, margin: 0, fit: 'shrink' });
+  });
+  slide.addText('Fishbone analysis', { x: 1.02, y: 1.9, w: 2.7, h: 0.24, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.7 });
+}
+
+function renderMatrixSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const rows = (spec.rows?.length ? spec.rows : matrixRowsFromItems(spec.items || [])).slice(0, 5).map((row) => row.map((cell) => shortenDeckText(cell, 34)));
+  const cols = Math.max(2, Math.min(4, Math.max(0, ...rows.map((r) => r.length))));
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  const startX = 0.98;
+  const startY = 2.04;
+  const cellW = 10.7 / cols;
+  const cellH = 0.78;
+  rows.forEach((row, r) => {
+    for (let c = 0; c < cols; c++) {
+      const header = r === 0;
+      const x = startX + c * cellW;
+      const y = startY + r * cellH;
+      slide.addShape('rect', { x, y, w: cellW - 0.05, h: cellH - 0.05, fill: { color: header ? theme.accent : (r + c) % 2 ? theme.soft : 'FFFFFF' }, line: { color: theme.line, transparency: 25 } });
+      slide.addText(row[c] || '', { x: x + 0.12, y: y + 0.2, w: cellW - 0.32, h: 0.26, fontFace: 'Aptos', fontSize: header ? 11 : 10.5, bold: header, color: header ? 'FFFFFF' : theme.ink, margin: 0, fit: 'shrink' });
+    }
+  });
+  slide.addText('Comparison matrix', { x: 0.98, y: 5.95, w: 2.7, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.7 });
+}
+
+function matrixRowsFromItems(items) {
+  const clean = items.map(String).filter(Boolean);
+  const rows = [['項目', '說明']];
+  for (let i = 0; i < clean.length; i += 2) rows.push([clean[i], clean[i + 1] || '']);
+  return rows;
+}
+
+function renderTimelineSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const items = diagramItems(spec).slice(0, 6).map((x) => shortenDeckText(x, 34));
+  const y = 3.62;
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  slide.addShape('line', { x: 1.1, y, w: 10.25, h: 0, line: { color: theme.accent, pt: 2.2 } });
+  items.forEach((item, i) => {
+    const x = 1.1 + i * (10.25 / Math.max(1, items.length - 1));
+    const top = i % 2 === 0;
+    slide.addShape('ellipse', { x: x - 0.11, y: y - 0.11, w: 0.22, h: 0.22, fill: { color: i === 0 ? theme.accent3 : theme.accent2 }, line: { color: 'FFFFFF', pt: 1 } });
+    addDeckLine(slide, x, y, x, top ? y - 0.72 : y + 0.72, { color: theme.line, pt: 1.2 });
+    slide.addShape('rect', { x: x - 0.78, y: top ? y - 1.45 : y + 0.88, w: 1.56, h: 0.55, fill: { color: top ? theme.soft : 'FFFFFF' }, line: { color: theme.line, transparency: 22 } });
+    slide.addText(item, { x: x - 0.64, y: top ? y - 1.3 : y + 1.04, w: 1.28, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.ink, align: 'center', margin: 0, fit: 'shrink' });
+  });
+  slide.addText('Timeline', { x: 0.98, y: 1.92, w: 1.7, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function renderCycleSlide(pptx, slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const items = diagramItems(spec).slice(0, 4).map((x) => shortenDeckText(x, 34));
+  const boxes = [
+    { x: 1.25, y: 2.0 }, { x: 7.95, y: 2.0 },
+    { x: 7.95, y: 4.9 }, { x: 1.25, y: 4.9 },
+  ];
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  items.forEach((item, i) => {
+    const b = boxes[i];
+    slide.addShape('rect', { x: b.x, y: b.y, w: 2.6, h: 0.86, fill: { color: i % 2 ? theme.soft : 'FFFFFF' }, line: { color: theme.line, transparency: 20 } });
+    slide.addShape('rect', { x: b.x, y: b.y, w: 0.12, h: 0.86, fill: { color: i === 0 ? theme.accent3 : theme.accent2 }, line: { color: i === 0 ? theme.accent3 : theme.accent2 } });
+    slide.addText(`0${i + 1}`, { x: b.x + 0.3, y: b.y + 0.18, w: 0.42, h: 0.2, fontFace: 'Aptos', fontSize: 10, bold: true, color: theme.accent, margin: 0 });
+    slide.addText(item, { x: b.x + 0.76, y: b.y + 0.18, w: 1.55, h: 0.28, fontFace: 'Aptos', fontSize: 11.4, bold: true, color: theme.ink, margin: 0, fit: 'shrink' });
+  });
+  slide.addShape(pptx.ShapeType.chevron, { x: 4.8, y: 2.16, w: 0.8, h: 0.52, fill: { color: theme.accent }, line: { color: theme.accent } });
+  slide.addShape(pptx.ShapeType.chevron, { x: 9.04, y: 3.5, w: 0.52, h: 0.72, rotate: 90, fill: { color: theme.accent2 }, line: { color: theme.accent2 } });
+  slide.addShape(pptx.ShapeType.chevron, { x: 4.8, y: 5.06, w: 0.8, h: 0.52, rotate: 180, fill: { color: theme.accent }, line: { color: theme.accent } });
+  slide.addShape(pptx.ShapeType.chevron, { x: 2.0, y: 3.5, w: 0.52, h: 0.72, rotate: 270, fill: { color: theme.accent2 }, line: { color: theme.accent2 } });
+  slide.addText('Cycle', { x: 5.25, y: 3.38, w: 1.3, h: 0.28, fontFace: 'Aptos', fontSize: 13, bold: true, color: theme.accent, align: 'center', margin: 0 });
+}
+
+function renderFunnelSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const items = diagramItems(spec).slice(0, 5).map((x) => shortenDeckText(x, 36));
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  items.forEach((item, i) => {
+    const w = 8.8 - i * 1.15;
+    const x = 2.05 + i * 0.58;
+    const y = 1.95 + i * 0.78;
+    const color = [theme.accent, '2F6F9F', theme.accent2, 'A67C2A', theme.accent3][i] || theme.accent;
+    slide.addShape('rect', { x, y, w, h: 0.56, fill: { color }, line: { color } });
+    slide.addText(item, { x: x + 0.18, y: y + 0.16, w: w - 0.36, h: 0.18, fontFace: 'Aptos', fontSize: 10.8, bold: true, color: 'FFFFFF', align: 'center', margin: 0, fit: 'shrink' });
+  });
+  slide.addText('Funnel', { x: 0.98, y: 5.95, w: 1.6, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function renderPyramidSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const items = diagramItems(spec).slice(0, 5).map((x) => shortenDeckText(x, 38));
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  const levels = [...items].reverse();
+  levels.forEach((item, i) => {
+    const w = 3.0 + i * 1.45;
+    const x = 6.35 - w / 2;
+    const y = 2.05 + i * 0.74;
+    const color = [theme.accent3, 'B8860B', theme.accent2, '2F6F9F', theme.accent][i] || theme.accent;
+    slide.addShape('rect', { x, y, w, h: 0.56, fill: { color }, line: { color } });
+    slide.addText(item, { x: x + 0.2, y: y + 0.15, w: w - 0.4, h: 0.2, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: 'FFFFFF', align: 'center', margin: 0, fit: 'shrink' });
+  });
+  slide.addText('Pyramid', { x: 0.98, y: 5.95, w: 1.8, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function renderSwotSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const buckets = swotBuckets(spec);
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  const cells = [
+    { key: 'S', label: 'Strengths', x: 1.0, y: 1.98, color: theme.accent },
+    { key: 'W', label: 'Weaknesses', x: 6.45, y: 1.98, color: theme.accent3 },
+    { key: 'O', label: 'Opportunities', x: 1.0, y: 4.12, color: theme.accent2 },
+    { key: 'T', label: 'Threats', x: 6.45, y: 4.12, color: '7C3AED' },
+  ];
+  cells.forEach((cell) => {
+    slide.addShape('rect', { x: cell.x, y: cell.y, w: 5.0, h: 1.78, fill: { color: 'FFFFFF' }, line: { color: theme.line, transparency: 20 } });
+    slide.addShape('rect', { x: cell.x, y: cell.y, w: 0.42, h: 1.78, fill: { color: cell.color }, line: { color: cell.color } });
+    slide.addText(cell.key, { x: cell.x + 0.1, y: cell.y + 0.18, w: 0.22, h: 0.2, fontFace: 'Aptos', fontSize: 11, bold: true, color: 'FFFFFF', margin: 0 });
+    slide.addText(cell.label, { x: cell.x + 0.62, y: cell.y + 0.18, w: 3.8, h: 0.2, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: cell.color, margin: 0 });
+    slide.addText((buckets[cell.key] || []).slice(0, 3).map((x) => `• ${shortenDeckText(x, 28)}`).join('\n'), { x: cell.x + 0.62, y: cell.y + 0.56, w: 3.95, h: 0.72, fontFace: 'Aptos', fontSize: 10.2, color: theme.ink, margin: 0.02, fit: 'shrink' });
+  });
+}
+
+function renderDashboardSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const metrics = dashboardMetrics(spec).slice(0, 6);
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  metrics.forEach((m, i) => {
+    const col = i % 3;
+    const row = Math.floor(i / 3);
+    const x = 1.0 + col * 3.55;
+    const y = 2.0 + row * 2.08;
+    slide.addShape('rect', { x, y, w: 3.15, h: 1.42, fill: { color: i % 2 ? theme.soft : 'FFFFFF' }, line: { color: theme.line, transparency: 22 } });
+    slide.addShape('rect', { x, y, w: 3.15, h: 0.12, fill: { color: i === 0 ? theme.accent3 : theme.accent }, line: { color: i === 0 ? theme.accent3 : theme.accent } });
+    slide.addText(shortenDeckText(m.label, 22), { x: x + 0.22, y: y + 0.34, w: 2.5, h: 0.2, fontFace: 'Aptos', fontSize: 10, bold: true, color: theme.muted, margin: 0, fit: 'shrink' });
+    slide.addText(shortenDeckText(m.value, 16), { x: x + 0.22, y: y + 0.72, w: 1.9, h: 0.38, fontFace: 'Aptos Display', fontSize: 22, bold: true, color: theme.accent, margin: 0, fit: 'shrink' });
+    if (m.note) slide.addText(shortenDeckText(m.note, 24), { x: x + 2.04, y: y + 0.78, w: 0.86, h: 0.2, fontFace: 'Aptos', fontSize: 9.5, bold: true, color: theme.accent2, align: 'right', margin: 0, fit: 'shrink' });
+  });
+  slide.addText('KPI dashboard', { x: 0.98, y: 5.95, w: 2.4, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function diagramItems(spec) {
+  if (Array.isArray(spec.items) && spec.items.length) return spec.items;
+  if (Array.isArray(spec.rows) && spec.rows.length) return spec.rows.slice(1).map((r) => r.filter(Boolean).join('：'));
+  return [];
+}
+
+function swotBuckets(spec) {
+  const out = { S: [], W: [], O: [], T: [] };
+  const rows = Array.isArray(spec.rows) && spec.rows.length ? spec.rows.slice(1) : [];
+  if (rows.length) {
+    for (const row of rows) {
+      const key = String(row[0] || '').toUpperCase()[0];
+      if (out[key]) out[key].push(...row.slice(1).filter(Boolean));
+    }
+  } else {
+    (spec.items || []).forEach((item, i) => out[['S', 'W', 'O', 'T'][i % 4]].push(item));
+  }
+  return out;
+}
+
+function dashboardMetrics(spec) {
+  if (Array.isArray(spec.rows) && spec.rows.length > 1) {
+    return spec.rows.slice(1).map((r) => ({ label: String(r[0] || ''), value: String(r[1] || ''), note: String(r[2] || '') }));
+  }
+  return (spec.items || []).map((item) => {
+    const parts = String(item).split(/[:：|]/).map((x) => x.trim()).filter(Boolean);
+    return { label: parts[0] || item, value: parts[1] || '', note: parts[2] || '' };
+  });
+}
+
+function addDeckLine(slide, x1, y1, x2, y2, line) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const shape = dx && dy && Math.sign(dx) !== Math.sign(dy) ? 'lineInv' : 'line';
+  slide.addShape(shape, {
+    x: Math.min(x1, x2),
+    y: Math.min(y1, y2),
+    w: Math.abs(x2 - x1),
+    h: Math.abs(y2 - y1),
+    line,
+  });
+}
+
+function addDeckConnector(slide, x1, y1, x2, y2, line) {
+  const midY = y1 + (y2 - y1) / 2;
+  addDeckLine(slide, x1, y1, x1, midY, line);
+  addDeckLine(slide, x1, midY, x2, midY, line);
+  addDeckLine(slide, x2, midY, x2, y2, line);
+}
+
+function renderOrgSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const items = diagramItems(spec).slice(0, 7).map((x) => shortenDeckText(x, 28));
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  const root = items[0] || 'Leadership';
+  slide.addShape('rect', { x: 5.0, y: 1.95, w: 2.7, h: 0.68, fill: { color: theme.accent }, line: { color: theme.accent } });
+  slide.addText(root, { x: 5.2, y: 2.16, w: 2.3, h: 0.18, fontFace: 'Aptos', fontSize: 11.2, bold: true, color: 'FFFFFF', align: 'center', margin: 0, fit: 'shrink' });
+  const children = items.slice(1, 4);
+  const leaves = items.slice(4, 7);
+  children.forEach((item, i) => {
+    const x = 1.45 + i * 3.65;
+    addDeckConnector(slide, 6.35, 2.63, x + 1.22, 3.45, { color: theme.line, pt: 1.2 });
+    slide.addShape('rect', { x, y: 3.45, w: 2.45, h: 0.64, fill: { color: i % 2 ? theme.soft : 'FFFFFF' }, line: { color: theme.line, transparency: 18 } });
+    slide.addShape('rect', { x, y: 3.45, w: 0.1, h: 0.64, fill: { color: i === 0 ? theme.accent3 : theme.accent2 }, line: { color: i === 0 ? theme.accent3 : theme.accent2 } });
+    slide.addText(item, { x: x + 0.2, y: 3.64, w: 2.05, h: 0.18, fontFace: 'Aptos', fontSize: 10.6, bold: true, color: theme.ink, align: 'center', margin: 0, fit: 'shrink' });
+  });
+  leaves.forEach((item, i) => {
+    const x = 1.65 + i * 3.65;
+    slide.addShape('line', { x: x + 1.02, y: 4.09, w: 0, h: 0.5, line: { color: theme.line, pt: 1 } });
+    slide.addShape('rect', { x, y: 4.58, w: 2.05, h: 0.52, fill: { color: theme.soft }, line: { color: theme.line, transparency: 25 } });
+    slide.addText(item, { x: x + 0.14, y: 4.73, w: 1.76, h: 0.16, fontFace: 'Aptos', fontSize: 9.8, color: theme.ink, align: 'center', margin: 0, fit: 'shrink' });
+  });
+  slide.addText('Organization chart', { x: 0.98, y: 5.95, w: 2.6, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function renderGanttSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const tasks = ganttTasks(spec).slice(0, 6);
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  const x0 = 3.0, y0 = 2.05, w = 8.1;
+  ['Q1', 'Q2', 'Q3', 'Q4'].forEach((q, i) => {
+    slide.addText(q, { x: x0 + i * (w / 4), y: 1.82, w: w / 4, h: 0.18, fontFace: 'Aptos', fontSize: 9.8, bold: true, color: theme.muted, align: 'center', margin: 0 });
+    slide.addShape('line', { x: x0 + i * (w / 4), y: 2.04, w: 0, h: 3.9, line: { color: theme.line, pt: 0.7, transparency: 30 } });
+  });
+  tasks.forEach((task, i) => {
+    const y = y0 + i * 0.58;
+    const start = Math.max(0, Math.min(3, task.start));
+    const len = Math.max(1, Math.min(4 - start, task.len));
+    slide.addText(shortenDeckText(task.label, 22), { x: 1.0, y: y + 0.08, w: 1.7, h: 0.18, fontFace: 'Aptos', fontSize: 9.8, color: theme.ink, margin: 0, fit: 'shrink' });
+    slide.addShape('rect', { x: x0, y: y + 0.13, w, h: 0.18, fill: { color: theme.soft }, line: { color: theme.soft } });
+    slide.addShape('rect', { x: x0 + start * (w / 4), y: y + 0.08, w: len * (w / 4) - 0.08, h: 0.28, fill: { color: i === 0 ? theme.accent3 : theme.accent }, line: { color: i === 0 ? theme.accent3 : theme.accent } });
+  });
+  slide.addText('Gantt schedule', { x: 0.98, y: 5.95, w: 2.4, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function renderVennSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const items = diagramItems(spec).slice(0, 3).map((x) => shortenDeckText(x, 26));
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  slide.addShape('ellipse', { x: 2.3, y: 2.2, w: 3.1, h: 2.5, fill: { color: theme.accent, transparency: 45 }, line: { color: theme.accent, pt: 1.2 } });
+  slide.addShape('ellipse', { x: 4.95, y: 2.2, w: 3.1, h: 2.5, fill: { color: theme.accent2, transparency: 45 }, line: { color: theme.accent2, pt: 1.2 } });
+  slide.addShape('ellipse', { x: 3.65, y: 3.15, w: 3.1, h: 2.5, fill: { color: theme.accent3, transparency: 52 }, line: { color: theme.accent3, pt: 1.2 } });
+  const labels = [items[0] || 'Set A', items[1] || 'Set B', items[2] || 'Intersection'];
+  slide.addText(labels[0], { x: 2.65, y: 2.55, w: 1.7, h: 0.26, fontFace: 'Aptos', fontSize: 12, bold: true, color: 'FFFFFF', align: 'center', margin: 0, fit: 'shrink' });
+  slide.addText(labels[1], { x: 5.65, y: 2.55, w: 1.7, h: 0.26, fontFace: 'Aptos', fontSize: 12, bold: true, color: 'FFFFFF', align: 'center', margin: 0, fit: 'shrink' });
+  slide.addText(labels[2], { x: 4.25, y: 4.28, w: 1.9, h: 0.26, fontFace: 'Aptos', fontSize: 12, bold: true, color: theme.ink, align: 'center', margin: 0, fit: 'shrink' });
+  slide.addText('Venn diagram', { x: 0.98, y: 5.95, w: 2.2, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function renderRadarSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const metrics = dashboardMetrics(spec).slice(0, 6);
+  const safeMetrics = metrics.length ? metrics : [
+    { label: 'Strategy', value: '82' },
+    { label: 'Delivery', value: '76' },
+    { label: 'Design', value: '88' },
+    { label: 'Quality', value: '72' },
+    { label: 'Growth', value: '80' },
+  ];
+  const cx = 4.6, cy = 3.95, radius = 1.55;
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  slide.addText('Radar profile', { x: 1.02, y: 1.9, w: 2.1, h: 0.24, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+  const pointsFor = (scale) => safeMetrics.map((_m, i) => {
+    const a = (-90 + i * (360 / Math.max(3, safeMetrics.length))) * Math.PI / 180;
+    return { x: cx + Math.cos(a) * radius * scale, y: cy + Math.sin(a) * radius * scale };
+  });
+  [1, 0.72, 0.44].forEach((scale) => {
+    const pts = pointsFor(scale);
+    pts.forEach((p, i) => {
+      const n = pts[(i + 1) % pts.length];
+      addDeckLine(slide, p.x, p.y, n.x, n.y, { color: theme.line, pt: 0.8, transparency: scale === 1 ? 8 : 28 });
+    });
+  });
+  const scorePts = [];
+  safeMetrics.forEach((m, i) => {
+    const a = (-90 + i * (360 / Math.max(3, safeMetrics.length))) * Math.PI / 180;
+    const val = Math.max(0.2, Math.min(1, Number(String(m.value).replace(/[^\d.]/g, '')) / 100 || (0.58 + i * 0.06)));
+    const axis = { x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius };
+    const pt = { x: cx + Math.cos(a) * radius * val, y: cy + Math.sin(a) * radius * val };
+    scorePts.push(pt);
+    addDeckLine(slide, cx, cy, axis.x, axis.y, { color: theme.line, pt: 0.75, transparency: 35 });
+    slide.addText(shortenDeckText(m.label, 12), { x: axis.x - 0.52, y: axis.y - 0.12, w: 1.04, h: 0.18, fontFace: 'Aptos', fontSize: 8.6, bold: true, color: theme.ink, align: 'center', margin: 0, fit: 'shrink' });
+    slide.addShape('ellipse', { x: pt.x - 0.065, y: pt.y - 0.065, w: 0.13, h: 0.13, fill: { color: i === 0 ? theme.accent3 : theme.accent2 }, line: { color: 'FFFFFF', pt: 0.8 } });
+  });
+  scorePts.forEach((p, i) => {
+    const n = scorePts[(i + 1) % scorePts.length];
+    addDeckLine(slide, p.x, p.y, n.x, n.y, { color: theme.accent3, pt: 2.0, transparency: 0 });
+  });
+  slide.addShape('rect', { x: 7.05, y: 2.05, w: 4.1, h: 3.55, fill: { color: theme.soft }, line: { color: theme.line, transparency: 22 } });
+  safeMetrics.slice(0, 6).forEach((m, i) => {
+    const y = 2.34 + i * 0.49;
+    const val = Math.max(0, Math.min(100, Number(String(m.value).replace(/[^\d.]/g, '')) || Math.round(58 + i * 6)));
+    slide.addText(shortenDeckText(m.label, 14), { x: 7.3, y, w: 1.0, h: 0.18, fontFace: 'Aptos', fontSize: 9.2, bold: true, color: theme.ink, margin: 0, fit: 'shrink' });
+    slide.addShape('rect', { x: 8.5, y: y + 0.04, w: 1.75, h: 0.11, fill: { color: 'DDE7F0' }, line: { color: 'DDE7F0' } });
+    slide.addShape('rect', { x: 8.5, y: y + 0.04, w: 1.75 * (val / 100), h: 0.11, fill: { color: i === 0 ? theme.accent3 : theme.accent }, line: { color: i === 0 ? theme.accent3 : theme.accent } });
+    slide.addText(String(val), { x: 10.38, y: y - 0.01, w: 0.42, h: 0.16, fontFace: 'Aptos', fontSize: 8.8, bold: true, color: theme.accent, align: 'right', margin: 0 });
+  });
+  slide.addText('Capability radar', { x: 0.98, y: 5.95, w: 2.6, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function renderArchitectureSlide(slide, spec, theme) {
+  renderDeckTitle(slide, spec.title, theme);
+  const modules = diagramItems(spec).slice(0, 7).map((x) => shortenDeckText(x, 24));
+  slide.addShape('rect', { x: 0.72, y: 1.62, w: 11.25, h: 5.05, fill: { color: theme.panel }, line: { color: theme.line, transparency: 28 } });
+  slide.addText('Layered system architecture', { x: 0.98, y: 1.9, w: 3.35, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.7 });
+  const labels = [
+    modules[0] || 'Client / Channel',
+    modules[1] || 'API Gateway',
+    modules[2] || 'Kernel Orchestrator',
+    modules[3] || 'Layout Engine',
+    modules[4] || 'Office Renderer',
+    modules[5] || 'Quality Gate',
+    modules[6] || 'Preview API',
+  ];
+  const layers = [
+    { name: 'Experience', y: 2.22, color: theme.accent2, items: [labels[0], labels[1]] },
+    { name: 'Core', y: 3.38, color: theme.accent, items: [labels[2], labels[3], labels[4]] },
+    { name: 'Assurance', y: 4.72, color: theme.accent3, items: [labels[5], labels[6]] },
+  ];
+  layers.forEach((layer) => {
+    slide.addShape('rect', { x: 1.0, y: layer.y - 0.18, w: 10.45, h: 0.92, fill: { color: layer.y === 3.38 ? 'F8FAFC' : theme.soft }, line: { color: theme.line, transparency: 26 } });
+    slide.addShape('rect', { x: 1.0, y: layer.y - 0.18, w: 0.16, h: 0.92, fill: { color: layer.color }, line: { color: layer.color } });
+    slide.addText(layer.name, { x: 1.28, y: layer.y + 0.1, w: 1.2, h: 0.18, fontFace: 'Aptos', fontSize: 9.2, bold: true, color: layer.color, margin: 0, fit: 'shrink' });
+    const startX = layer.items.length === 3 ? 3.05 : 4.0;
+    layer.items.forEach((m, i) => {
+      const x = startX + i * 2.55;
+      slide.addShape('rect', { x, y: layer.y, w: 2.05, h: 0.5, fill: { color: 'FFFFFF' }, line: { color: layer.color, pt: 1.0, transparency: 6 } });
+      slide.addShape('rect', { x, y: layer.y, w: 0.08, h: 0.5, fill: { color: layer.color }, line: { color: layer.color } });
+      slide.addText(m, { x: x + 0.16, y: layer.y + 0.15, w: 1.72, h: 0.15, fontFace: 'Aptos', fontSize: 9.3, bold: true, color: theme.ink, align: 'center', margin: 0, fit: 'shrink' });
+    });
+  });
+  addDeckLine(slide, 6.15, 2.72, 6.15, 3.22, { color: theme.accent, pt: 1.25, endArrowType: 'triangle' });
+  addDeckLine(slide, 6.15, 4.02, 6.15, 4.55, { color: theme.accent, pt: 1.25, endArrowType: 'triangle' });
+  slide.addText('request', { x: 6.34, y: 2.88, w: 0.7, h: 0.14, fontFace: 'Aptos', fontSize: 7.8, color: theme.muted, margin: 0 });
+  slide.addText('verify', { x: 6.34, y: 4.2, w: 0.7, h: 0.14, fontFace: 'Aptos', fontSize: 7.8, color: theme.muted, margin: 0 });
+  slide.addText('System architecture', { x: 0.98, y: 5.95, w: 2.9, h: 0.22, fontFace: 'Aptos', fontSize: 10.5, bold: true, color: theme.accent2, margin: 0, charSpace: 0.8 });
+}
+
+function ganttTasks(spec) {
+  if (Array.isArray(spec.rows) && spec.rows.length > 1) {
+    return spec.rows.slice(1).map((r, i) => ({
+      label: String(r[0] || `Task ${i + 1}`),
+      start: Math.max(0, Math.min(3, Number(r[1]) - 1 || i % 4)),
+      len: Math.max(1, Math.min(4, Number(r[2]) || 1)),
+    }));
+  }
+  return (spec.items || []).map((x, i) => ({ label: String(x), start: i % 4, len: Math.min(2, 4 - (i % 4)) }));
 }
 
 // 偵測可用的 HTML→PDF 渲染器，回 { kind, bin } 或 null。

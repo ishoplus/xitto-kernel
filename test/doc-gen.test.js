@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/compat';
-import { mdToHtml, mdToBody, generateDoc, mdTableToRows, mdTablesToRows, toCsv, isValidDoc, officeCapabilities } from '../src/packs/shared/doc-gen.js';
+import { mdToHtml, mdToBody, generateDoc, mdTableToRows, mdTablesToRows, toCsv, isValidDoc, officeCapabilities, planPptxDeck } from '../src/packs/shared/doc-gen.js';
 import { extractDoc } from '../src/packs/shared/doc-extract.js';
 import { analyzePptxTemplate, generatePptxFromTemplate, validatePptxTemplateOutput } from '../src/packs/shared/pptx-template.js';
 import { createKernel } from '../src/kernel/index.js';
@@ -330,8 +330,254 @@ test('generateDoc：.pptx 無模板會用受控版型拆分長內容與表格', 
     const doc = extractDoc(out);
     assert.equal(doc.slides.length, 5);
     assert.ok(doc.slides.some((s) => s.tables.length === 1));
-    assert.ok(doc.slides.filter((s) => s.body.length > 0).every((s) => s.body.length <= 7));
+    const contentLines = (s) => s.body.filter((t) => !/^0\d$|^Key points$|^Data table$|^Executive deck$|^Generated with controlled layout$/i.test(t));
+    assert.ok(doc.slides.filter((s) => contentLines(s).length > 0).every((s) => contentLines(s).length <= 7));
+    const raw = readZipEntries(out).filter((e) => /^ppt\/slides\/slide\d+\.xml$/.test(e.name)).map((e) => e.data.toString('utf8')).join('\n');
+    assert.match(raw, /245B8F/);
+    assert.match(raw, /0F766E/);
+    assert.match(raw, /D97706/);
+    assert.match(raw, /Key points/);
+    assert.match(raw, /Data table/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('generateDoc：.pptx 無模板支援流程圖、魚骨圖與比較矩陣', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-pptx-diagram-'));
+  try {
+    const out = join(cwd, 'diagram.pptx');
+    const r = await generateDoc(`# 圖解頁面
+## 流程圖
+- 需求確認
+- 資料整理
+- 方案設計
+- 交付驗收
+
+## 魚骨圖
+- 人員
+- 流程
+- 工具
+- 資料
+- 風險
+- 品質
+
+## 比較矩陣
+| 面向 | 方案 A | 方案 B |
+| --- | --- | --- |
+| 成本 | 中 | 低 |
+| 速度 | 快 | 中 |
+| 風險 | 低 | 中 |
+`, out, { title: '圖解頁面' });
+    assert.equal(r.ok, true);
+    assert.equal(r.format, 'pptx');
+    assert.equal(r.slides, 3);
+    const raw = readZipEntries(out).filter((e) => /^ppt\/slides\/slide\d+\.xml$/.test(e.name)).map((e) => e.data.toString('utf8')).join('\n');
+    assert.match(raw, /Process flow/);
+    assert.match(raw, /Fishbone analysis/);
+    assert.match(raw, /Comparison matrix/);
+    assert.match(raw, /需求確認/);
+    assert.match(raw, /人員/);
+    assert.match(raw, /方案 A/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('generateDoc：.pptx 無模板支援 timeline/cycle/funnel/pyramid/SWOT/KPI 圖解', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-pptx-more-diagrams-'));
+  try {
+    const out = join(cwd, 'more-diagrams.pptx');
+    const r = await generateDoc(`# 圖解庫
+## 時間線
+- Q1 需求確認
+- Q2 MVP
+- Q3 試點
+- Q4 推廣
+
+## 循環圖
+- Plan
+- Do
+- Check
+- Act
+
+## 漏斗圖
+- 訪客
+- 線索
+- 商機
+- 成交
+
+## 金字塔
+- 願景
+- 策略
+- 能力
+- 行動
+
+## SWOT
+| 類型 | 項目一 | 項目二 |
+| --- | --- | --- |
+| S | 品牌信任 | 渠道穩定 |
+| W | 交付週期 | 成本偏高 |
+| O | AI 滲透 | 新市場 |
+| T | 價格競爭 | 法規變化 |
+
+## KPI 看板
+| 指標 | 數值 | 變化 |
+| --- | --- | --- |
+| 營收 | 120M | +18% |
+| 續約率 | 91% | +3pt |
+| NPS | 48 | +6 |
+`, out, { title: '圖解庫' });
+    assert.equal(r.ok, true);
+    assert.equal(r.format, 'pptx');
+    assert.equal(r.slides, 6);
+    const raw = readZipEntries(out).filter((e) => /^ppt\/slides\/slide\d+\.xml$/.test(e.name)).map((e) => e.data.toString('utf8')).join('\n');
+    assert.match(raw, /Timeline/);
+    assert.match(raw, /Cycle/);
+    assert.match(raw, /Funnel/);
+    assert.match(raw, /Pyramid/);
+    assert.match(raw, /Strengths/);
+    assert.match(raw, /KPI dashboard/);
+    assert.match(raw, /Q2 MVP/);
+    assert.match(raw, /營收/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('generateDoc：.pptx 無模板支援 org/gantt/venn/radar/architecture 圖解', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-pptx-extra-diagrams-'));
+  try {
+    const out = join(cwd, 'extra-diagrams.pptx');
+    const r = await generateDoc(`# 進階圖解
+## 組織架構圖
+- 總經理
+- 產品
+- 技術
+- 銷售
+- PMO
+- 平台
+- 客戶成功
+
+## 甘特圖
+| 任務 | 起始 | 長度 |
+| --- | --- | --- |
+| 需求 | 1 | 1 |
+| 開發 | 2 | 2 |
+| 試點 | 3 | 1 |
+| 推廣 | 4 | 1 |
+
+## Venn
+- 產品能力
+- 市場需求
+- 差異化定位
+
+## 能力雷達
+| 能力 | 分數 |
+| --- | --- |
+| 產品 | 82 |
+| 技術 | 76 |
+| 交付 | 88 |
+| 增長 | 72 |
+
+## 系統架構圖
+- Kernel
+- LLM
+- Tools
+- Office Renderer
+- Verification
+- Preview
+`, out, { title: '進階圖解' });
+    assert.equal(r.ok, true);
+    assert.equal(r.format, 'pptx');
+    assert.equal(r.slides, 5);
+    const raw = readZipEntries(out).filter((e) => /^ppt\/slides\/slide\d+\.xml$/.test(e.name)).map((e) => e.data.toString('utf8')).join('\n');
+    assert.match(raw, /Organization chart/);
+    assert.match(raw, /Gantt schedule/);
+    assert.match(raw, /Venn diagram/);
+    assert.match(raw, /Capability radar/);
+    assert.match(raw, /Radar profile/);
+    assert.match(raw, /System architecture/);
+    assert.match(raw, /Layered system architecture/);
+    assert.match(raw, /總經理/);
+    assert.match(raw, /Office Renderer/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('generateDoc：.pptx 無模板圖解不輸出負尺寸 shape，提升 WPS 相容性', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-pptx-shape-compat-'));
+  try {
+    const out = join(cwd, 'shape-compat.pptx');
+    const r = await generateDoc(`# 圖解相容性
+## 時間線
+- Q1
+- Q2
+- Q3
+- Q4
+
+## 魚骨圖
+- 人員
+- 流程
+- 工具
+- 資料
+- 風險
+- 品質
+
+## 能力雷達
+| 能力 | 分數 |
+| --- | --- |
+| 策略 | 88 |
+| 內容 | 82 |
+| 佈局 | 78 |
+| 視覺 | 74 |
+| 驗證 | 91 |
+
+## 系統架構圖
+- Kernel
+- LLM
+- Tools
+- Office Renderer
+- Verification
+`, out, { title: '圖解相容性' });
+    assert.equal(r.ok, true);
+    assert.equal(r.format, 'pptx');
+    const raw = readZipEntries(out).filter((e) => /^ppt\/slides\/slide\d+\.xml$/.test(e.name)).map((e) => e.data.toString('utf8')).join('\n');
+    assert.doesNotMatch(raw, /<a:ext\b[^>]*(?:cx|cy)="-/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('planPptxDeck：無模板 PPTX 先產生受控 deck plan 與 contract', () => {
+  const plan = planPptxDeck(`# 交付簡報
+## 流程圖
+- 需求
+- 設計
+- 驗證
+
+## KPI 看板
+| 指標 | 數值 |
+| --- | --- |
+| 品質 | 100 |
+`, { title: '交付簡報' });
+  assert.equal(plan.kind, 'pptx-deck-plan');
+  assert.equal(plan.contract.llmRole, 'content-structure-only');
+  assert.equal(plan.summary.slides, 2);
+  assert.deepEqual(plan.summary.diagrams.sort(), ['dashboard', 'flow']);
+  assert.equal(plan.warnings.length, 0);
+  assert.ok(plan.slides.every((s) => s.bullets <= plan.contract.maxBulletsPerSlide));
+});
+
+test('planPptxDeck：標記未支援圖解標題，避免 LLM 自創版型', () => {
+  const plan = planPptxDeck(`# 提案
+## 泳道圖
+- 業務提交需求
+- 產品確認範圍
+- 工程交付
+
+## 桑基圖
+- 流量來源
+- 轉化節點
+`, { title: '提案' });
+  assert.equal(plan.kind, 'pptx-deck-plan');
+  assert.equal(plan.summary.unsupportedDiagramIntents, 2);
+  assert.equal(plan.summary.warnings, 2);
+  assert.deepEqual(plan.warnings.map((w) => w.code), ['unsupported-diagram-heading', 'unsupported-diagram-heading']);
+  assert.deepEqual(plan.warnings.map((w) => w.heading), ['泳道圖', '桑基圖']);
+  assert.ok(plan.contract.supportedDiagrams.includes('flow'));
+  assert.ok(plan.warnings.every((w) => /renderer/.test(w.message)));
 });
 
 test('mdTableToRows / toCsv：表格抽取 + CSV 轉義', () => {
@@ -857,6 +1103,79 @@ test('gen_doc 工具：經 kernel 產出文件', async () => {
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
+test('docgen pack：載入 DOCGEN.md 作為可重複文件生成規範', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-context-'));
+  try {
+    writeFileSync(join(cwd, 'DOCGEN.md'), '# DOCGEN\nquality.grade 必須是 pass 才算完成。');
+    const k = createKernel(createDocgenPack({ cwd }), { cwd });
+    assert.match(k.systemPrompt, /DOCGEN\.md/);
+    assert.match(k.systemPrompt, /quality\.grade 必須是 pass/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('gen_doc 工具：PPTX 產物帶設計驗證，符合 Codex 式完成標準', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-tool-pptx-quality-'));
+  try {
+    const k = createKernel(createDocgenPack({ cwd }), { cwd });
+    const res = JSON.parse((await k.runTool('gen_doc', {
+      path: 'deck.pptx',
+      markdown: `# 交付簡報
+## 能力雷達
+| 指標 | 分數 |
+| --- | --- |
+| 策略 | 88 |
+| 內容 | 82 |
+| 佈局 | 78 |
+| 驗證 | 91 |
+
+## 系統架構圖
+- Client
+- Gateway
+- Kernel
+- Layout Engine
+- Office Renderer
+- Quality Gate
+`,
+    })).result.content[0].text);
+    assert.equal(res.ok, true);
+    assert.equal(res.format, 'pptx');
+    assert.equal(res.verify.ok, true);
+    assert.equal(typeof res.verify.design.score, 'number');
+    assert.equal(res.quality.ok, true);
+    assert.equal(res.quality.grade, 'pass');
+    assert.ok(existsSync(join(cwd, 'deck.pptx')));
+    const meta = readArtifactMetadata(cwd, join(cwd, 'deck.pptx'));
+    assert.equal(meta.verify.design.ok, true);
+    assert.equal(meta.quality.grade, 'pass');
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('gen_doc 工具：直接產 PPTX 也會把 deck plan warning 併入品質檢查', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-tool-pptx-plan-gate-'));
+  try {
+    const k = createKernel(createDocgenPack({ cwd }), { cwd });
+    const res = JSON.parse((await k.runTool('gen_doc', {
+      path: 'deck.pptx',
+      markdown: `# 提案
+## 泳道圖
+- 業務提交需求
+- 產品確認範圍
+- 工程交付
+`,
+    })).result.content[0].text);
+    assert.equal(res.ok, true);
+    assert.equal(res.format, 'pptx');
+    assert.equal(res.plan.summary.unsupportedDiagramIntents, 1);
+    assert.equal(res.verify.design.ok, false);
+    assert.equal(res.quality.ok, false);
+    assert.equal(res.quality.grade, 'needs-repair');
+    assert.ok(res.verify.design.issues.some((i) => i.code === 'plan-unsupported-diagram-heading' && i.heading === '泳道圖'));
+    const meta = readArtifactMetadata(cwd, join(cwd, 'deck.pptx'));
+    assert.equal(meta.plan.summary.unsupportedDiagramIntents, 1);
+    assert.equal(meta.quality.grade, 'needs-repair');
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('gen_doc 工具：Excel 產物帶 quality 成果摘要', async () => {
   const cwd = mkdtempSync(join(tmpdir(), 'dgn-tool-xlsx-quality-'));
   try {
@@ -890,6 +1209,35 @@ test('office_capabilities 工具：經 docgen pack 回傳能力矩陣', async ()
     assert.ok(res.write.docx === 'docx-native' || res.write.docx === 'pandoc' || res.write.docx === 'soffice' || res.write.docx === false);
     assert.ok(res.write.pptx === 'pptx-native' || res.write.pptx === 'soffice' || res.write.pptx === false);
     assert.equal(typeof res.tools.pandoc, 'boolean');
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('plan_pptx_deck 工具：經 docgen pack 先規劃無模板 PPTX', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'dgn-plan-pptx-tool-'));
+  try {
+    const k = createKernel(createDocgenPack({ cwd }), { cwd });
+    assert.ok(k.registry.has('plan_pptx_deck'));
+    const res = JSON.parse((await k.runTool('plan_pptx_deck', {
+      title: '規劃簡報',
+      markdown: `# 規劃簡報
+## 能力雷達
+| 指標 | 分數 |
+| --- | --- |
+| 策略 | 88 |
+| 驗證 | 91 |
+
+## 系統架構圖
+- Gateway
+- Kernel
+- Renderer
+- Quality Gate
+`,
+    })).result.content[0].text);
+    assert.equal(res.kind, 'pptx-deck-plan');
+    assert.equal(res.contract.renderer, 'pptx-native-controlled-deck');
+    assert.deepEqual(res.summary.diagrams.sort(), ['architecture', 'radar']);
+    assert.equal(res.summary.warnings, 0);
+    assert.equal(res.slides.length, 2);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
