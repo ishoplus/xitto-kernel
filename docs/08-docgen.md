@@ -319,6 +319,10 @@ brew install wkhtmltopdf            # macOS；或裝 LibreOffice
 
 docgen 接上 kernel 的 verify 契約：產出後自動驗證每份文件有效（PDF=`%PDF`、Office=ZIP 並可回讀文字、HTML=含標籤、CSV=非空）→ 對話頁/任務台顯示 **✓ 驗收通過 / ⚠ 未通過**，使用者一眼知道成品可交付。`.xlsx` 會用同一套 Office 萃取器回讀工作表內容。
 
+## 專案級規範檔（`DOCGEN.md`）
+
+docgen pack 的 `contextFiles` 會從工作目錄逐層往上找 `DOCGEN.md`，找到就注入 system prompt——用來把「這個專案的文件產出契約」固定下來（支援的圖解、什麼算完成、不准手寫座標等）。範本見 [`src/packs/docgen/DOCGEN.template.md`](../src/packs/docgen/DOCGEN.template.md)，複製到你的專案根目錄改用即可。
+
 ## 網頁預覽
 
 工作台、聊天頁與房間頁的檔案預覽會優先對 Office/PDF 使用 `?as=preview` 取得結構化 JSON；失敗時才退回舊的 `?as=text` 純文字預覽。這讓使用者不用下載原檔，也能檢查主要內容結構：
